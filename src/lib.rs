@@ -99,19 +99,29 @@ impl InputStatus {
     /// Creates a new default InputStatus to hold onto
     pub fn new() -> Self {
         InputStatus {
-            keys_pressed: HashSet::with_capacity(128),
+            flags: 0b00000,
+            keys_pressed: HashSet::with_capacity(256),
             mouse_pressed: HashSet::with_capacity(16),
             cursor_pos: Coords { x: 0, y: 0 },
+            scroll_delta: Delta {
+                xdel: 0.0,
+                ydel: 0.0,
+            },
+            motion_delta: Delta {
+                xdel: 0.0,
+                ydel: 0.0,
+            },
         }
     }
 
     /// Updates the list of pressed keys with a key scancode and current state
-    pub fn update_keyboard(&mut self, code: u32, state: event::ElementState) {
+    pub fn update_keys(&mut self, code: u32, state: event::ElementState) {
         if state == event::ElementState::Pressed {
             self.keys_pressed.insert(code);
         } else {
             self.keys_pressed.remove(&code);
         }
+        self.flags |= 0b10000;
     }
 
     /// Updates the list of pressed mouse buttons with a button value and state
@@ -128,39 +138,71 @@ impl InputStatus {
         } else {
             self.mouse_pressed.remove(&value);
         }
+
+        self.flags |= 0b01000;
     }
 
     /// Updates the cursor position with a set of coordinates
     pub fn update_pos(&mut self, x: u32, y: u32) {
-        self.cursor_pos.x = x;
-        self.cursor_pos.y = y;
+        self.cursor_pos = Coords { x, y };
+        self.flags |= 0b00100;
     }
-}
 
-/// Creates a new window with several custom parameters and an event loop
-pub fn create_window(
-    title: &str,
-    icon_file: &str,
-    width: u32,
-    height: u32,
-    event_loop: &EventLoop<()>,
-) -> Window {
-    WindowBuilder::new()
-        .with_title(title)
-        .with_window_icon(get_icon(icon_file))
-        .with_inner_size(dpi::Size::Physical(dpi::PhysicalSize { width, height }))
-        .build(event_loop)
-        .unwrap()
-}
+    pub fn update_scroll(&mut self, xdel: f32, ydel: f32) {
+        self.scroll_delta = Delta { xdel, ydel };
+        self.flags |= 0b00010;
+    }
 
-/// Retrieves an icon from a PNG file and outputs it in the format desired by Winit
-fn get_icon(filename: &str) -> Option<window::Icon> {
-    let decoder = png::Decoder::new(File::open(filename).unwrap());
-    let (info, mut reader) = decoder.read_info().unwrap();
+    pub fn update_motion(&mut self, xdel: f64, ydel: f64) {
+        self.motion_delta = Delta { xdel, ydel };
+        self.flags |= 0b00001;
+    }
 
-    let mut buf = vec![0; info.buffer_size()];
+    /// Return set of pressed keys if it has changed since last check
+    pub fn check_keys(&mut self) -> Option<&HashSet<u32>> {
+        if self.flags & 0b10000 == 0b10000 {
+            self.flags &= 0b01111;
+            Some(&self.keys_pressed)
+        } else {
+            None
+        }
+    }
 
-    reader.next_frame(&mut buf).unwrap();
+    /// Return set of pressed mouse buttons if it has changed since last check
+    pub fn check_mouse(&mut self) -> Option<&HashSet<Mouse>> {
+        if self.flags & 0b01000 == 0b01000 {
+            self.flags &= 0b10111;
+            Some(&self.mouse_pressed)
+        } else {
+            None
+        }
+    }
 
-    Some(window::Icon::from_rgba(buf, info.width, info.height).unwrap())
+    /// Return cursor position if it has changed since last check
+    pub fn check_pos(&mut self) -> Option<&Coords> {
+        if self.flags & 0b00100 == 0b00100 {
+            self.flags &= 0b11011;
+            Some(&self.cursor_pos)
+        } else {
+            None
+        }
+    }
+
+    pub fn check_scroll(&mut self) -> Option<&Delta<f32>> {
+        if self.flags & 0b00010 == 0b00010 {
+            self.flags &= 0b11101;
+            Some(&self.scroll_delta)
+        } else {
+            None
+        }
+    }
+
+    pub fn check_motion(&mut self) -> Option<&Delta<f64>> {
+        if self.flags & 0b00001 == 0b00001 {
+            self.flags &= 0b11110;
+            Some(&self.motion_delta)
+        } else {
+            None
+        }
+    }
 }
