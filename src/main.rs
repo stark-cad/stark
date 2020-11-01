@@ -1,83 +1,145 @@
-use stark;
+use stark::{Context, ContextMsg, InputStatus};
 
-use winit::{
-    event::{DeviceEvent, Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
+use gfx_hal::{
+    device::Device,
+    window::{Extent2D, PresentationSurface, Surface},
+    Instance,
 };
 
+use winit::{
+    event::{self, DeviceEvent, Event, WindowEvent},
+    event_loop::ControlFlow,
+};
+
+use log::info;
+
+use std::mem::ManuallyDrop;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+
 fn main() {
-    let event_loop = EventLoop::new();
+    const NAME: &'static str = "STARK";
+    const ICON: &'static str = "icon.png";
+    const SIZE: [u32; 2] = [1280, 720];
 
-    let window = stark::create_window("STARK", "icon.png", 1280, 720, &event_loop);
+    simple_logger::SimpleLogger::new().init().unwrap();
 
-    let mut inputs = stark::InputStatus::new();
+    let context = Context::new(NAME, ICON, SIZE[0], SIZE[1]);
+    let input_status = Arc::new(Mutex::new(InputStatus::new()));
 
-    event_loop.run(move |event, _, control_flow| {
+    let mut surface_extent = Extent2D {
+        width: SIZE[0],
+        height: SIZE[1],
+    };
+    let mut should_configure_swapchain = true;
+
+    // currently, this channel transmits a message to the manager on event loop destruction
+    // TODO: implement a ContextMsg enum or similar for messages from event loop to manager
+    let (tx, rx) = mpsc::channel::<ContextMsg>();
+
+    // This thread manages the program, treating the actual main thread as a source of user input
+    let inputs = Arc::clone(&input_status);
+    let mut manager = Some(thread::spawn(move || loop {
+        let mut curr_stat = inputs.lock().unwrap();
+        // Should check_keys() and check_mouse() return iterators / iterable?
+        if let Some(keys) = curr_stat.check_keys() {
+            print!("Keys Down: ");
+            keys.iter().for_each(|x| print!("{} ", x));
+            println!("");
+        }
+        if let Some(buttons) = curr_stat.check_mouse() {
+            print!("Mouse Down: ");
+            buttons.iter().for_each(|x| print!("{:?} ", x));
+            println!("");
+        }
+        if let Some(pos) = curr_stat.check_pos() {
+            println!("Cursor Pos: x= {}, y= {}", pos.x, pos.y);
+        }
+        if let Some(scroll) = curr_stat.check_scroll() {
+            println!("Scroll Delta: x= {}, y= {}", scroll.xdel, scroll.ydel);
+        }
+        if let Some(motion) = curr_stat.check_motion() {
+            println!("Motion Delta: x= {}, y= {}", motion.xdel, motion.ydel);
+        }
+
+        // new main functionality goes here for now
+        // render();
+
+        match rx.try_recv() {
+            Ok(ContextMsg::Destroy) => {
+                info!("Manager got destruction message");
+                break;
+            }
+            Ok(ContextMsg::Resize(width, height)) => {
+                info!("Resized to {} by {}", width, height);
+                surface_extent = Extent2D { width, height };
+                should_configure_swapchain = true;
+            }
+            _ => {}
+        }
+    }));
+
+    // Completely takes over the main thread; no code after this will run
+    // The only captured variables here are a wrapped InputStatus and a Sender
+    // TODO: Move this all to another function; this is low level window handling
+    // TODO: Add handling for other kinds of window and device events
+    context.event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
         match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                window_id,
-            } if window_id == window.id() => *control_flow = ControlFlow::Exit,
-
-            Event::WindowEvent {
-                event: WindowEvent::KeyboardInput { input, .. },
-                window_id,
-            } if window_id == window.id() => {
-                // println!("Window Event: {}", input.scancode);
-                // match input.virtual_keycode {
-                    // Some(code) => println!("{:?}", code),
-                    // None => println!("No Keycode"),
-                // }
+            Event::LoopDestroyed => {
+                tx.send(ContextMsg::Destroy).unwrap();
+                manager.take().map(|x| x.join());
             }
 
-            Event::DeviceEvent {
-                event: DeviceEvent::Key(key),
-                ..
-            } => {
-                inputs.update_keyboard(key.scancode, key.state);
-
-                print!("Pressed: ");
-                inputs.keys_pressed.iter().for_each(|x| print!("{} ", x));
-                println!("");
-
-                match key.virtual_keycode {
-                    Some(code) => println!("{:?}", code),
-                    None => println!("No Keycode"),
+            Event::WindowEvent { event, .. } => match event {
+                WindowEvent::CloseRequested => {
+                    *control_flow = ControlFlow::Exit;
                 }
-            }
+                WindowEvent::Resized(dims) => {
+                    tx.send(ContextMsg::Resize(dims.width, dims.height))
+                        .unwrap();
+                }
+                WindowEvent::ScaleFactorChanged {
+                    new_inner_size: dims,
+                    ..
+                } => {
+                    tx.send(ContextMsg::Resize(dims.width, dims.height))
+                        .unwrap();
+                }
+                WindowEvent::MouseInput { state, button, .. } => {
+                    input_status.lock().unwrap().update_mouse(button, state);
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    input_status
+                        .lock()
+                        .unwrap()
+                        .update_pos(position.x as u32, position.y as u32);
+                }
+                _ => {}
+            },
 
-            Event::WindowEvent {
-                event: WindowEvent::MouseInput { state, button, ..},
-                window_id,
-            } if window_id == window.id() => {
-                inputs.update_mouse(button, state);
-                println!("{:?} was {:?}", button, state);
-            }
+            Event::DeviceEvent { event, .. } => match event {
+                DeviceEvent::Key(key) => {
+                    input_status
+                        .lock()
+                        .unwrap()
+                        .update_keys(key.scancode, key.state);
+                }
+                DeviceEvent::MouseWheel {
+                    delta: event::MouseScrollDelta::LineDelta(xdel, ydel),
+                } => {
+                    input_status.lock().unwrap().update_scroll(xdel, ydel);
+                }
+                DeviceEvent::MouseMotion {
+                    delta: (xdel, ydel),
+                } => {
+                    input_status.lock().unwrap().update_motion(xdel, ydel);
+                }
+                _ => {}
+            },
 
-            Event::DeviceEvent {
-                event: DeviceEvent::MouseWheel { delta },
-                ..
-            } => {
-                println!("{:?}", delta);
-            }
-
-            Event::DeviceEvent {
-                event: DeviceEvent::MouseMotion { delta: (xdel, ydel) },
-                ..
-            } => {
-                println!("Delta x: {}; Delta y: {}", xdel, ydel);
-            }
-
-            Event::WindowEvent {
-                event: WindowEvent::CursorMoved { position, .. },
-                window_id,
-            } if window_id == window.id() => {
-                inputs.update_pos(position.x as u32, position.y as u32);
-                println!("Position: x: {} y: {}", inputs.cursor_pos.x, inputs.cursor_pos.y);
-            }
-            _ => (),
+            _ => {}
         }
     });
 }
