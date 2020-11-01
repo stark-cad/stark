@@ -9,14 +9,69 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::hash::Hash;
 
-/// Tracks the state of static inputs (those that can be held to a certain value)
+/// Window context within which STARK runs
+/// TODO: Determine whether to keep input status here
+pub struct Context {
+    pub window: Window,
+    pub event_loop: EventLoop<()>,
+}
+
+impl Context {
+    /// Creates a new window context with several custom parameters and an event loop
+    pub fn new(title: &str, icon_file: &str, width: u32, height: u32) -> Self {
+        let event_loop = EventLoop::new();
+
+        Context {
+            window: WindowBuilder::new()
+                .with_title(title)
+                .with_window_icon(Context::get_icon(icon_file))
+                .with_inner_size(dpi::Size::Physical(dpi::PhysicalSize { width, height }))
+                .build(&event_loop)
+                .unwrap(),
+            event_loop,
+        }
+    }
+
+    /// Retrieves an icon from a PNG file and outputs it in the format desired by Winit
+    fn get_icon(filename: &str) -> Option<window::Icon> {
+        let decoder = png::Decoder::new(File::open(filename).unwrap());
+        let (info, mut reader) = decoder.read_info().unwrap();
+
+        let mut buf = vec![0; info.buffer_size()];
+
+        reader.next_frame(&mut buf).unwrap();
+
+        Some(window::Icon::from_rgba(buf, info.width, info.height).unwrap())
+    }
+}
+
+/// Type for messages sent from the context thread to the manager thread
+pub enum ContextMsg {
+    Resize(u32, u32),
+    Destroy,
+}
+
+/// Tracks the state of all relevant inputs (keys, mouse buttons, cursor position, motion)
+/// TODO: Handle other inputs, such as arbitrary buttons and analog axes
 pub struct InputStatus {
+    /// Bit flags representing whether values have been updated since last check
+    /// Five bits, one for each input type stored by this struct
+    flags: u32,
+
     /// List of all keys currently pressed; may be limited by hardware
-    pub keys_pressed: HashSet<u32>,
+    keys_pressed: HashSet<u32>,
+
     /// List of all mouse buttons currently pressed
-    pub mouse_pressed: HashSet<Mouse>,
+    mouse_pressed: HashSet<Mouse>,
+
     /// Current position of the cursor on the window
-    pub cursor_pos: Coords,
+    cursor_pos: Coords,
+
+    // These are sort of movement vectors input by the user
+    // TODO: Maybe move things like this to a queue, accumulator, or something
+    // TODO: Actually, maybe queueing of inputs should be handled on a higher level
+    scroll_delta: Delta<f32>,
+    motion_delta: Delta<f64>,
 }
 
 /// Coordinates on the window plane, for interacting with the UI
@@ -25,8 +80,14 @@ pub struct Coords {
     pub y: u32,
 }
 
+/// Motion of some input device, like mouse or scroll wheel
+pub struct Delta<T> {
+    pub xdel: T,
+    pub ydel: T,
+}
+
 /// Local enum for keeping track of mouse button presses
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub enum Mouse {
     Left,
     Right,
