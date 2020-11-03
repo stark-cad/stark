@@ -10,19 +10,22 @@ edition = "2018"
 winit = { path = "../winit" }
 gfx-hal = { path = "../gfx/src/hal" }
 
+shaderc = "0.6.3"
+
+arrayvec = "0.5.2"
 png = "0.16.7"
 
 log = "0.4.11"
 simple_logger = "1.11.0"
 
-[target.'cfg(target_os = "macos")'.dependencies.backend]
-package = "gfx-backend-metal"
-version = "0.6.4"
+# [target.'cfg(target_os = "macos")'.dependencies.backend]
+# package = "gfx-backend-metal"
+# path = "../gfx/src/backend"
 
-[target.'cfg(windows)'.dependencies.backend]
-package = "gfx-backend-dx12"
-version = "0.6.11"
+# [target.'cfg(windows)'.dependencies.backend]
+# package = "gfx-backend-dx12"
+# path = "../gfx/src/backend"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.backend]
 package = "gfx-backend-vulkan"
-version = "0.6.5"
+path = "../gfx/src/backend/vulkan"
