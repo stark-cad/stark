@@ -1,55 +1,9 @@
-use png;
-use winit::{
-    dpi, event,
-    event_loop::EventLoop,
-    window::{self, Window, WindowBuilder},
-};
+use winit::event;
 
 use std::collections::HashSet;
-use std::fs::File;
 use std::hash::Hash;
 
-/// Window context within which STARK runs
-/// TODO: Determine whether to keep input status here
-pub struct Context {
-    pub window: Window,
-    pub event_loop: EventLoop<()>,
-}
-
-impl Context {
-    /// Creates a new window context with several custom parameters and an event loop
-    pub fn new(title: &str, icon_file: &str, width: u32, height: u32) -> Self {
-        let event_loop = EventLoop::new();
-
-        Context {
-            window: WindowBuilder::new()
-                .with_title(title)
-                .with_window_icon(Context::get_icon(icon_file))
-                .with_inner_size(dpi::Size::Physical(dpi::PhysicalSize { width, height }))
-                .build(&event_loop)
-                .unwrap(),
-            event_loop,
-        }
-    }
-
-    /// Retrieves an icon from a PNG file and outputs it in the format desired by Winit
-    fn get_icon(filename: &str) -> Option<window::Icon> {
-        let decoder = png::Decoder::new(File::open(filename).unwrap());
-        let (info, mut reader) = decoder.read_info().unwrap();
-
-        let mut buf = vec![0; info.buffer_size()];
-
-        reader.next_frame(&mut buf).unwrap();
-
-        Some(window::Icon::from_rgba(buf, info.width, info.height).unwrap())
-    }
-}
-
-/// Type for messages sent from the context thread to the manager thread
-pub enum ContextMsg {
-    Resize(u32, u32),
-    Destroy,
-}
+pub mod context;
 
 /// Tracks the state of all relevant inputs (keys, mouse buttons, cursor position, motion)
 /// TODO: Handle other inputs, such as arbitrary buttons and analog axes
