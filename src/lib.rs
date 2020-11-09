@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 
 pub mod context;
+pub mod graphics;
 
 /// Tracks the state of all relevant inputs (keys, mouse buttons, cursor position, motion)
 /// TODO: Handle other inputs, such as arbitrary buttons and analog axes
