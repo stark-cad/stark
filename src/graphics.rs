@@ -16,14 +16,24 @@ use gfx_hal::{
 
 use std::borrow::Borrow;
 
+pub struct Triangle {
+    pub points: [[f32; 2]; 3],
+}
+impl Triangle {
+    pub fn points_flat(self) -> [f32; 6] {
+        let [[a, b], [c, d], [e, f]] = self.points;
+        [a, b, c, d, e, f]
+    }
+}
+
 /// Stores all `gfx-hal` objects which must persist
 /// TODO: the device and instance fields do not need to be Option
 pub struct GraphicsState<B: gfx_hal::Backend> {
     surface_extent: Extent2D,
-    instance: Option<B::Instance>,
+    instance: B::Instance,
     surface: Option<B::Surface>,
     adapter: Adapter<B>,
-    device: Option<B::Device>,
+    device: B::Device,
     queue_group: QueueGroup<B>,
     surface_color_format: Format,
     render_passes: Vec<B::RenderPass>,
@@ -102,10 +112,10 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
 
         Self {
             surface_extent,
-            instance: Some(instance),
+            instance,
             surface: Some(surface),
             adapter,
-            device: Some(device),
+            device,
             queue_group,
             surface_color_format,
             render_passes: vec![render_pass],
@@ -116,19 +126,19 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         }
     }
 
+    pub fn draw_triangle_frame(&mut self, triangle: Triangle) -> Result<(), &str> {
+        unimplemented!()
+    }
+
     /// Draw a frame that is cleared to the specified color
     pub fn draw_clear_frame(&mut self, color: [f32; 4]) -> Result<(), &str> {
         let timeout_ns = 1_000_000_000;
 
         unsafe {
             self.device
-                .as_ref()
-                .unwrap()
                 .wait_for_fence(self.submission_complete_fence.as_ref().unwrap(), timeout_ns)
                 .unwrap();
             self.device
-                .as_ref()
-                .unwrap()
                 .reset_fence(self.submission_complete_fence.as_ref().unwrap())
                 .unwrap();
         }
@@ -142,8 +152,6 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
 
         let framebuffer = unsafe {
             self.device
-                .as_ref()
-                .unwrap()
                 .create_framebuffer(
                     &self.render_passes[0],
                     vec![surface_image.borrow()],
@@ -203,10 +211,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                 )
                 .unwrap();
 
-            self.device
-                .as_ref()
-                .unwrap()
-                .destroy_framebuffer(framebuffer);
+            self.device.destroy_framebuffer(framebuffer);
         }
 
         Ok(())
@@ -227,11 +232,12 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
             self.surface
                 .as_mut()
                 .unwrap()
-                .configure_swapchain(self.device.as_ref().unwrap(), swapchain_config)
+                .configure_swapchain(&self.device, swapchain_config)
                 .unwrap();
         }
     }
 
+    /// Set the size of the 2D graphics surface, in pixels
     pub fn set_extent(&mut self, width: u32, height: u32) {
         self.surface_extent = Extent2D { width, height };
     }
@@ -241,36 +247,28 @@ impl<B: gfx_hal::Backend> Drop for GraphicsState<B> {
     fn drop(&mut self) {
         unsafe {
             self.device
-                .as_ref()
-                .unwrap()
-                .wait_for_fence(self.submission_complete_fence.as_ref().unwrap(), 1_000_000_000)
+                .wait_for_fence(
+                    self.submission_complete_fence.as_ref().unwrap(),
+                    1_000_000_000,
+                )
                 .unwrap();
+
             self.device
-                .as_ref()
-                .unwrap()
                 .destroy_semaphore(self.rendering_complete_semaphore.take().unwrap());
             self.device
-                .as_ref()
-                .unwrap()
                 .destroy_fence(self.submission_complete_fence.take().unwrap());
+
             for render_pass in self.render_passes.drain(..) {
-                self.device
-                    .as_ref()
-                    .unwrap()
-                    .destroy_render_pass(render_pass);
+                self.device.destroy_render_pass(render_pass);
             }
+
             self.device
-                .as_ref()
-                .unwrap()
                 .destroy_command_pool(self.command_pool.take().unwrap());
             self.surface
                 .as_mut()
                 .unwrap()
-                .unconfigure_swapchain(self.device.as_ref().unwrap());
-            self.instance
-                .as_ref()
-                .unwrap()
-                .destroy_surface(self.surface.take().unwrap());
+                .unconfigure_swapchain(&self.device);
+            self.instance.destroy_surface(self.surface.take().unwrap());
         }
     }
 }
