@@ -6,16 +6,24 @@ use gfx_hal::{
     device::Device,
     format::{ChannelType, Format},
     image::{Extent, Layout},
-    pass::{Attachment, AttachmentLoadOp, AttachmentOps, AttachmentStoreOp, SubpassDesc},
+    pass::{Attachment, AttachmentLoadOp, AttachmentOps, AttachmentStoreOp, Subpass, SubpassDesc},
     pool::CommandPool,
-    pso::Rect,
+    pso::{
+        AttributeDesc, BlendState, ColorBlendDesc, ColorMask, Element, EntryPoint,
+        GraphicsPipelineDesc, InputAssemblerDesc, Primitive, PrimitiveAssemblerDesc, Rasterizer,
+        Rect, Specialization, VertexBufferDesc, VertexInputRate, Viewport,
+    },
     queue::{CommandQueue, QueueFamily, QueueGroup, Submission},
     window::{Extent2D, PresentationSurface, Surface, SwapchainConfig},
-    Instance,
+    Instance, MemoryTypeId,
 };
 
-use std::borrow::Borrow;
+use log::debug;
 
+use std::borrow::Borrow;
+use std::mem::size_of;
+
+#[derive(Debug)]
 pub struct Triangle {
     pub points: [[f32; 2]; 3],
 }
@@ -39,6 +47,10 @@ pub struct GraphicsState<B: gfx_hal::Backend> {
     render_passes: Vec<B::RenderPass>,
     command_pool: Option<B::CommandPool>,
     command_buffers: Vec<B::CommandBuffer>,
+    vertex_memory: Vec<B::Memory>,
+    vertex_buffers: Vec<B::Buffer>,
+    pipeline_layouts: Vec<B::PipelineLayout>,
+    pipelines: Vec<B::GraphicsPipeline>,
     submission_complete_fence: Option<B::Fence>,
     rendering_complete_semaphore: Option<B::Semaphore>,
 }
@@ -107,6 +119,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                 .unwrap()
         };
         let command_buffer = unsafe { command_pool.allocate_one(gfx_hal::command::Level::Primary) };
+
         let submission_complete_fence = device.create_fence(false).unwrap();
         let rendering_complete_semaphore = device.create_semaphore().unwrap();
 
@@ -121,13 +134,163 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
             render_passes: vec![render_pass],
             command_pool: Some(command_pool),
             command_buffers: vec![command_buffer],
+            vertex_buffers: vec![],
+            vertex_memory: vec![],
+            pipeline_layouts: vec![],
+            pipelines: vec![],
             submission_complete_fence: Some(submission_complete_fence),
             rendering_complete_semaphore: Some(rendering_complete_semaphore),
         }
     }
 
+    /// This implementation is bespoke and temporary
+    pub fn setup(&mut self) {
+        self.add_tri_buffer();
+
+        let pipeline_layout = unsafe {
+            self.device
+                .create_pipeline_layout(&[], &[])
+                .expect("Out of memory")
+        };
+
+        let vertex_shader = include_str!("shaders/test.vert");
+        let fragment_shader = include_str!("shaders/test.frag");
+
+        let pipeline =
+            unsafe { self.make_pipeline(&pipeline_layout, vertex_shader, fragment_shader) };
+
+        self.pipeline_layouts.push(pipeline_layout);
+        self.pipelines.push(pipeline);
+    }
+
+    /// Temporary function to draw a single triangle
     pub fn draw_triangle_frame(&mut self, triangle: Triangle) -> Result<(), &str> {
-        unimplemented!()
+        let timeout_ns = 1_000_000_000;
+
+        // debug!("Drawing triangle frame with points: {:?}", triangle);
+
+        unsafe {
+            self.device
+                .wait_for_fence(self.submission_complete_fence.as_ref().unwrap(), timeout_ns)
+                .unwrap();
+            self.device
+                .reset_fence(self.submission_complete_fence.as_ref().unwrap())
+                .unwrap();
+
+            self.command_pool.as_mut().unwrap().reset(false);
+        }
+
+        let surface_image = unsafe {
+            match self.surface.as_mut().unwrap().acquire_image(timeout_ns) {
+                Ok((image, _)) => image,
+                Err(_) => return Err("Could not acquire image"),
+            }
+        };
+
+        let framebuffer = unsafe {
+            self.device
+                .create_framebuffer(
+                    &self.render_passes[0],
+                    vec![surface_image.borrow()],
+                    Extent {
+                        width: self.surface_extent.width,
+                        height: self.surface_extent.height,
+                        depth: 1,
+                    },
+                )
+                .unwrap()
+        };
+
+        unsafe {
+            const XY_TRI_SIZE: usize = (size_of::<f32>() * 2 * 3) as usize;
+
+            // debug!("Mem size: {}", XY_TRI_SIZE);
+
+            let mapped_memory = self
+                .device
+                .map_memory(&self.vertex_memory[0], gfx_hal::memory::Segment::ALL)
+                .unwrap();
+
+            let points = triangle.points_flat();
+
+            // debug!("Points: {:?}", points);
+
+            std::ptr::copy_nonoverlapping(points.as_ptr() as *const u8, mapped_memory, XY_TRI_SIZE);
+
+            self.device
+                .flush_mapped_memory_ranges(&[(
+                    &self.vertex_memory[0],
+                    gfx_hal::memory::Segment::ALL,
+                )])
+                .unwrap();
+
+            self.device.unmap_memory(&self.vertex_memory[0]);
+        }
+
+        unsafe {
+            let buffer = &mut self.command_buffers[0];
+
+            let viewport = Viewport {
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: self.surface_extent.width as i16,
+                    h: self.surface_extent.height as i16,
+                },
+                depth: 0.0..1.0,
+            };
+
+            buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
+
+            buffer.set_viewports(0, &[viewport.clone()]);
+            buffer.set_scissors(0, &[viewport.rect]);
+
+            buffer.begin_render_pass(
+                &self.render_passes[0],
+                &framebuffer,
+                viewport.rect,
+                &[ClearValue {
+                    color: ClearColor {
+                        float32: [0.0, 0.0, 0.0, 1.0],
+                    },
+                }],
+                SubpassContents::Inline,
+            );
+
+            buffer.bind_graphics_pipeline(&self.pipelines[0]);
+
+            buffer.bind_vertex_buffers(
+                0,
+                vec![(&self.vertex_buffers[0], gfx_hal::buffer::SubRange::WHOLE)],
+            );
+
+            buffer.draw(0..3, 0..1);
+
+            buffer.end_render_pass();
+            buffer.finish();
+        }
+
+        unsafe {
+            let submission = Submission {
+                command_buffers: vec![&self.command_buffers[0]],
+                wait_semaphores: None,
+                signal_semaphores: vec![self.rendering_complete_semaphore.as_ref().unwrap()],
+            };
+
+            self.queue_group.queues[0].submit(submission, self.submission_complete_fence.as_ref());
+
+            self.queue_group.queues[0]
+                .present(
+                    self.surface.as_mut().unwrap(),
+                    surface_image,
+                    self.rendering_complete_semaphore.as_ref(),
+                )
+                .unwrap();
+
+            self.device.destroy_framebuffer(framebuffer);
+        }
+
+        Ok(())
     }
 
     /// Draw a frame that is cleared to the specified color
@@ -170,8 +333,6 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
 
         unsafe {
             let buffer = &mut self.command_buffers[0];
-
-            // buffer.reset(false);
 
             buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
 
@@ -241,6 +402,164 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
     pub fn set_extent(&mut self, width: u32, height: u32) {
         self.surface_extent = Extent2D { width, height };
     }
+
+    /// Create a new buffer for graphics processing and bind its memory
+    unsafe fn make_buffer(
+        &mut self,
+        buffer_len: u64,
+        usage: gfx_hal::buffer::Usage,
+        properties: gfx_hal::memory::Properties,
+    ) -> (B::Memory, B::Buffer) {
+        let mut buffer = self.device.create_buffer(buffer_len, usage).unwrap();
+
+        let req = self.device.get_buffer_requirements(&buffer);
+
+        let memory_types = self
+            .adapter
+            .physical_device
+            .memory_properties()
+            .memory_types;
+
+        let memory_type = memory_types
+            .iter()
+            .enumerate()
+            .find(|(id, mem_type)| {
+                let type_supported = req.type_mask & (1_u32 << id) != 0;
+                type_supported && mem_type.properties.contains(properties)
+            })
+            .map(|(id, _ty)| MemoryTypeId(id))
+            .unwrap();
+
+        debug!("Buffer size: {}", req.size);
+
+        let buffer_memory = self.device.allocate_memory(memory_type, req.size).unwrap();
+
+        self.device
+            .bind_buffer_memory(&buffer_memory, 0, &mut buffer)
+            .unwrap();
+
+        (buffer_memory, buffer)
+    }
+
+    /// Probably temporary
+    fn add_tri_buffer(&mut self) {
+        const XY_TRI_SIZE: u64 = (size_of::<f32>() * 2 * 3) as u64;
+
+        let (memory, buffer) = unsafe {
+            self.make_buffer(
+                XY_TRI_SIZE,
+                gfx_hal::buffer::Usage::VERTEX,
+                gfx_hal::memory::Properties::CPU_VISIBLE,
+            )
+        };
+
+        self.vertex_memory.push(memory);
+        self.vertex_buffers.push(buffer);
+    }
+
+    /// Compile GLSL shader code into SPIR-V
+    fn compile_shader(glsl: &str, shader_kind: shaderc::ShaderKind) -> Vec<u32> {
+        let mut compiler = shaderc::Compiler::new().unwrap();
+
+        let compiled_shader = compiler
+            .compile_into_spirv(glsl, shader_kind, "unnamed", "main", None)
+            .expect("Failed to compile shader");
+
+        compiled_shader.as_binary().to_vec()
+    }
+
+    /// Generate a basic graphics pipeline
+    unsafe fn make_pipeline(
+        &mut self,
+        pipeline_layout: &B::PipelineLayout,
+        vertex_shader: &str,
+        fragment_shader: &str,
+    ) -> B::GraphicsPipeline {
+        let vertex_shader_module = self
+            .device
+            .create_shader_module(&Self::compile_shader(
+                vertex_shader,
+                shaderc::ShaderKind::Vertex,
+            ))
+            .expect("Failed to create vertex shader module");
+
+        let fragment_shader_module = self
+            .device
+            .create_shader_module(&Self::compile_shader(
+                fragment_shader,
+                shaderc::ShaderKind::Fragment,
+            ))
+            .expect("Failed to create fragment shader module");
+
+        let (vs_entry, fs_entry) = (
+            EntryPoint {
+                entry: "main",
+                module: &vertex_shader_module,
+                specialization: Specialization::default(),
+            },
+            EntryPoint {
+                entry: "main",
+                module: &fragment_shader_module,
+                specialization: Specialization::default(),
+            },
+        );
+
+        let primitive_assembler = PrimitiveAssemblerDesc::Vertex {
+            buffers: &[VertexBufferDesc {
+                binding: 0,
+                stride: (size_of::<f32>() * 2) as u32,
+                rate: VertexInputRate::Vertex,
+            }],
+            attributes: &[AttributeDesc {
+                location: 0,
+                binding: 0,
+                element: Element {
+                    format: Format::Rg32Sfloat,
+                    offset: 0,
+                },
+            }],
+            input_assembler: InputAssemblerDesc::new(Primitive::TriangleList),
+            vertex: vs_entry,
+            tessellation: None,
+            geometry: None,
+        };
+
+        let mut pipeline_desc = GraphicsPipelineDesc::new(
+            primitive_assembler,
+            Rasterizer {
+                // cull_face: Face::BACK,
+                ..Rasterizer::FILL
+            },
+            Some(fs_entry),
+            pipeline_layout,
+            Subpass {
+                index: 0,
+                main_pass: &self.render_passes[0],
+            },
+        );
+
+        pipeline_desc.blender.targets.push(ColorBlendDesc {
+            mask: ColorMask::ALL,
+            blend: Some(BlendState::ALPHA),
+        });
+
+        // pipeline_desc.baked_states.viewport = Some(Viewport {
+        //     rect: self.surface_extent.to_extent().rect(),
+        //     depth: 0.0..1.0,
+        // });
+
+        // pipeline_desc.baked_states.scissor = Some(self.surface_extent.to_extent().rect());
+
+        let pipeline = self
+            .device
+            .create_graphics_pipeline(&pipeline_desc, None)
+            .expect("Failed to create graphics pipeline");
+
+        self.device.destroy_shader_module(vertex_shader_module);
+        self.device.destroy_shader_module(fragment_shader_module);
+
+        pipeline
+    }
 }
 
 impl<B: gfx_hal::Backend> Drop for GraphicsState<B> {
@@ -260,6 +579,18 @@ impl<B: gfx_hal::Backend> Drop for GraphicsState<B> {
 
             for render_pass in self.render_passes.drain(..) {
                 self.device.destroy_render_pass(render_pass);
+            }
+            for mem in self.vertex_memory.drain(..) {
+                self.device.free_memory(mem);
+            }
+            for buf in self.vertex_buffers.drain(..) {
+                self.device.destroy_buffer(buf);
+            }
+            for pipeline in self.pipelines.drain(..) {
+                self.device.destroy_graphics_pipeline(pipeline);
+            }
+            for pipeline_layout in self.pipeline_layouts.drain(..) {
+                self.device.destroy_pipeline_layout(pipeline_layout);
             }
 
             self.device
