@@ -324,6 +324,7 @@ fn eval(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ptr;
 
     #[test]
     fn returns() {
@@ -335,5 +336,37 @@ mod tests {
     fn adds() {
         let exp = String::from("(+ 2 2)");
         assert_eq!("4", interpret(&exp));
+    }
+
+    #[test]
+    fn parses() {
+        let exp = String::from("(+ (() 42 (e) #T) #F 2.1)");
+        let out = parser::parse(&exp).unwrap().to_string();
+        assert_eq!(exp, out);
+
+        let exp = String::from("(() (()) ((((() ())))))");
+        let out = parser::parse(&exp).unwrap().to_string();
+        assert_eq!(exp, out);
+    }
+
+    #[test]
+    fn displays() {
+        let list = Value::List(Box::into_raw(Box::new(List {
+            car: Value::List(Box::into_raw(Box::new(List {
+                car: Value::Integer(42),
+                cdr: Box::into_raw(Box::new(List {
+                    car: Value::True,
+                    cdr: ptr::null_mut(),
+                })),
+            }))),
+            cdr: Box::into_raw(Box::new(List {
+                car: Value::String(String::from("the answer")),
+                cdr: Box::into_raw(Box::new(List {
+                    car: Value::List(ptr::null_mut()),
+                    cdr: ptr::null_mut(),
+                })),
+            })),
+        })));
+        assert_eq!("((42 #T) \"the answer\" ())", list.to_string());
     }
 }
