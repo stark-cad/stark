@@ -63,9 +63,7 @@ impl fmt::Display for Value {
     }
 }
 
-pub fn repl() {
-
-}
+pub fn repl() {}
 
 /// Interprets a Sail expression, returning the result
 pub fn interpret(code: &String) -> String {
@@ -76,6 +74,7 @@ mod parser {
     use super::{List, Value};
 
     use std::ptr;
+    use std::str;
 
     enum State {
         Neutral,
@@ -87,7 +86,6 @@ mod parser {
     }
 
     /// Parses a Sail expression into the internal representation
-    /// TODO: Iterate over bytes, not characters
     pub fn parse(code: &str) -> Result<Value, &str> {
         // Return value; mutated into an atom or list head
         let mut val = Value::False;
@@ -95,7 +93,7 @@ mod parser {
         // The parser is a state machine that tracks current context
         let mut state = State::Neutral;
         // Accumulator for collecting string values
-        let mut acc = String::new();
+        let mut acc: Vec<u8> = Vec::new();
 
         // Nesting level (number of subsequent `(` before a value)
         let mut nest: u32 = 0;
@@ -140,7 +138,7 @@ mod parser {
 
         // Tracks whether the parser is finished consuming its input
         let mut finished = false;
-        let mut chars = code.chars();
+        let mut chars = code.bytes();
 
         while !finished {
             // Adds whitespace to the end to ensure everything gets closed out
@@ -148,15 +146,15 @@ mod parser {
                 Some(c) => c,
                 None => {
                     finished = true;
-                    ' '
+                    b' '
                 }
             };
 
             // Current state determines how new characters are handled
             match state {
                 State::Neutral => match c {
-                    '(' => nest += 1,
-                    ')' => {
+                    b'(' => nest += 1,
+                    b')' => {
                         if nest > 0 {
                             nest -= 1;
                             add_value!(Value::List(ptr::null_mut()));
@@ -164,10 +162,10 @@ mod parser {
                             tails.pop();
                         }
                     }
-                    ';' => state = State::Comment,
-                    '"' => state = State::String,
-                    '#' => state = State::Special,
-                    _ if c.is_alphabetic() || c.is_ascii_punctuation() => {
+                    b';' => state = State::Comment,
+                    b'"' => state = State::String,
+                    b'#' => state = State::Special,
+                    _ if c.is_ascii_alphabetic() || c.is_ascii_punctuation() => {
                         acc.push(c);
                         state = State::Symbol;
                     }
@@ -175,28 +173,35 @@ mod parser {
                         acc.push(c);
                         state = State::Number;
                     }
-                    _ if c.is_whitespace() => (),
+                    _ if c.is_ascii_whitespace() => (),
                     _ => {
                         panic!();
                         // return Err("Unacceptable character");
                     }
                 },
                 State::Comment => match c {
-                    '\n' => state = State::Neutral,
+                    b'\n' => state = State::Neutral,
                     _ => (),
                 },
                 State::Special => match c {
-                    ')' => {
-                        let mut iter = acc.chars();
-                        let fst = iter.next().unwrap();
-                        let snd = iter.next();
-
-                        if fst.eq_ignore_ascii_case(&'t') && snd.is_none() {
+                    b')' => {
+                        if acc[0].eq_ignore_ascii_case(&b't') && acc.len() == 1 {
                             add_value!(Value::True);
-                            tails.pop();
-                        } else if fst.eq_ignore_ascii_case(&'f') && snd.is_none() {
+                        } else if acc[0].eq_ignore_ascii_case(&b'f') && acc.len() == 1 {
                             add_value!(Value::False);
-                            tails.pop();
+                        } else {
+                            return Err("Non-boolean specials not yet supported");
+                        }
+
+                        tails.pop();
+                        acc.clear();
+                        state = State::Neutral;
+                    }
+                    _ if c.is_ascii_whitespace() => {
+                        if acc[0].eq_ignore_ascii_case(&b't') && acc.len() == 1 {
+                            add_value!(Value::True);
+                        } else if acc[0].eq_ignore_ascii_case(&b'f') && acc.len() == 1 {
+                            add_value!(Value::False);
                         } else {
                             return Err("Non-boolean specials not yet supported");
                         }
@@ -204,50 +209,35 @@ mod parser {
                         acc.clear();
                         state = State::Neutral;
                     }
-                    _ if c.is_alphanumeric() => acc.push(c),
-                    _ if c.is_whitespace() => {
-                        let mut iter = acc.chars();
-                        let fst = iter.next().unwrap();
-                        let snd = iter.next();
-
-                        if fst.eq_ignore_ascii_case(&'t') && snd.is_none() {
-                            add_value!(Value::True);
-                        } else if fst.eq_ignore_ascii_case(&'f') && snd.is_none() {
-                            add_value!(Value::False);
-                        } else {
-                            return Err("Non-boolean specials not yet supported");
-                        }
-                        acc.clear();
-                        state = State::Neutral;
-                    }
+                    _ if c.is_ascii_alphanumeric() => acc.push(c),
                     _ => {
                         panic!();
                         // return Err("Unacceptable character");
                     }
                 },
                 State::Symbol => match c {
-                    ')' => {
-                        add_value!(Value::Symbol(String::from(&acc)));
+                    b')' => {
+                        add_value!(Value::Symbol(String::from(str::from_utf8(&acc).unwrap())));
+
                         tails.pop();
+                        acc.clear();
+                        state = State::Neutral;
+                    }
+                    _ if c.is_ascii_whitespace() => {
+                        add_value!(Value::Symbol(String::from(str::from_utf8(&acc).unwrap())));
 
                         acc.clear();
                         state = State::Neutral;
                     }
-                    _ if c.is_alphanumeric() => acc.push(c),
-                    _ if c.is_whitespace() => {
-                        add_value!(Value::Symbol(String::from(&acc)));
-
-                        acc.clear();
-                        state = State::Neutral;
-                    }
+                    _ if c.is_ascii_alphanumeric() => acc.push(c),
                     _ => {
                         panic!();
                         // return Err("Unacceptable character");
                     }
                 },
                 State::String => match c {
-                    '"' => {
-                        add_value!(Value::String(String::from(&acc)));
+                    b'"' => {
+                        add_value!(Value::String(String::from(str::from_utf8(&acc).unwrap())));
 
                         acc.clear();
                         state = State::Neutral;
@@ -256,11 +246,22 @@ mod parser {
                 },
                 // TODO: Don't examine any character more than once: parse inline
                 State::Number => match c {
-                    ')' => {
-                        let result = process_num(&acc);
+                    b')' => {
+                        let result = process_num(str::from_utf8(&acc).unwrap());
                         if let Ok(value) = result {
                             add_value!(value);
-                            tails.pop();
+                        } else {
+                            return result;
+                        }
+
+                        tails.pop();
+                        acc.clear();
+                        state = State::Neutral;
+                    }
+                    _ if c.is_ascii_whitespace() => {
+                        let result = process_num(str::from_utf8(&acc).unwrap());
+                        if let Ok(value) = result {
+                            add_value!(value);
                         } else {
                             return result;
                         }
@@ -270,17 +271,6 @@ mod parser {
                     }
                     _ if c.is_ascii_alphanumeric() => acc.push(c),
                     _ if c.is_ascii_punctuation() => acc.push(c),
-                    _ if c.is_whitespace() => {
-                        let result = process_num(&acc);
-                        if let Ok(value) = result {
-                            add_value!(value);
-                        } else {
-                            return result;
-                        }
-
-                        acc.clear();
-                        state = State::Neutral;
-                    }
                     _ => {
                         panic!();
                         // return Err("Unacceptable character");
@@ -347,6 +337,11 @@ mod tests {
         let exp = String::from("(() (()) ((((() ())))))");
         let out = parser::parse(&exp).unwrap().to_string();
         assert_eq!(exp, out);
+
+        let exp = String::from("((1 2 3 4) ;Comment\n5)");
+        let gnd = String::from("((1 2 3 4) 5)");
+        let out = parser::parse(&exp).unwrap().to_string();
+        assert_eq!(gnd, out);
     }
 
     #[test]
