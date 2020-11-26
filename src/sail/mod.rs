@@ -19,14 +19,21 @@ pub struct List {
     cdr: *mut List,
 }
 
+impl List {
+    fn car(&mut self) -> &mut Value {
+        &mut self.car
+    }
+    fn cdr(&mut self) -> &mut Value {
+        unsafe { self.cdr.as_mut() }
+    }
+}
+
 impl fmt::Display for List {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let car = self.car.to_string();
-        let cdr = unsafe {
-            match self.cdr.as_ref() {
-                Some(x) => String::from(" ") + &x.to_string(),
-                None => String::new(),
-            }
+        let cdr = match unsafe { self.cdr.as_ref() } {
+            Some(x) => String::from(" ") + &x.to_string(),
+            None => String::new(),
         };
         write!(f, "{}{}", car, cdr)
     }
@@ -49,6 +56,23 @@ pub enum Value {
     Float(f32),
 }
 
+impl Value {
+    pub fn atom_p(&self) -> bool {
+        if let Self::List(p) = self {
+            p.is_null()
+        } else {
+            true
+        }
+    }
+    pub fn list_p(&self) -> bool {
+        if let Self::List(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -67,6 +91,8 @@ impl fmt::Display for Value {
         }
     }
 }
+
+pub struct Procedure {}
 
 pub struct Env {
     entries: HashMap<String, Value>,
@@ -88,20 +114,35 @@ pub fn repl() {}
 pub fn interpret(code: &String) -> String {
     let env = Env::default();
 
-    eval(&Env::default(), &parser::parse(code).unwrap()).unwrap().to_string()
+    eval(&Env::default(), &parser::parse(code).unwrap())
+        .unwrap()
+        .to_string()
 }
 
 /// Evaluates a Sail value, returning the result
 fn eval<'a, 'b>(env: &'a Env, value: &'a Value) -> Result<&'a Value, &'b str> {
-    Ok(match value {
-        Value::List(p) => value,
-        Value::Symbol(s) => value,
-        Value::True => value,
-        Value::False => value,
-        Value::String(_) => value,
-        Value::Integer(_) => value,
-        Value::Float(_) => value,
-    })
+    if value.atom_p() {
+        if let Value::Symbol(s) = value {
+            return Ok(env.entries.get(s).unwrap());
+        }
+        return Ok(value);
+    } else if let Value::List(p) = value {
+        let car = unsafe { (**p).car() };
+
+        if let Value::Symbol(s) = car {
+            match s.as_str() {
+                "def" => {}
+                "fun" => {}
+                "if" => {}
+                "quote" => {}
+                _ => {}
+            }
+        }
+
+        Ok(&Value::False)
+    } else {
+        unreachable!();
+    }
 }
 
 #[cfg(test)]
