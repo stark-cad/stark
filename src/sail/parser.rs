@@ -15,7 +15,7 @@ enum State {
 /// Parses a Sail expression into the internal representation
 pub fn parse(code: &str) -> Result<Value, &str> {
     // Return value; mutated into an atom or list head
-    let mut val = Value::False;
+    let mut val = Value::Bool(false);
 
     // The parser is a state machine that tracks current context
     let mut state = State::Neutral;
@@ -113,9 +113,9 @@ pub fn parse(code: &str) -> Result<Value, &str> {
             State::Special => match c {
                 b')' => {
                     if acc[0].eq_ignore_ascii_case(&b't') && acc.len() == 1 {
-                        add_value!(Value::True);
+                        add_value!(Value::Bool(true));
                     } else if acc[0].eq_ignore_ascii_case(&b'f') && acc.len() == 1 {
-                        add_value!(Value::False);
+                        add_value!(Value::Bool(false));
                     } else {
                         return Err("Non-boolean specials not yet supported");
                     }
@@ -126,9 +126,9 @@ pub fn parse(code: &str) -> Result<Value, &str> {
                 }
                 _ if c.is_ascii_whitespace() => {
                     if acc[0].eq_ignore_ascii_case(&b't') && acc.len() == 1 {
-                        add_value!(Value::True);
+                        add_value!(Value::Bool(true));
                     } else if acc[0].eq_ignore_ascii_case(&b'f') && acc.len() == 1 {
-                        add_value!(Value::False);
+                        add_value!(Value::Bool(false));
                     } else {
                         return Err("Non-boolean specials not yet supported");
                     }
@@ -210,10 +210,10 @@ pub fn parse(code: &str) -> Result<Value, &str> {
 }
 
 fn process_num<'a, 'b>(slice: &'a str) -> Result<Value, &'b str> {
-    if let Ok(n) = slice.parse::<i32>() {
-        return Ok(Value::Integer(n));
-    } else if let Ok(n) = slice.parse::<f32>() {
-        return Ok(Value::Float(n));
+    if let Ok(n) = slice.parse::<i64>() {
+        return Ok(Value::FixInt(n));
+    } else if let Ok(n) = slice.parse::<f64>() {
+        return Ok(Value::FixFloat(n));
     } else {
         Err("Invalid number")
     }
