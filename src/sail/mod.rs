@@ -8,7 +8,9 @@ use std::ptr;
 
 mod parser;
 
-pub enum SailErr {}
+pub enum SailErr {
+    Error,
+}
 
 impl fmt::Display for SailErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

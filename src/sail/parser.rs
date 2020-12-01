@@ -1,5 +1,6 @@
-use super::{List, Value};
+use super::{List, SailErr, Value};
 
+use std::iter;
 use std::ptr;
 use std::str;
 
@@ -13,9 +14,12 @@ enum State {
 }
 
 /// Parses a Sail expression into the internal representation
-pub fn parse(code: &str) -> Result<Value, &str> {
+/// TODO: Parse Cons, Vec, Map, and Keyword
+/// TODO: Return SailErr
+pub fn parse(code: &str) -> Result<Value, SailErr> {
     // Return value; mutated into an atom or list head
     let mut val = Value::Bool(false);
+    let mut next: Value;
 
     // The parser is a state machine that tracks current context
     let mut state = State::Neutral;
@@ -65,12 +69,12 @@ pub fn parse(code: &str) -> Result<Value, &str> {
 
     // Tracks whether the parser is finished consuming its input
     let mut finished = false;
-    let mut chars = code.bytes();
+    let mut chars = code.bytes().peekable();
 
     while !finished {
         // Adds whitespace to the end to ensure everything gets closed out
-        let c = match chars.next() {
-            Some(c) => c,
+        let c = match chars.peek() {
+            Some(c) => *c,
             None => {
                 finished = true;
                 b' '
@@ -89,18 +93,57 @@ pub fn parse(code: &str) -> Result<Value, &str> {
                         tails.pop();
                     }
                 }
+                b'[' => {
+                    
+                }
+                b']' => {
+                    
+                }
+                b'{' => {
+                    
+                }
+                b'}' => {
+                    
+                }
                 b';' => state = State::Comment,
-                b'"' => state = State::String,
-                b'#' => state = State::Special,
-                _ if c.is_ascii_alphabetic() || c.is_ascii_punctuation() => {
-                    acc.push(c);
-                    state = State::Symbol;
+                b':' => {
+                    next = read_keyword(&chars, &mut acc)?;
+                    acc.clear();
+                }
+                b'"' => {
+                    next = read_string(&chars, &mut acc)?;
+                    acc.clear();
+                } // state = State::String,
+                b'#' => {
+                    next = read_special(&chars, &mut acc)?;
+                    acc.clear();
+                } // state = State::Special,
+                b'+' | b'-' => {
+                    acc.push(chars.next().unwrap());
+                    if chars.peek().unwrap().is_ascii_digit() {
+                        next = read_number(&chars, &mut acc)?;
+                    } else {
+                        next = read_symbol(&chars, &mut acc)?;
+                    }
+                    acc.clear();
+                }
+                b'*' | b'/' | b'<' | b'=' | b'>' | b'_' => {
+                    next = read_symbol(&chars, &mut acc)?;
+                    acc.clear();
+                }
+                _ if c.is_ascii_alphabetic() => {
+                    next = read_symbol(&chars, &mut acc)?;
+                    acc.clear();
+                    // acc.push(c);
+                    // state = State::Symbol;
                 }
                 _ if c.is_ascii_digit() => {
-                    acc.push(c);
-                    state = State::Number;
+                    next = read_number(&chars, &mut acc)?;
+                    acc.clear();
                 }
-                _ if c.is_ascii_whitespace() => (),
+                _ if c.is_ascii_whitespace() => {
+                    chars.next();
+                }
                 _ => {
                     panic!();
                     // return Err("Unacceptable character");
@@ -209,13 +252,113 @@ pub fn parse(code: &str) -> Result<Value, &str> {
     Ok(val)
 }
 
-fn process_num<'a, 'b>(slice: &'a str) -> Result<Value, &'b str> {
+fn read_list() {}
+
+fn read_vec() {}
+
+fn read_map() {}
+
+fn read_symbol(chars: &iter::Peekable<str::Bytes>, acc: &mut Vec<u8>) -> Result<Value, SailErr> {
+    while {
+        let peek = chars.peek().unwrap();
+        match peek {
+            b')' | b']' | b'}' => false,
+            _ if peek.is_ascii_whitespace() => false,
+            _ => true,
+        }
+    } {
+        let next = chars.next().unwrap();
+        match next {
+            b'!' | b'*' | b'+' | b'-' | b'/' | b'<' | b'=' | b'>' | b'?' | b'_' => acc.push(next),
+            _ if next.is_ascii_alphanumeric() => acc.push(next),
+            _ => return Err(SailErr::Error),
+        }
+    }
+    Ok(Value::Symbol(String::from(str::from_utf8(&acc).unwrap())))
+}
+
+fn read_keyword(chars: &iter::Peekable<str::Bytes>, acc: &mut Vec<u8>) -> Result<Value, SailErr> {
+    while {
+        let peek = chars.peek().unwrap();
+        match peek {
+            b')' | b']' | b'}' => false,
+            _ if peek.is_ascii_whitespace() => false,
+            _ => true,
+        }
+    } {
+        let next = chars.next().unwrap();
+        match next {
+            b'_' => acc.push(next),
+            _ if next.is_ascii_alphanumeric() => acc.push(next),
+            _ => return Err(SailErr::Error),
+        }
+    }
+    Ok(Value::Keyword(String::from(str::from_utf8(&acc).unwrap())))
+}
+
+fn read_string(chars: &iter::Peekable<str::Bytes>, acc: &mut Vec<u8>) -> Result<Value, SailErr> {
+    let mut next = chars.next().unwrap();
+    while next != b'"' {
+        acc.push(chars.next().unwrap());
+        next = chars.next().unwrap();
+    }
+    Ok(Value::String(String::from(match str::from_utf8(&acc) {
+        Ok(s) => s,
+        _ => return Err(SailErr::Error),
+    })))
+}
+
+fn read_number(chars: &iter::Peekable<str::Bytes>, acc: &mut Vec<u8>) -> Result<Value, SailErr> {
+    while {
+        let peek = chars.peek().unwrap();
+        match peek {
+            b')' | b']' | b'}' => false,
+            _ if peek.is_ascii_whitespace() => false,
+            _ => true,
+        }
+    } {
+        let next = chars.next().unwrap();
+        match next {
+            b'+' | b'-' | b'_' | b'.' => acc.push(next),
+            _ if next.is_ascii_alphanumeric() => acc.push(next),
+            _ => return Err(SailErr::Error),
+        }
+    }
+    process_num(unsafe { str::from_utf8_unchecked(acc) })
+}
+
+fn read_special(chars: &iter::Peekable<str::Bytes>, acc: &mut Vec<u8>) -> Result<Value, SailErr> {
+    while {
+        let peek = chars.peek().unwrap();
+        match peek {
+            b')' | b']' | b'}' => false,
+            _ if peek.is_ascii_whitespace() => false,
+            _ => true,
+        }
+    } {
+        let next = chars.next().unwrap();
+        match next {
+            b'_' => acc.push(next),
+            _ if next.is_ascii_alphanumeric() => acc.push(next),
+            _ => return Err(SailErr::Error),
+        }
+    }
+    if acc[0].eq_ignore_ascii_case(&b't') && acc.len() == 1 {
+        Ok(Value::Bool(true))
+    } else if acc[0].eq_ignore_ascii_case(&b'f') && acc.len() == 1 {
+        Ok(Value::Bool(false))
+    } else {
+        return Err(SailErr::Error);
+    }
+}
+
+fn process_num(slice: &str) -> Result<Value, SailErr> {
     if let Ok(n) = slice.parse::<i64>() {
         return Ok(Value::FixInt(n));
     } else if let Ok(n) = slice.parse::<f64>() {
         return Ok(Value::FixFloat(n));
     } else {
-        Err("Invalid number")
+        Err(SailErr::Error)
     }
 }
 
