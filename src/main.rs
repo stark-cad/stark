@@ -9,6 +9,7 @@ use log::info;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
+// TODO: Add capability to start program in "Sail REPL" mode for testing
 // TODO: Fix random crash on window resize
 
 fn main() {

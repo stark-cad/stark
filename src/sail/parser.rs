@@ -106,6 +106,7 @@ fn read_list(
 
     if c == b')' {
         unsafe { super::list_set(head, ptr::null_mut()) }
+        chars.next();
         return Ok(head);
     }
 
@@ -243,6 +244,8 @@ fn read_symbol(
     }
 
     let strsym = unsafe { super::init_symbol(false, super::SlSymbolMode::ByStr, acc.len() as u16) };
+    unsafe { super::sym_set_str(strsym, acc.as_slice()) }
+
     let exists = unsafe { super::sym_tab_lookup_by_str(tbl, strsym) };
 
     unsafe {

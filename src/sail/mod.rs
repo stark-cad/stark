@@ -48,6 +48,11 @@ pub struct SlHead {
 #[repr(transparent)]
 pub struct SlValue(*mut SlHead);
 
+pub struct SlContextVal {
+    tbl: *mut SlHead,
+    val: *mut SlHead,
+}
+
 // ALL Sail values that may be independently referenced, begin with bytes of this format
 // type: 4 bits - list: 1 bit - config: 3 bits - rc: 8 bits
 // the first eight bits determine the subsequent memory layout
@@ -203,6 +208,15 @@ unsafe fn init_map(list_elt: bool, size: u16) -> *mut SlHead {
 
     ptr::write_unaligned(value_ptr(ptr) as *mut SlMap, SlMap { size });
 
+    for i in 0..(size - 1) {
+        ptr::write_unaligned(
+            value_ptr(ptr)
+                .offset(MAP_SH_LEN as isize)
+                .offset(i as isize * PTR_LEN as isize) as *mut *mut SlHead,
+            ptr::null_mut(),
+        );
+    }
+
     ptr
 }
 
@@ -253,7 +267,7 @@ unsafe fn init_symbol(list_elt: bool, mode: SlSymbolMode, len: u16) -> *mut SlHe
         );
         ptr::write_unaligned(
             ptr as *mut u8,
-            ptr::read_unaligned(ptr as *mut u8) & mode as u8,
+            ptr::read_unaligned(ptr as *mut u8) | mode as u8,
         );
         ptr::write_unaligned(value_ptr(ptr) as *mut SlSymbolSH, SlSymbolSH { len });
     };
@@ -364,11 +378,19 @@ unsafe fn id(fst: *mut SlHead, lst: *mut SlHead) -> bool {
 unsafe fn eq(fst: *mut SlHead, lst: *mut SlHead) -> bool {
     if id(fst, lst) {
         true
-    } else if get_type(fst) as u8 != get_type(lst) as u8 {
+    } else if get_type(fst) != get_type(lst) {
         false
     } else {
         match get_type(fst) {
-            SlType::Symbol => sym_get_id(fst) == sym_get_id(lst),
+            SlType::Symbol => {
+                if sym_mode(fst) != sym_mode(lst) {
+                    false
+                } else if sym_mode(fst) == SlSymbolMode::ById {
+                    sym_get_id(fst) == sym_get_id(lst)
+                } else {
+                    sym_get_str(fst).eq(sym_get_str(lst))
+                }
+            }
             _ => false,
         }
     }
@@ -377,7 +399,20 @@ unsafe fn eq(fst: *mut SlHead, lst: *mut SlHead) -> bool {
 /// Returns a unique hash value (based on the provided value's content?)
 unsafe fn hash(loc: *mut SlHead) -> u32 {
     match get_type(loc) {
-        SlType::Symbol => sym_get_id(loc),
+        SlType::Symbol => {
+            if sym_mode(loc) == SlSymbolMode::ById {
+                sym_get_id(loc)
+            } else {
+                let slice = sym_get_str(loc);
+
+                let mut out: u32 = 1;
+                for c in slice.bytes() {
+                    out = out + (out << 5) + c as u32;
+                }
+
+                out
+            }
+        }
         _ => 0,
     }
 }
@@ -513,12 +548,36 @@ unsafe fn native_body(loc: *mut SlHead) -> fn(*mut SlHead) -> *mut SlHead {
     mem::transmute::<u64, fn(*mut SlHead) -> *mut SlHead>(ptr)
 }
 
+unsafe fn sym_mode(loc: *mut SlHead) -> SlSymbolMode {
+    mem::transmute::<u8, SlSymbolMode>(get_cfg_bits(loc))
+}
+
 unsafe fn sym_set_id(loc: *mut SlHead, id: u32) {
     ptr::write_unaligned(value_ptr(loc) as *mut u32, id)
 }
 
 unsafe fn sym_get_id(loc: *mut SlHead) -> u32 {
     ptr::read_unaligned(value_ptr(loc) as *mut u32)
+}
+
+unsafe fn sym_get_len(loc: *mut SlHead) -> u16 {
+    ptr::read_unaligned(value_ptr(loc) as *mut u16)
+}
+
+unsafe fn sym_set_str(loc: *mut SlHead, val: &[u8]) {
+    let len = sym_get_len(loc);
+    let here = std::slice::from_raw_parts_mut(value_ptr(loc).offset(2) as *mut u8, len as usize);
+
+    here.copy_from_slice(val)
+}
+
+unsafe fn sym_get_str(loc: *mut SlHead) -> &'static str {
+    let len = sym_get_len(loc);
+
+    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+        value_ptr(loc).offset(2) as *mut u8,
+        len as usize,
+    ))
 }
 
 unsafe fn string_get_cap(loc: *mut SlHead) -> u16 {
@@ -551,6 +610,10 @@ unsafe fn fixfloat_set(loc: *mut SlHead, val: f64) {
     ptr::write_unaligned(value_ptr(loc) as *mut f64, val)
 }
 
+unsafe fn fixfloat_get(loc: *mut SlHead) -> f64 {
+    ptr::read_unaligned(value_ptr(loc) as *mut f64)
+}
+
 /// Set a boolean value
 unsafe fn bool_set(loc: *mut SlHead, val: bool) {
     if val {
@@ -567,7 +630,7 @@ unsafe fn bool_set(loc: *mut SlHead, val: bool) {
 }
 
 /// Get a boolean value
-unsafe fn bool_get(loc: *mut SlHead, val: bool) -> bool {
+unsafe fn bool_get(loc: *mut SlHead) -> bool {
     ptr::read_unaligned(loc as *mut u8) & 0b00000001 != 0
 }
 
@@ -635,7 +698,7 @@ unsafe fn cdr(loc: *mut SlHead) -> *mut SlHead {
 // TODO: Consider whether bool is necessary
 // TODO: Probably no reason for Symbol and Keyword not to just be pointers to String
 // TODO: Collapse Lambda and Native into Proc and add Err?
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum SlType {
     List = 0,
@@ -697,7 +760,7 @@ struct SlSymbolId {
 #[repr(u8)]
 enum SlSymbolMode {
     ById = 0,
-    ByStr,
+    ByStr = 1,
 }
 
 const KEYWORD_SH_LEN: u8 = 4;
@@ -817,7 +880,7 @@ unsafe fn sym_tab_create() -> *mut SlHead {
     tbl
 }
 
-/// TODO: this should take a string slice and return an id number
+/// Takes the symbol table and a Symbol ByStr to insert, returning the symbol's unique ID
 unsafe fn sym_tab_insert(tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
     let next_id = vec_idx(tbl, 2);
     let id_num = sym_get_id(next_id);
@@ -835,7 +898,9 @@ unsafe fn sym_tab_insert(tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
     let str_size = map_get_size(str_to_id);
 
     let id_hash = id_num % id_size as u32;
-    let str_hash = hash(sym) % id_size as u32;
+    dbg!(id_hash);
+    let str_hash = hash(sym) % str_size as u32;
+    dbg!(str_hash);
 
     let id_idx = MAP_SH_LEN as isize + (id_hash * PTR_LEN as u32) as isize;
     let str_idx = MAP_SH_LEN as isize + (str_hash * PTR_LEN as u32) as isize;
@@ -886,7 +951,7 @@ unsafe fn sym_tab_insert(tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
     id_num
 }
 
-/// Looks up normally, by car
+/// Looks up normally, by car, and returns cdr
 unsafe fn sym_tab_lookup_by_id(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
     let map = vec_idx(tbl, 0);
 
@@ -906,14 +971,14 @@ unsafe fn sym_tab_lookup_by_id(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHea
         }
 
         if eq(list_get(entry), qry) {
-            return list_get(entry);
+            return next_list_elt(list_get(entry));
         }
 
         entry = next_list_elt(entry);
     }
 }
 
-/// Must look up by cdr
+/// Must look up by cdr, and return car
 unsafe fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
     let map = vec_idx(tbl, 1);
 
@@ -933,7 +998,7 @@ unsafe fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHe
         }
 
         if eq(next_list_elt(list_get(entry)), qry) {
-            return next_list_elt(list_get(entry));
+            return list_get(entry);
         }
 
         entry = next_list_elt(entry);
@@ -941,11 +1006,87 @@ unsafe fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHe
 }
 
 // TODO: Figure out how to manage / dispose of memory
+fn as_sl_value(loc: *mut SlHead) -> SlValue {
+    unsafe { mem::transmute::<*mut SlHead, SlValue>(loc) }
+}
 
 // TODO: Enable display of all valid Sail values
 impl fmt::Display for SlValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "sail value")
+        let value = self.0;
+
+        unsafe {
+            match get_type(value) {
+                SlType::List => {
+                    write!(f, "(").unwrap();
+                    let mut elt = list_get(value);
+                    while elt != ptr::null_mut() {
+                        write!(f, "{}", as_sl_value(elt).to_string()).unwrap();
+                        elt = next_list_elt(elt);
+                        if elt != ptr::null_mut() {
+                            write!(f, " ").unwrap();
+                        }
+                    }
+                    write!(f, ")")
+                }
+                SlType::Vec => write!(f, "vec"),
+                SlType::Map => write!(f, "map"),
+                SlType::Lambda => write!(f, "lambda"),
+                SlType::Native => write!(f, "native"),
+                SlType::Symbol => write!(f, "<ID: {}>", sym_get_id(value)),
+                SlType::Keyword => write!(f, "keyword"),
+                SlType::String => write!(f, "string"),
+                SlType::FixInt => write!(f, "{}", fixint_get(value)),
+                SlType::FixFloat => write!(f, "{}", fixfloat_get(value)),
+                SlType::MpInt => write!(f, "mpint"),
+                SlType::MpFloat => write!(f, "mpfloat"),
+                SlType::Rational => write!(f, "rational"),
+                SlType::Complex => write!(f, "complex"),
+                SlType::Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
+                SlType::Other => write!(f, "other"),
+            }
+        }
+    }
+}
+
+impl fmt::Display for SlContextVal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let table = self.tbl;
+        let value = self.val;
+
+        // TODO: Implement special Cons display
+        unsafe {
+            match get_type(value) {
+                SlType::List => {
+                    write!(f, "(").unwrap();
+                    let mut elt = list_get(value);
+                    while elt != ptr::null_mut() {
+                        write!(
+                            f,
+                            "{}",
+                            SlContextVal {
+                                tbl: table,
+                                val: elt,
+                            }
+                            .to_string()
+                        )
+                        .unwrap();
+                        elt = next_list_elt(elt);
+                        if elt != ptr::null_mut() {
+                            write!(f, " ").unwrap();
+                        }
+                    }
+                    write!(f, ")")
+                }
+                SlType::Vec => write!(f, "vec"),
+                SlType::Map => write!(f, "map"),
+                SlType::Lambda => write!(f, "lambda"),
+                SlType::Native => write!(f, "native"),
+                SlType::Symbol => write!(f, "{}", sym_get_str(sym_tab_lookup_by_id(table, value))),
+                SlType::Keyword => write!(f, "keyword"),
+                _ => write!(f, "{}", as_sl_value(value).to_string()),
+            }
+        }
     }
 }
 
@@ -1015,10 +1156,6 @@ impl fmt::Display for SlValue {
 //             Value::Symbol(x) => write!(f, "{}", x),
 //             Value::Keyword(x) => write!(f, ":{}", x),
 //             Value::String(x) => write!(f, "\"{}\"", x),
-//             Value::FixInt(x) => write!(f, "{}", x),
-//             Value::FixFloat(x) => write!(f, "{}", x),
-//             Value::Bool(true) => write!(f, "#T"),
-//             Value::Bool(false) => write!(f, "#F"),
 //         }
 //     }
 // }
@@ -1104,7 +1241,6 @@ unsafe fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem;
 
     #[test]
     fn returns() {
@@ -1120,23 +1256,32 @@ mod tests {
 
     #[test]
     fn parses() {
-        let exp = String::from("(+ (() 42 (e) #T) #F 2.1)");
-        let out = unsafe {
-            mem::transmute::<*mut SlHead, SlValue>(parser::parse(&exp).unwrap().1).to_string()
-        };
+        let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
+        let val = parser::parse(&exp).unwrap();
+        let out = SlContextVal {
+            tbl: val.0,
+            val: val.1,
+        }
+        .to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("(() (()) ((((() ())))))");
-        let out = unsafe {
-            mem::transmute::<*mut SlHead, SlValue>(parser::parse(&exp).unwrap().1).to_string()
-        };
+        let val = parser::parse(&exp).unwrap();
+        let out = SlContextVal {
+            tbl: val.0,
+            val: val.1,
+        }
+        .to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("((1 2 3 4) ;Comment\n5)");
         let gnd = String::from("((1 2 3 4) 5)");
-        let out = unsafe {
-            mem::transmute::<*mut SlHead, SlValue>(parser::parse(&exp).unwrap().1).to_string()
-        };
+        let val = parser::parse(&exp).unwrap();
+        let out = SlContextVal {
+            tbl: val.0,
+            val: val.1,
+        }
+        .to_string();
         assert_eq!(gnd, out);
     }
 
