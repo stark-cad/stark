@@ -48,7 +48,7 @@ pub enum Mouse {
     Left,
     Right,
     Middle,
-    Other(u8),
+    Other(u16),
 }
 
 impl InputStatus {

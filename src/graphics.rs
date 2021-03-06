@@ -2,7 +2,10 @@ use crate::context::Context;
 
 use gfx_hal::{
     adapter::{Adapter, PhysicalDevice},
-    command::{ClearColor, ClearValue, CommandBuffer, CommandBufferFlags, SubpassContents},
+    command::{
+        ClearColor, ClearValue, CommandBuffer, CommandBufferFlags, RenderAttachmentInfo,
+        SubpassContents,
+    },
     device::Device,
     format::{ChannelType, Format},
     image::{Extent, Layout},
@@ -13,7 +16,7 @@ use gfx_hal::{
         GraphicsPipelineDesc, InputAssemblerDesc, Primitive, PrimitiveAssemblerDesc, Rasterizer,
         Rect, Specialization, VertexBufferDesc, VertexInputRate, Viewport,
     },
-    queue::{CommandQueue, QueueFamily, QueueGroup, Submission},
+    queue::{Queue, QueueFamily, QueueGroup},
     window::{Extent2D, PresentationSurface, Surface, SwapchainConfig},
     Instance, MemoryTypeId,
 };
@@ -21,6 +24,7 @@ use gfx_hal::{
 use log::debug;
 
 use std::borrow::Borrow;
+use std::iter;
 use std::mem::size_of;
 
 #[derive(Debug)]
@@ -107,7 +111,11 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         };
         let render_pass = unsafe {
             device
-                .create_render_pass(&[color_attachment], &[subpass], &[])
+                .create_render_pass(
+                    vec![color_attachment].into_iter(),
+                    vec![subpass].into_iter(),
+                    vec![].into_iter(),
+                )
                 .unwrap()
         };
         let mut command_pool = unsafe {
@@ -149,7 +157,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
 
         let pipeline_layout = unsafe {
             self.device
-                .create_pipeline_layout(&[], &[])
+                .create_pipeline_layout(iter::empty(), iter::empty())
                 .expect("Out of memory")
         };
 
@@ -174,7 +182,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                 .wait_for_fence(self.submission_complete_fence.as_ref().unwrap(), timeout_ns)
                 .unwrap();
             self.device
-                .reset_fence(self.submission_complete_fence.as_ref().unwrap())
+                .reset_fence(self.submission_complete_fence.as_mut().unwrap())
                 .unwrap();
 
             self.command_pool.as_mut().unwrap().reset(false);
@@ -188,10 +196,19 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         };
 
         let framebuffer = unsafe {
+            let caps = self
+                .surface
+                .as_ref()
+                .unwrap()
+                .capabilities(&self.adapter.physical_device);
+            let swapchain_config =
+                SwapchainConfig::from_caps(&caps, self.surface_color_format, self.surface_extent);
+            let framebuffer_attachment = swapchain_config.framebuffer_attachment();
+
             self.device
                 .create_framebuffer(
                     &self.render_passes[0],
-                    vec![surface_image.borrow()],
+                    iter::once(framebuffer_attachment),
                     Extent {
                         width: self.surface_extent.width,
                         height: self.surface_extent.height,
@@ -208,7 +225,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
 
             let mapped_memory = self
                 .device
-                .map_memory(&self.vertex_memory[0], gfx_hal::memory::Segment::ALL)
+                .map_memory(&mut self.vertex_memory[0], gfx_hal::memory::Segment::ALL)
                 .unwrap();
 
             let points = triangle.points_flat();
@@ -218,13 +235,13 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
             std::ptr::copy_nonoverlapping(points.as_ptr() as *const u8, mapped_memory, XY_TRI_SIZE);
 
             self.device
-                .flush_mapped_memory_ranges(&[(
+                .flush_mapped_memory_ranges(iter::once((
                     &self.vertex_memory[0],
                     gfx_hal::memory::Segment::ALL,
-                )])
+                )))
                 .unwrap();
 
-            self.device.unmap_memory(&self.vertex_memory[0]);
+            self.device.unmap_memory(&mut self.vertex_memory[0]);
         }
 
         unsafe {
@@ -242,18 +259,21 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
 
             buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
 
-            buffer.set_viewports(0, &[viewport.clone()]);
-            buffer.set_scissors(0, &[viewport.rect]);
+            buffer.set_viewports(0, iter::once(viewport.clone()));
+            buffer.set_scissors(0, iter::once(viewport.rect));
 
             buffer.begin_render_pass(
                 &self.render_passes[0],
                 &framebuffer,
                 viewport.rect,
-                &[ClearValue {
-                    color: ClearColor {
-                        float32: [0.0, 0.0, 0.0, 1.0],
+                iter::once(RenderAttachmentInfo {
+                    image_view: surface_image.borrow(),
+                    clear_value: ClearValue {
+                        color: ClearColor {
+                            float32: [0.0, 0.0, 0.0, 1.0],
+                        },
                     },
-                }],
+                }),
                 SubpassContents::Inline,
             );
 
@@ -261,7 +281,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
 
             buffer.bind_vertex_buffers(
                 0,
-                vec![(&self.vertex_buffers[0], gfx_hal::buffer::SubRange::WHOLE)],
+                vec![(&self.vertex_buffers[0], gfx_hal::buffer::SubRange::WHOLE)].into_iter(),
             );
 
             buffer.draw(0..3, 0..1);
@@ -271,20 +291,23 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         }
 
         unsafe {
-            let submission = Submission {
-                command_buffers: vec![&self.command_buffers[0]],
-                wait_semaphores: None,
-                signal_semaphores: vec![self.rendering_complete_semaphore.as_ref().unwrap()],
-            };
-
-            self.queue_group.queues[0].submit(submission, self.submission_complete_fence.as_ref());
+            self.queue_group.queues[0].submit(
+                vec![&self.command_buffers[0]].into_iter(),
+                vec![].into_iter(),
+                vec![self.rendering_complete_semaphore.as_ref().unwrap()].into_iter(),
+                self.submission_complete_fence.as_mut(),
+            );
 
             self.queue_group.queues[0]
                 .present(
                     self.surface.as_mut().unwrap(),
                     surface_image,
-                    self.rendering_complete_semaphore.as_ref(),
+                    self.rendering_complete_semaphore.as_mut(),
                 )
+                .unwrap();
+
+            self.device
+                .wait_for_fence(self.submission_complete_fence.as_ref().unwrap(), timeout_ns)
                 .unwrap();
 
             self.device.destroy_framebuffer(framebuffer);
@@ -302,7 +325,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                 .wait_for_fence(self.submission_complete_fence.as_ref().unwrap(), timeout_ns)
                 .unwrap();
             self.device
-                .reset_fence(self.submission_complete_fence.as_ref().unwrap())
+                .reset_fence(self.submission_complete_fence.as_mut().unwrap())
                 .unwrap();
         }
 
@@ -314,10 +337,19 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         };
 
         let framebuffer = unsafe {
+            let caps = self
+                .surface
+                .as_ref()
+                .unwrap()
+                .capabilities(&self.adapter.physical_device);
+            let swapchain_config =
+                SwapchainConfig::from_caps(&caps, self.surface_color_format, self.surface_extent);
+            let framebuffer_attachment = swapchain_config.framebuffer_attachment();
+
             self.device
                 .create_framebuffer(
                     &self.render_passes[0],
-                    vec![surface_image.borrow()],
+                    iter::once(framebuffer_attachment),
                     Extent {
                         width: self.surface_extent.width,
                         height: self.surface_extent.height,
@@ -345,9 +377,12 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                     w: self.surface_extent.width as i16,
                     h: self.surface_extent.height as i16,
                 },
-                &[ClearValue {
-                    color: ClearColor { float32: color },
-                }],
+                iter::once(RenderAttachmentInfo {
+                    image_view: surface_image.borrow(),
+                    clear_value: ClearValue {
+                        color: ClearColor { float32: color },
+                    },
+                }),
                 SubpassContents::Inline,
             );
 
@@ -356,19 +391,18 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         }
 
         unsafe {
-            let submission = Submission {
-                command_buffers: vec![&self.command_buffers[0]],
-                wait_semaphores: None,
-                signal_semaphores: vec![self.rendering_complete_semaphore.as_ref().unwrap()],
-            };
-
-            self.queue_group.queues[0].submit(submission, self.submission_complete_fence.as_ref());
+            self.queue_group.queues[0].submit(
+                vec![&self.command_buffers[0]].into_iter(),
+                vec![].into_iter(),
+                vec![self.rendering_complete_semaphore.as_ref().unwrap()].into_iter(),
+                self.submission_complete_fence.as_mut(),
+            );
 
             self.queue_group.queues[0]
                 .present(
                     self.surface.as_mut().unwrap(),
                     surface_image,
-                    self.rendering_complete_semaphore.as_ref(),
+                    self.rendering_complete_semaphore.as_mut(),
                 )
                 .unwrap();
 
