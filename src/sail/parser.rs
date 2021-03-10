@@ -11,15 +11,14 @@ struct Parser {
 
 /// Parses a Sail expression into the internal representation
 /// TODO: Parse Vec, Map, and Keyword
-pub fn parse(code: &str) -> Result<(*mut SlHead, *mut SlHead), SailErr> {
+pub fn parse(tbl: *mut SlHead, code: &str) -> Result<*mut SlHead, SailErr> {
     // Accumulator for collecting string values
     let mut acc: Vec<u8> = Vec::new();
     let mut chars = code.bytes().peekable();
-    let tbl = unsafe { super::sym_tab_create() };
 
     let val = read_value(&mut chars, &mut acc, tbl, false)?;
 
-    Ok((tbl, val))
+    Ok(val)
 }
 
 /// Returns a contiguous value parsed from the input stream
@@ -35,7 +34,7 @@ fn read_value(
     let mut c = *(chars.peek().unwrap());
     while c.is_ascii_whitespace() {
         chars.next();
-        c = *(chars.peek().unwrap());
+        c = *(chars.peek().ok_or(SailErr::Error)?);
     }
 
     match c {
@@ -158,7 +157,7 @@ fn read_list(
             }
         }
 
-        c = *(chars.peek().unwrap());
+        c = *(chars.peek().ok_or(SailErr::Error)?);
     }
 
     chars.next();
@@ -196,7 +195,7 @@ fn read_map(
     tbl: *mut SlHead,
     elt: bool,
 ) -> Result<*mut SlHead, SailErr> {
-    let map = unsafe { super::init_vec(elt, 16) };
+    let map = unsafe { super::init_map(elt, 16) };
     let mut c = *(chars.peek().unwrap());
     while c != b'}' {
         match c {
@@ -243,7 +242,9 @@ fn read_symbol(
         }
     }
 
-    let strsym = unsafe { super::init_symbol(false, super::SlSymbolMode::ByStr, acc.len() as u16) };
+    let strsym =
+        unsafe { super::init_symbol(false, super::SlSymbolMode::ByStr, acc.len() as u16) };
+
     unsafe { super::sym_set_str(strsym, acc.as_slice()) }
 
     let exists = unsafe { super::sym_tab_lookup_by_str(tbl, strsym) };

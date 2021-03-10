@@ -9,7 +9,7 @@ use std::ptr;
 
 use rug;
 
-mod parser;
+pub mod parser;
 
 pub enum SailErr {
     Error,
@@ -49,8 +49,8 @@ pub struct SlHead {
 pub struct SlValue(*mut SlHead);
 
 pub struct SlContextVal {
-    tbl: *mut SlHead,
-    val: *mut SlHead,
+    pub tbl: *mut SlHead,
+    pub val: *mut SlHead,
 }
 
 // ALL Sail values that may be independently referenced, begin with bytes of this format
@@ -65,8 +65,7 @@ struct SlListPtr {
     ptr: *mut SlHead,
 }
 
-// TODO: Determine whether many system allocations like this are best
-// TODO: Possibly use unions to create SlHead for various types?
+// TODO: Set up own allocation system because the system allocator is trash
 unsafe fn alloc(size: usize, list: bool, typ: SlType) -> *mut SlHead {
     let ptr = {
         let length = if list {
@@ -102,31 +101,25 @@ unsafe fn get_type(loc: *mut SlHead) -> SlType {
 unsafe fn get_size(loc: *mut SlHead) -> usize {
     match get_type(loc) {
         SlType::List => PTR_LEN as usize,
-        SlType::Vec => {
-            VEC_SH_LEN as usize
-                + (ptr::read_unaligned(value_ptr(loc).offset(2) as *mut u16) as usize
-                    * PTR_LEN as usize)
-        }
-        SlType::Map => {
-            MAP_SH_LEN as usize
-                + (ptr::read_unaligned(value_ptr(loc) as *mut u16) as usize * PTR_LEN as usize)
-        }
+        SlType::Vec => VEC_SH_LEN as usize + (vec_get_cap(loc) as usize * PTR_LEN as usize),
+        SlType::Map => MAP_SH_LEN as usize + (map_get_size(loc) as usize * PTR_LEN as usize),
         SlType::Lambda => {
             PROC_SH_LEN as usize
-                + ((1 + ptr::read_unaligned(value_ptr(loc) as *mut u16) as usize)
-                    * PTR_LEN as usize)
+                + PTR_LEN as usize
+                + ((ptr::read_unaligned(value_ptr(loc) as *mut u16) as usize)
+                    * SYMBOL_ID_LEN as usize)
         }
         SlType::Native => {
             PROC_SH_LEN as usize
-                + ((1 + ptr::read_unaligned(value_ptr(loc) as *mut u16) as usize)
-                    * PTR_LEN as usize)
+                + PTR_LEN as usize
+                + ((ptr::read_unaligned(value_ptr(loc) as *mut u16) as usize)
+                    * SYMBOL_ID_LEN as usize)
         }
         SlType::Symbol => {
             if get_cfg_bits(loc) == SlSymbolMode::ById as u8 {
                 SYMBOL_ID_LEN as usize
             } else {
-                SYMBOL_SH_LEN as usize
-                    + ptr::read_unaligned(value_ptr(loc).offset(2) as *mut u16) as usize
+                SYMBOL_SH_LEN as usize + sym_get_len(loc) as usize
             }
         }
         SlType::Keyword => {
@@ -160,6 +153,10 @@ unsafe fn set_cfg_bits(loc: *mut SlHead, cfg: u8) {
 /// Checks a valid Sail value to determine whether it is a list element
 unsafe fn list_elt_p(loc: *mut SlHead) -> bool {
     (ptr::read_unaligned(loc as *const u8) | 0b00001000) != 0
+}
+
+unsafe fn nil_p(loc: *mut SlHead) -> bool {
+    loc == ptr::null_mut::<SlHead>()
 }
 
 /// From a valid Sail value, returns a pointer to the start of the value proper
@@ -407,7 +404,7 @@ unsafe fn hash(loc: *mut SlHead) -> u32 {
 
                 let mut out: u32 = 1;
                 for c in slice.bytes() {
-                    out = out + (out << 5) + c as u32;
+                    out = out.wrapping_add(out << 5).wrapping_add(c as u32);
                 }
 
                 out
@@ -429,7 +426,7 @@ unsafe fn list_get(loc: *mut SlHead) -> *mut SlHead {
 }
 
 unsafe fn list_empty_p(loc: *mut SlHead) -> bool {
-    ptr::read_unaligned(value_ptr(loc) as *mut *mut SlHead) != ptr::null_mut()
+    nil_p(list_get(loc))
 }
 
 unsafe fn vec_set_len(loc: *mut SlHead, len: u16) {
@@ -494,6 +491,8 @@ unsafe fn map_insert(loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
 /// Looks up a key in a map, returning the key-value pair
 /// TODO: got to make sure all cells in a map are ptr::null_mut() to start
 unsafe fn map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
+    assert_eq!(SlType::Map, get_type(loc));
+
     let size = map_get_size(loc);
     let hash = hash(key) % size as u32;
 
@@ -521,6 +520,15 @@ unsafe fn proc_get_argct(loc: *mut SlHead) -> u16 {
     ptr::read_unaligned(value_ptr(loc) as *mut u16)
 }
 
+unsafe fn proc_set_arg(loc: *mut SlHead, ind: u16, arg: u32) {
+    ptr::write_unaligned(
+        value_ptr(loc)
+            .offset((PROC_SH_LEN + PTR_LEN) as isize)
+            .offset(ind as isize * SYMBOL_ID_LEN as isize) as *mut u32,
+        arg,
+    );
+}
+
 unsafe fn proc_get_arg(loc: *mut SlHead, ind: u16) -> *mut SlHead {
     let id = ptr::read_unaligned(
         value_ptr(loc)
@@ -543,9 +551,15 @@ unsafe fn lambda_body(loc: *mut SlHead) -> *mut SlHead {
     ptr
 }
 
-unsafe fn native_body(loc: *mut SlHead) -> fn(*mut SlHead) -> *mut SlHead {
+unsafe fn native_set(loc: *mut SlHead, fun: unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead) {
+    let ptr = mem::transmute::<unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead, u64>(fun);
+
+    ptr::write_unaligned(value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut u64, ptr);
+}
+
+unsafe fn native_body(loc: *mut SlHead) -> unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead {
     let ptr = ptr::read_unaligned(value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut u64);
-    mem::transmute::<u64, fn(*mut SlHead) -> *mut SlHead>(ptr)
+    mem::transmute::<u64, unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead>(ptr)
 }
 
 unsafe fn sym_mode(loc: *mut SlHead) -> SlSymbolMode {
@@ -674,9 +688,12 @@ unsafe fn car(loc: *mut SlHead) -> *mut SlHead {
 unsafe fn cdr(loc: *mut SlHead) -> *mut SlHead {
     let cadr = next_list_elt(list_get(loc));
 
+    // if the cdr is nil, just return it
     // if the cdr is still a list, return it as such
     // if the cdr is the final item in a malformed list, return it
-    if list_elt_p(cadr) {
+    if nil_p(cadr) {
+        cadr
+    } else if list_elt_p(cadr) {
         let ptr = init_list(false);
         list_set(ptr, cadr);
         ptr
@@ -819,8 +836,6 @@ struct SlRef {
     ptr: *mut SlHead,
 }
 
-type NativeFn = fn(*mut SlHead) -> *mut SlHead;
-
 /// An environment is a list of maps: should function as a FIFO stack
 /// TODO: deal somewhere with dynamic bindings, lexical bindings, argument bindings
 unsafe fn env_create() -> *mut SlHead {
@@ -833,11 +848,22 @@ unsafe fn env_create() -> *mut SlHead {
 }
 
 unsafe fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> *mut SlHead {
+    assert_eq!(SlType::List, get_type(env));
+    assert_eq!(SlType::Symbol, get_type(sym));
+
     let result = map_lookup(car(env), sym);
     if get_type(result) == SlType::List {
         return cdr(result);
     }
-    env_lookup(cdr(env), sym)
+
+    let next = cdr(env);
+    if nil_p(next) {
+        let out = init_bool(false);
+        bool_set(out, false);
+        out
+    } else {
+        env_lookup(next, sym)
+    }
 }
 
 unsafe fn env_new_layer(min_size: u16) -> *mut SlHead {
@@ -898,9 +924,7 @@ unsafe fn sym_tab_insert(tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
     let str_size = map_get_size(str_to_id);
 
     let id_hash = id_num % id_size as u32;
-    dbg!(id_hash);
     let str_hash = hash(sym) % str_size as u32;
-    dbg!(str_hash);
 
     let id_idx = MAP_SH_LEN as isize + (id_hash * PTR_LEN as u32) as isize;
     let str_idx = MAP_SH_LEN as isize + (str_hash * PTR_LEN as u32) as isize;
@@ -1166,30 +1190,71 @@ struct SailPersistent {
     sym: *mut SlHead,
 }
 
-pub fn repl() {}
+pub fn repl() {
+    // Create persistent environment and symbol table
+    // Load standard / base definitions into environment and symbol table
+    // TODO: Consider stack-like environment per function
+
+    // Evaluate provided expressions one by one
+    // Maintain environment and symbol table throughout
+    // TODO: Start to think about namespaces etc
+}
 
 /// Interprets a Sail expression, returning the result
-pub fn interpret(code: &String) -> String {
-    dbg!("interpreting an expression");
+pub fn interpret(code: &String) -> Result<String, SailErr> {
+    let sym = unsafe { sym_tab_create() };
 
-    let value = parser::parse(code).unwrap().1;
+    // TODO: fix functions so such insanity isn't required to get them in place
+    let (add_id, fst_num, snd_num);
+    unsafe {
+        let fst_str = init_symbol(false, SlSymbolMode::ByStr, 3);
+        sym_set_str(fst_str, b"fst");
+        fst_num = sym_tab_insert(sym, fst_str);
+        let snd_str = init_symbol(false, SlSymbolMode::ByStr, 3);
+        sym_set_str(snd_str, b"snd");
+        snd_num = sym_tab_insert(sym, snd_str);
+        let add_str = init_symbol(false, SlSymbolMode::ByStr, 1);
+        sym_set_str(add_str, b"+");
+        add_id = init_symbol(false, SlSymbolMode::ById, 0);
+        sym_set_id(add_id, sym_tab_insert(sym, add_str));
+    }
+
+    let expr = parser::parse(sym, code)?;
+
     let env = unsafe { env_create() };
-    let result = unsafe { eval(env, value) }.unwrap();
 
-    unsafe { mem::transmute::<*mut SlHead, SlValue>(result).to_string() }
+    unsafe {
+        let add_fn = init_native(false, 2);
+        native_set(add_fn, add);
+        proc_set_arg(add_fn, 0, fst_num);
+        proc_set_arg(add_fn, 1, snd_num);
+        env_layer_ins_entry(car(env), add_id, add_fn);
+    }
+
+    let result = unsafe { eval(sym, env, expr) }?;
+
+    Ok(SlContextVal {
+        tbl: sym,
+        val: result,
+    }
+    .to_string())
 }
 
 /// Evaluates a Sail value, returning the result
-unsafe fn eval(env: *mut SlHead, expr: *mut SlHead) -> Result<*mut SlHead, SailErr> {
+unsafe fn eval(
+    sym: *mut SlHead,
+    env: *mut SlHead,
+    expr: *mut SlHead,
+) -> Result<*mut SlHead, SailErr> {
     match get_type(expr) {
         SlType::Symbol => return Ok(env_lookup(env, expr)),
         SlType::List => {
-            let operator = eval(env, car(expr))?;
+            let operator = eval(sym, env, car(expr))?;
             // TODO: replace with next_list_elt(list_get(expr)) to avoid allocation
             let args = cdr(expr);
             match get_type(operator) {
                 SlType::Lambda | SlType::Native => {
-                    return apply(env, operator, args);
+                    return apply(sym, env, operator, args);
                 }
                 SlType::Symbol => {
                     // TODO: special form handling
@@ -1203,6 +1268,7 @@ unsafe fn eval(env: *mut SlHead, expr: *mut SlHead) -> Result<*mut SlHead, SailE
 }
 
 unsafe fn apply(
+    sym: *mut SlHead,
     env: *mut SlHead,
     proc: *mut SlHead,
     args: *mut SlHead,
@@ -1217,7 +1283,7 @@ unsafe fn apply(
             return Err(SailErr::Error);
         }
 
-        let curarg = eval(env, car(arglist))?;
+        let curarg = eval(sym, env, car(arglist))?;
 
         // TODO: just get and look up arg by id itself, without allocating
         env_layer_ins_entry(proc_env, proc_get_arg(proc, i), curarg);
@@ -1228,14 +1294,41 @@ unsafe fn apply(
     env_push_layer(env, proc_env);
 
     let result = match get_type(proc) {
-        SlType::Lambda => eval(env, lambda_body(proc)),
-        SlType::Native => Ok(native_body(proc)(env)),
+        SlType::Lambda => eval(sym, env, lambda_body(proc)),
+        SlType::Native => Ok(native_body(proc)(sym, env)),
         _ => Err(SailErr::Error),
     };
 
     env_pop_layer(env);
 
     result
+}
+
+macro_rules! sail_fn {
+    ( $fn_name:tt [ $($args:ident),* ] { $($body:stmt)* } ) => {};
+}
+
+sail_fn!(
+    + [add1, add2] {
+        fixint_get(add1) + fixint_get(add2);
+        return;
+    }
+);
+
+/// TODO: first attempt at a native function
+unsafe fn add(sym: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+    let fst_str = init_symbol(false, SlSymbolMode::ByStr, 3);
+    sym_set_str(fst_str, b"fst");
+    let snd_str = init_symbol(false, SlSymbolMode::ByStr, 3);
+    sym_set_str(snd_str, b"snd");
+
+    let fst = env_lookup(env, sym_tab_lookup_by_str(sym, fst_str));
+    let snd = env_lookup(env, sym_tab_lookup_by_str(sym, fst_str));
+
+    let out = init_fixint(false);
+    // only the second half of this line actually performs the function's function
+    fixint_set(out, fixint_get(fst) + fixint_get(snd));
+    out
 }
 
 #[cfg(test)]

@@ -1,11 +1,13 @@
 use stark::{
     context::{Context, ContextMsg},
     graphics::GraphicsState,
-    InputStatus,
+    sail, InputStatus,
 };
 
 use log::info;
 
+use std::env;
+use std::io;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
@@ -19,6 +21,25 @@ fn main() {
 
     // TODO: add useful logging throughout the program
     simple_logger::SimpleLogger::new().init().unwrap();
+
+    // TODO: Evaluate, don't just parse
+    let args: Vec<String> = env::args().collect();
+    if args.len() >= 2 {
+        loop {
+            let mut expr = String::new();
+            io::stdin().read_line(&mut expr).expect("Failure");
+
+            match sail::interpret(&expr) {
+                Ok(out) => {
+                    println!("{}", out);
+                }
+                Err(_) => {
+                    println!("Error");
+                    continue;
+                }
+            }
+        }
+    }
 
     let context = Context::new(NAME, ICON, SIZE[0], SIZE[1]);
     let input_status = Arc::new(Mutex::new(InputStatus::new()));
@@ -63,7 +84,10 @@ fn main() {
                     points: [
                         [-0.5, 0.5],
                         [-0.5, -0.5],
-                        [((x as f32 / w as f32) * 2.0) - 1.0, ((y as f32 / h as f32) * 2.0) - 1.0],
+                        [
+                            ((x as f32 / w as f32) * 2.0) - 1.0,
+                            ((y as f32 / h as f32) * 2.0) - 1.0,
+                        ],
                     ],
                 })
                 .unwrap();
@@ -99,7 +123,10 @@ fn main() {
                         points: [
                             [-0.5, 0.5],
                             [-0.5, -0.5],
-                            [((x as f32 / w as f32) * 2.0) - 1.0, ((y as f32 / h as f32) * 2.0) - 1.0],
+                            [
+                                ((x as f32 / w as f32) * 2.0) - 1.0,
+                                ((y as f32 / h as f32) * 2.0) - 1.0,
+                            ],
                         ],
                     })
                     .unwrap();
