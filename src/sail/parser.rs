@@ -10,7 +10,7 @@ struct Parser {
 }
 
 /// Parses a Sail expression into the internal representation
-/// TODO: Parse Vec, Map, and Keyword
+/// TODO: Parse Keyword
 pub fn parse(tbl: *mut SlHead, code: &str) -> Result<*mut SlHead, SailErr> {
     // Accumulator for collecting string values
     let mut acc: Vec<u8> = Vec::new();
@@ -188,7 +188,6 @@ fn read_vec(
     Ok(vec)
 }
 
-// TODO: Dealing with maps properly will be somewhat difficult
 fn read_map(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -258,7 +257,6 @@ fn read_symbol(
         }
     }
 
-    // TODO: Look up string in the symbol table, getting or creating the unique ID
     Ok(sym)
 }
 
@@ -294,10 +292,10 @@ fn read_string(
     elt: bool,
 ) -> Result<*mut SlHead, SailErr> {
     let string = unsafe { super::init_string(elt, 32) };
-    let mut next = chars.next().unwrap();
+    let mut next = *(chars.peek().unwrap());
     while next != b'"' {
         acc.push(chars.next().unwrap());
-        next = chars.next().unwrap();
+        next = *(chars.peek().unwrap());
     }
 
     unsafe {

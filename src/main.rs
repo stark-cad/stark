@@ -11,7 +11,6 @@ use std::io;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
-// TODO: Add capability to start program in "Sail REPL" mode for testing
 // TODO: Fix random crash on window resize
 
 fn main() {
@@ -22,7 +21,7 @@ fn main() {
     // TODO: add useful logging throughout the program
     simple_logger::SimpleLogger::new().init().unwrap();
 
-    // TODO: Evaluate, don't just parse
+    // TODO: move to a REPL with persistent state
     let args: Vec<String> = env::args().collect();
     if args.len() >= 2 {
         loop {

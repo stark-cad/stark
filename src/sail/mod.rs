@@ -2,14 +2,14 @@
 //!
 //! A custom Lisp dialect for writing STARK
 
-use std::alloc;
 use std::fmt;
 use std::mem;
 use std::ptr;
 
 use rug;
 
-pub mod parser;
+mod memmgt;
+mod parser;
 
 pub enum SailErr {
     Error,
@@ -45,6 +45,7 @@ pub struct SlHead {
     rc: u8,
 }
 
+/// Exists for the Display trait
 #[repr(transparent)]
 pub struct SlValue(*mut SlHead);
 
@@ -53,9 +54,9 @@ pub struct SlContextVal {
     pub val: *mut SlHead,
 }
 
-// ALL Sail values that may be independently referenced, begin with bytes of this format
-// type: 4 bits - list: 1 bit - config: 3 bits - rc: 8 bits
-// the first eight bits determine the subsequent memory layout
+/// ALL Sail values that may be independently referenced, begin with bytes of this format
+/// type: 4 bits - list: 1 bit - config: 3 bits - rc: 8 bits
+/// The first eight bits determine the subsequent memory layout
 const _MIN_HEAD: u16 = 0b1111011100000000;
 
 const PTR_LEN: u8 = 8;
@@ -65,31 +66,7 @@ struct SlListPtr {
     ptr: *mut SlHead,
 }
 
-// TODO: Set up own allocation system because the system allocator is trash
-unsafe fn alloc(size: usize, list: bool, typ: SlType) -> *mut SlHead {
-    let ptr = {
-        let length = if list {
-            (HEAD_LEN + PTR_LEN) as usize + size
-        } else {
-            HEAD_LEN as usize + size
-        };
-        let layout = alloc::Layout::from_size_align_unchecked(length, 1);
-
-        alloc::alloc(layout) as *mut SlHead
-    };
-
-    let conf = ((typ as u8) << 4) + ((list as u8) << 3);
-    let head = SlHead { conf, rc: 1 };
-
-    ptr::write_unaligned(ptr, head);
-
-    if list {
-        let next = (ptr as *mut u8).offset(HEAD_LEN as isize) as *mut *mut SlHead;
-        ptr::write_unaligned(next, ptr::null_mut::<SlHead>());
-    }
-
-    ptr
-}
+// TODO: MINIMIZE the use of *unsafe* functions
 
 /// Returns the type of a valid Sail value
 unsafe fn get_type(loc: *mut SlHead) -> SlType {
@@ -152,7 +129,7 @@ unsafe fn set_cfg_bits(loc: *mut SlHead, cfg: u8) {
 
 /// Checks a valid Sail value to determine whether it is a list element
 unsafe fn list_elt_p(loc: *mut SlHead) -> bool {
-    (ptr::read_unaligned(loc as *const u8) | 0b00001000) != 0
+    (ptr::read_unaligned(loc as *const u8) & 0b00001000) != 0
 }
 
 unsafe fn nil_p(loc: *mut SlHead) -> bool {
@@ -170,9 +147,8 @@ unsafe fn value_ptr(loc: *mut SlHead) -> *mut u8 {
     } as isize)
 }
 
-// TODO: Should this be the same as initializing a cons?
 unsafe fn init_list(list_elt: bool) -> *mut SlHead {
-    let ptr = alloc(PTR_LEN as usize, list_elt, SlType::List);
+    let ptr = memmgt::alloc(PTR_LEN as usize, list_elt, SlType::List);
 
     ptr::write_unaligned(
         value_ptr(ptr) as *mut *mut SlHead,
@@ -184,7 +160,7 @@ unsafe fn init_list(list_elt: bool) -> *mut SlHead {
 
 // For now, vectors will only store references to their contained values
 unsafe fn init_vec(list_elt: bool, cap: u16) -> *mut SlHead {
-    let ptr = alloc(
+    let ptr = memmgt::alloc(
         VEC_SH_LEN as usize + (PTR_LEN as usize * cap as usize),
         list_elt,
         SlType::Vec,
@@ -197,7 +173,7 @@ unsafe fn init_vec(list_elt: bool, cap: u16) -> *mut SlHead {
 
 // Maps will probably all use the same mode for now (list out of each hash value entry)
 unsafe fn init_map(list_elt: bool, size: u16) -> *mut SlHead {
-    let ptr = alloc(
+    let ptr = memmgt::alloc(
         MAP_SH_LEN as usize + (PTR_LEN as usize * size as usize),
         list_elt,
         SlType::Map,
@@ -205,7 +181,7 @@ unsafe fn init_map(list_elt: bool, size: u16) -> *mut SlHead {
 
     ptr::write_unaligned(value_ptr(ptr) as *mut SlMap, SlMap { size });
 
-    for i in 0..(size - 1) {
+    for i in 0..size {
         ptr::write_unaligned(
             value_ptr(ptr)
                 .offset(MAP_SH_LEN as isize)
@@ -218,7 +194,7 @@ unsafe fn init_map(list_elt: bool, size: u16) -> *mut SlHead {
 }
 
 unsafe fn init_lambda(list_elt: bool, argct: u16) -> *mut SlHead {
-    let ptr = alloc(
+    let ptr = memmgt::alloc(
         (PROC_SH_LEN + PTR_LEN) as usize + (SYMBOL_ID_LEN as usize * argct as usize),
         list_elt,
         SlType::Lambda,
@@ -235,7 +211,7 @@ unsafe fn init_lambda(list_elt: bool, argct: u16) -> *mut SlHead {
 }
 
 unsafe fn init_native(list_elt: bool, argct: u16) -> *mut SlHead {
-    let ptr = alloc(
+    let ptr = memmgt::alloc(
         (PROC_SH_LEN + PTR_LEN) as usize + (SYMBOL_ID_LEN as usize * argct as usize),
         list_elt,
         SlType::Native,
@@ -255,9 +231,9 @@ unsafe fn init_symbol(list_elt: bool, mode: SlSymbolMode, len: u16) -> *mut SlHe
     let ptr;
 
     if mode == SlSymbolMode::ById {
-        ptr = alloc(SYMBOL_ID_LEN as usize, list_elt, SlType::Symbol)
+        ptr = memmgt::alloc(SYMBOL_ID_LEN as usize, list_elt, SlType::Symbol)
     } else {
-        ptr = alloc(
+        ptr = memmgt::alloc(
             SYMBOL_SH_LEN as usize + len as usize,
             list_elt,
             SlType::Symbol,
@@ -273,7 +249,7 @@ unsafe fn init_symbol(list_elt: bool, mode: SlSymbolMode, len: u16) -> *mut SlHe
 }
 
 unsafe fn init_keyword(list_elt: bool, cap: u16) -> *mut SlHead {
-    let ptr = alloc(
+    let ptr = memmgt::alloc(
         KEYWORD_SH_LEN as usize + cap as usize,
         list_elt,
         SlType::Keyword,
@@ -285,7 +261,7 @@ unsafe fn init_keyword(list_elt: bool, cap: u16) -> *mut SlHead {
 }
 
 unsafe fn init_string(list_elt: bool, cap: u16) -> *mut SlHead {
-    let ptr = alloc(
+    let ptr = memmgt::alloc(
         STRING_SH_LEN as usize + cap as usize,
         list_elt,
         SlType::String,
@@ -297,19 +273,19 @@ unsafe fn init_string(list_elt: bool, cap: u16) -> *mut SlHead {
 }
 
 unsafe fn init_fixint(list_elt: bool) -> *mut SlHead {
-    let ptr = alloc(FIX_NUM_LEN as usize, list_elt, SlType::FixInt);
+    let ptr = memmgt::alloc(FIX_NUM_LEN as usize, list_elt, SlType::FixInt);
 
     ptr
 }
 
 unsafe fn init_fixfloat(list_elt: bool) -> *mut SlHead {
-    let ptr = alloc(FIX_NUM_LEN as usize, list_elt, SlType::FixFloat);
+    let ptr = memmgt::alloc(FIX_NUM_LEN as usize, list_elt, SlType::FixFloat);
 
     ptr
 }
 
 unsafe fn init_mpint(list_elt: bool) -> *mut SlHead {
-    let ptr = alloc(MP_INT_LEN as usize, list_elt, SlType::MpInt);
+    let ptr = memmgt::alloc(MP_INT_LEN as usize, list_elt, SlType::MpInt);
 
     ptr::write_unaligned(value_ptr(ptr) as *mut rug::Integer, rug::Integer::new());
 
@@ -317,7 +293,7 @@ unsafe fn init_mpint(list_elt: bool) -> *mut SlHead {
 }
 
 unsafe fn init_mpfloat(list_elt: bool, prec: u32) -> *mut SlHead {
-    let ptr = alloc(MP_FLOAT_LEN as usize, list_elt, SlType::MpFloat);
+    let ptr = memmgt::alloc(MP_FLOAT_LEN as usize, list_elt, SlType::MpFloat);
 
     ptr::write_unaligned(value_ptr(ptr) as *mut rug::Float, rug::Float::new(prec));
 
@@ -325,7 +301,7 @@ unsafe fn init_mpfloat(list_elt: bool, prec: u32) -> *mut SlHead {
 }
 
 unsafe fn init_rational(list_elt: bool) -> *mut SlHead {
-    let ptr = alloc(RATIONAL_LEN as usize, list_elt, SlType::Rational);
+    let ptr = memmgt::alloc(RATIONAL_LEN as usize, list_elt, SlType::Rational);
 
     ptr::write_unaligned(value_ptr(ptr) as *mut rug::Rational, rug::Rational::new());
 
@@ -333,7 +309,7 @@ unsafe fn init_rational(list_elt: bool) -> *mut SlHead {
 }
 
 unsafe fn init_complex(list_elt: bool, prec: u32) -> *mut SlHead {
-    let ptr = alloc(COMPLEX_LEN as usize, list_elt, SlType::Complex);
+    let ptr = memmgt::alloc(COMPLEX_LEN as usize, list_elt, SlType::Complex);
 
     ptr::write_unaligned(value_ptr(ptr) as *mut rug::Complex, rug::Complex::new(prec));
 
@@ -341,7 +317,7 @@ unsafe fn init_complex(list_elt: bool, prec: u32) -> *mut SlHead {
 }
 
 unsafe fn init_bool(list_elt: bool) -> *mut SlHead {
-    let ptr = alloc(0, list_elt, SlType::Bool);
+    let ptr = memmgt::alloc(0, list_elt, SlType::Bool);
 
     ptr
 }
@@ -430,18 +406,23 @@ unsafe fn list_empty_p(loc: *mut SlHead) -> bool {
 }
 
 unsafe fn vec_set_len(loc: *mut SlHead, len: u16) {
+    assert_eq!(SlType::Vec, get_type(loc));
     ptr::write_unaligned(value_ptr(loc) as *mut u16, len)
 }
 
 unsafe fn vec_get_len(loc: *mut SlHead) -> u16 {
+    assert_eq!(SlType::Vec, get_type(loc));
     ptr::read_unaligned(value_ptr(loc) as *mut u16)
 }
 
 unsafe fn vec_get_cap(loc: *mut SlHead) -> u16 {
+    assert_eq!(SlType::Vec, get_type(loc));
     ptr::read_unaligned(value_ptr(loc).offset(2) as *mut u16)
 }
 
 unsafe fn vec_idx(loc: *mut SlHead, idx: u16) -> *mut SlHead {
+    assert_eq!(SlType::Vec, get_type(loc));
+
     ptr::read_unaligned(
         value_ptr(loc)
             .offset(VEC_SH_LEN as isize)
@@ -450,25 +431,32 @@ unsafe fn vec_idx(loc: *mut SlHead, idx: u16) -> *mut SlHead {
 }
 
 unsafe fn vec_push(loc: *mut SlHead, item: *mut SlHead) {
+    assert_eq!(SlType::Vec, get_type(loc));
+
     let (len, cap) = (vec_get_len(loc), vec_get_cap(loc));
 
     if len < cap {
         ptr::write_unaligned(
-            value_ptr(loc)
-                .offset(VEC_SH_LEN as isize)
-                .offset(len as isize * PTR_LEN as isize) as *mut *mut SlHead,
+            value_ptr(loc).offset(VEC_SH_LEN as isize + (len as isize * PTR_LEN as isize))
+                as *mut *mut SlHead,
             item,
         );
         vec_set_len(loc, len + 1);
+    } else {
+        panic!("not enough space in vec");
     }
 }
 
 unsafe fn map_get_size(loc: *mut SlHead) -> u16 {
+    assert_eq!(SlType::Map, get_type(loc));
+
     ptr::read_unaligned(value_ptr(loc) as *mut u16)
 }
 
 /// TODO: automatically resize as needed (probably as an option)
 unsafe fn map_insert(loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
+    assert_eq!(SlType::Map, get_type(loc));
+
     let size = map_get_size(loc);
     let hash = hash(key) % size as u32;
 
@@ -489,7 +477,6 @@ unsafe fn map_insert(loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
 }
 
 /// Looks up a key in a map, returning the key-value pair
-/// TODO: got to make sure all cells in a map are ptr::null_mut() to start
 unsafe fn map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
     assert_eq!(SlType::Map, get_type(loc));
 
@@ -651,7 +638,7 @@ unsafe fn bool_get(loc: *mut SlHead) -> bool {
 unsafe fn copy_val(src: *mut SlHead, list_elt: bool) -> *mut SlHead {
     let (typ, siz, cfg) = (get_type(src), get_size(src), get_cfg_bits(src));
 
-    let dst = alloc(siz, list_elt, typ);
+    let dst = memmgt::alloc(siz, list_elt, typ);
     set_cfg_bits(dst, cfg);
     ptr::copy_nonoverlapping(value_ptr(src), value_ptr(dst), siz);
 
@@ -713,34 +700,34 @@ unsafe fn cdr(loc: *mut SlHead) -> *mut SlHead {
 
 // TODO: How to keep track of which memory has been allocated
 // TODO: Consider whether bool is necessary
-// TODO: Probably no reason for Symbol and Keyword not to just be pointers to String
-// TODO: Collapse Lambda and Native into Proc and add Err?
+// TODO: Think about storing Keyword: use more interning?
+// TODO: Collapse Lambda and Native into Proc and add Err
 #[derive(Debug, PartialEq, Eq)]
 #[repr(u8)]
-enum SlType {
+pub enum SlType {
     List = 0,
-    Vec,
-    Map,
-    Lambda,
-    Native,
-    Symbol,
-    Keyword,
-    String,
-    FixInt,
-    FixFloat,
-    MpInt,
-    MpFloat,
-    Rational,
-    Complex,
-    Bool,
-    Other,
+    Vec = 1,
+    Map = 2,
+    Lambda = 3,
+    Native = 4,
+    Symbol = 5,
+    Keyword = 6,
+    String = 7,
+    FixInt = 8,
+    FixFloat = 9,
+    MpInt = 10,
+    MpFloat = 11,
+    Rational = 12,
+    Complex = 13,
+    Bool = 14,
+    Other = 15,
 }
 
 struct SlList {
     ptr: *mut SlHead,
 }
 
-// TODO: Vecs and Maps could have various modes with various performance characteristics in the future
+// TODO: Vecs and Maps should have various modes with various performance characteristics in the future
 const VEC_SH_LEN: u8 = 4;
 #[repr(C)]
 struct SlVec {
@@ -887,14 +874,13 @@ unsafe fn env_pop_layer(env: *mut SlHead) {
 }
 
 /// This should take the form of a bimap, a 1 to 1 association between strings and IDs
-/// TODO: two maps, one for each direction, pointing to the same set of cons cells (id . string)
+/// Two maps, one for each direction, pointing to the same set of cons cells (id . string)
 /// Must keep track of id to assign (counter) and reclaim unused slots if counter reaches max
-/// TODO: just store the counter as a number instead of as a whole Sail value?
 unsafe fn sym_tab_create() -> *mut SlHead {
     let tbl = init_vec(false, 3);
 
-    let id_to_str = init_map(false, 1024);
-    let str_to_id = init_map(false, 1024);
+    let id_to_str = init_map(false, 255);
+    let str_to_id = init_map(false, 255);
 
     let id_count = init_symbol(false, SlSymbolMode::ById, 0);
     sym_set_id(id_count, 0);
@@ -908,6 +894,9 @@ unsafe fn sym_tab_create() -> *mut SlHead {
 
 /// Takes the symbol table and a Symbol ByStr to insert, returning the symbol's unique ID
 unsafe fn sym_tab_insert(tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
+    assert_eq!(SlType::Vec, get_type(tbl));
+    assert_eq!(SlType::Symbol, get_type(sym));
+
     let next_id = vec_idx(tbl, 2);
     let id_num = sym_get_id(next_id);
 
@@ -1078,7 +1067,7 @@ impl fmt::Display for SlContextVal {
         let table = self.tbl;
         let value = self.val;
 
-        // TODO: Implement special Cons display
+        // TODO: Implement special cons cell display
         unsafe {
             match get_type(value) {
                 SlType::List => {
@@ -1102,12 +1091,33 @@ impl fmt::Display for SlContextVal {
                     }
                     write!(f, ")")
                 }
-                SlType::Vec => write!(f, "vec"),
+                SlType::Vec => {
+                    write!(f, "[").unwrap();
+                    let len = vec_get_len(value);
+                    for idx in 0..len {
+                        write!(
+                            f,
+                            "{}",
+                            SlContextVal {
+                                tbl: table,
+                                val: vec_idx(value, idx)
+                            }
+                            .to_string()
+                        )
+                        .unwrap();
+
+                        if idx < len - 1 {
+                            write!(f, " ").unwrap();
+                        }
+                    }
+                    write!(f, "]")
+                }
+                // TODO: function to access all map pairs somehow
                 SlType::Map => write!(f, "map"),
-                SlType::Lambda => write!(f, "lambda"),
-                SlType::Native => write!(f, "native"),
+                SlType::Lambda => write!(f, "<lambda>"),
+                SlType::Native => write!(f, "<native>"),
                 SlType::Symbol => write!(f, "{}", sym_get_str(sym_tab_lookup_by_id(table, value))),
-                SlType::Keyword => write!(f, "keyword"),
+                SlType::Keyword => write!(f, "<keyword>"),
                 _ => write!(f, "{}", as_sl_value(value).to_string()),
             }
         }
@@ -1115,17 +1125,6 @@ impl fmt::Display for SlContextVal {
 }
 
 // SLATED FOR DELETION
-// impl fmt::Display for List {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         let car = self.car.to_string();
-//         let cdr = match unsafe { self.cdr.as_ref() } {
-//             Some(x) => String::from(" ") + &x.to_string(),
-//             None => String::new(),
-//         };
-//         write!(f, "{}{}", car, cdr)
-//     }
-// }
-
 // impl fmt::Display for Cons {
 //     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 //         let car = self.car.to_string();
@@ -1133,29 +1132,9 @@ impl fmt::Display for SlContextVal {
 //         write!(f, "({} . {})", car, cdr)
 //     }
 // }
-
 // impl fmt::Display for Value {
 //     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 //         match self {
-//             Value::List(p) => unsafe {
-//                 match p.as_ref() {
-//                     Some(x) => write!(f, "({})", x),
-//                     None => write!(f, "()"),
-//                 }
-//             },
-//             Value::Cons(p) => unsafe {
-//                 match p.as_ref() {
-//                     Some(x) => write!(f, "{}", x),
-//                     None => write!(f, "()"),
-//                 }
-//             },
-//             // TODO: The next three will have an extra space at the end; fix
-//             Value::Vec(x) => write!(
-//                 f,
-//                 "[{}]",
-//                 x.iter()
-//                     .fold(String::new(), |acc, new| acc + &new.to_string() + " ")
-//             ),
 //             Value::Map(x) => write!(
 //                 f,
 //                 "{{{}}}",
@@ -1176,8 +1155,6 @@ impl fmt::Display for SlContextVal {
 //                     }
 //                 }
 //             ),
-//             Value::Native(_) => write!(f, "<native fn>"),
-//             Value::Symbol(x) => write!(f, "{}", x),
 //             Value::Keyword(x) => write!(f, ":{}", x),
 //             Value::String(x) => write!(f, "\"{}\"", x),
 //         }
@@ -1249,6 +1226,10 @@ unsafe fn eval(
     match get_type(expr) {
         SlType::Symbol => return Ok(env_lookup(env, expr)),
         SlType::List => {
+            if list_empty_p(expr) {
+                return Ok(expr);
+            }
+
             let operator = eval(sym, env, car(expr))?;
             // TODO: replace with next_list_elt(list_get(expr)) to avoid allocation
             let args = cdr(expr);
@@ -1279,7 +1260,7 @@ unsafe fn apply(
 
     let mut arglist = args;
     for i in 0..argct {
-        if list_empty_p(arglist) {
+        if nil_p(arglist) || list_empty_p(arglist) {
             return Err(SailErr::Error);
         }
 
@@ -1323,7 +1304,7 @@ unsafe fn add(sym: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
     sym_set_str(snd_str, b"snd");
 
     let fst = env_lookup(env, sym_tab_lookup_by_str(sym, fst_str));
-    let snd = env_lookup(env, sym_tab_lookup_by_str(sym, fst_str));
+    let snd = env_lookup(env, sym_tab_lookup_by_str(sym, snd_str));
 
     let out = init_fixint(false);
     // only the second half of this line actually performs the function's function
@@ -1338,65 +1319,33 @@ mod tests {
     #[test]
     fn returns() {
         let exp = String::from("42");
-        assert_eq!(exp, interpret(&exp));
+        assert_eq!(exp, interpret(&exp).unwrap());
     }
 
     #[test]
     fn adds() {
         let exp = String::from("(+ 2 2)");
-        assert_eq!("4", interpret(&exp));
+        assert_eq!("4", interpret(&exp).unwrap());
     }
 
     #[test]
     fn parses() {
+        let tbl = unsafe { sym_tab_create() };
+
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
-        let val = parser::parse(&exp).unwrap();
-        let out = SlContextVal {
-            tbl: val.0,
-            val: val.1,
-        }
-        .to_string();
+        let val = parser::parse(tbl, &exp).unwrap();
+        let out = SlContextVal { tbl, val }.to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("(() (()) ((((() ())))))");
-        let val = parser::parse(&exp).unwrap();
-        let out = SlContextVal {
-            tbl: val.0,
-            val: val.1,
-        }
-        .to_string();
+        let val = parser::parse(tbl, &exp).unwrap();
+        let out = SlContextVal { tbl, val }.to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("((1 2 3 4) ;Comment\n5)");
         let gnd = String::from("((1 2 3 4) 5)");
-        let val = parser::parse(&exp).unwrap();
-        let out = SlContextVal {
-            tbl: val.0,
-            val: val.1,
-        }
-        .to_string();
+        let val = parser::parse(tbl, &exp).unwrap();
+        let out = SlContextVal { tbl, val }.to_string();
         assert_eq!(gnd, out);
-    }
-
-    #[test]
-    fn displays() {
-        // to be replaced
-        // let list = Value::List(Box::into_raw(Box::new(List {
-        //     car: Value::List(Box::into_raw(Box::new(List {
-        //         car: Value::FixInt(42),
-        //         cdr: Box::into_raw(Box::new(List {
-        //             car: Value::Bool(true),
-        //             cdr: ptr::null_mut(),
-        //         })),
-        //     }))),
-        //     cdr: Box::into_raw(Box::new(List {
-        //         car: Value::String(String::from("the answer")),
-        //         cdr: Box::into_raw(Box::new(List {
-        //             car: Value::List(ptr::null_mut()),
-        //             cdr: ptr::null_mut(),
-        //         })),
-        //     })),
-        // })));
-        // assert_eq!("((42 #T) \"the answer\" ())", list.to_string());
     }
 }
