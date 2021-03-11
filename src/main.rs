@@ -21,23 +21,9 @@ fn main() {
     // TODO: add useful logging throughout the program
     simple_logger::SimpleLogger::new().init().unwrap();
 
-    // TODO: move to a REPL with persistent state
     let args: Vec<String> = env::args().collect();
     if args.len() >= 2 {
-        loop {
-            let mut expr = String::new();
-            io::stdin().read_line(&mut expr).expect("Failure");
-
-            match sail::interpret(&expr) {
-                Ok(out) => {
-                    println!("{}", out);
-                }
-                Err(_) => {
-                    println!("Error");
-                    continue;
-                }
-            }
-        }
+        sail::repl(io::stdin())
     }
 
     let context = Context::new(NAME, ICON, SIZE[0], SIZE[1]);

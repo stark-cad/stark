@@ -45,15 +45,6 @@ pub struct SlHead {
     rc: u8,
 }
 
-/// Exists for the Display trait
-#[repr(transparent)]
-pub struct SlValue(*mut SlHead);
-
-pub struct SlContextVal {
-    pub tbl: *mut SlHead,
-    pub val: *mut SlHead,
-}
-
 /// ALL Sail values that may be independently referenced, begin with bytes of this format
 /// type: 4 bits - list: 1 bit - config: 3 bits - rc: 8 bits
 /// The first eight bits determine the subsequent memory layout
@@ -454,6 +445,7 @@ unsafe fn map_get_size(loc: *mut SlHead) -> u16 {
 }
 
 /// TODO: automatically resize as needed (probably as an option)
+/// TODO: clean up shadowed entries sometime
 unsafe fn map_insert(loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
     assert_eq!(SlType::Map, get_type(loc));
 
@@ -463,17 +455,13 @@ unsafe fn map_insert(loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
     let entry = cons_copy(true, key, val);
 
     let idx = MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize;
-    let mut pos = ptr::read_unaligned(value_ptr(loc).offset(idx) as *mut *mut SlHead);
+    let pos = ptr::read_unaligned(value_ptr(loc).offset(idx) as *mut *mut SlHead);
 
-    if pos == ptr::null_mut() {
-        ptr::write_unaligned(value_ptr(loc).offset(idx) as *mut *mut SlHead, entry)
-    } else {
-        while next_list_elt(pos) != ptr::null_mut() {
-            pos = next_list_elt(pos);
-        }
-
-        set_list_elt(pos, entry)
+    if !pos.is_null() {
+        set_list_elt(entry, pos);
     }
+
+    ptr::write_unaligned(value_ptr(loc).offset(idx) as *mut *mut SlHead, entry)
 }
 
 /// Looks up a key in a map, returning the key-value pair
@@ -530,12 +518,19 @@ unsafe fn proc_get_arg(loc: *mut SlHead, ind: u16) -> *mut SlHead {
     sym
 }
 
+unsafe fn lambda_set(loc: *mut SlHead, body: *mut SlHead) {
+    ptr::write_unaligned(
+        value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut *mut SlHead,
+        body,
+    )
+}
+
 unsafe fn lambda_body(loc: *mut SlHead) -> *mut SlHead {
-    let body_car =
-        ptr::read_unaligned(value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut *mut SlHead);
-    let ptr = init_list(false);
-    list_set(ptr, body_car);
-    ptr
+    // let body_car =
+    ptr::read_unaligned(value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut *mut SlHead)
+    // let ptr = init_list(false);
+    // list_set(ptr, body_car);
+    // ptr
 }
 
 unsafe fn native_set(loc: *mut SlHead, fun: unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead) {
@@ -781,14 +776,9 @@ struct SlString {
     cap: u16,
 }
 
+/// Currently just an i64 or an f64
+/// TODO: Use modes to permit u16 - u128 and i16 - i128 for FixInt
 const FIX_NUM_LEN: u8 = 8;
-struct SlFixInt {
-    val: i64,
-}
-
-struct SlFixFloat {
-    val: f64,
-}
 
 const MP_INT_LEN: u8 = 16;
 struct SlMpInt {
@@ -1018,50 +1008,17 @@ unsafe fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHe
     }
 }
 
+/// Bundles together a value and associated symbol table for display
+struct SlContextVal {
+    tbl: *mut SlHead,
+    val: *mut SlHead,
+}
+
+fn context(tbl: *mut SlHead, val: *mut SlHead) -> SlContextVal {
+    SlContextVal { tbl, val }
+}
+
 // TODO: Figure out how to manage / dispose of memory
-fn as_sl_value(loc: *mut SlHead) -> SlValue {
-    unsafe { mem::transmute::<*mut SlHead, SlValue>(loc) }
-}
-
-// TODO: Enable display of all valid Sail values
-impl fmt::Display for SlValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = self.0;
-
-        unsafe {
-            match get_type(value) {
-                SlType::List => {
-                    write!(f, "(").unwrap();
-                    let mut elt = list_get(value);
-                    while elt != ptr::null_mut() {
-                        write!(f, "{}", as_sl_value(elt).to_string()).unwrap();
-                        elt = next_list_elt(elt);
-                        if elt != ptr::null_mut() {
-                            write!(f, " ").unwrap();
-                        }
-                    }
-                    write!(f, ")")
-                }
-                SlType::Vec => write!(f, "vec"),
-                SlType::Map => write!(f, "map"),
-                SlType::Lambda => write!(f, "lambda"),
-                SlType::Native => write!(f, "native"),
-                SlType::Symbol => write!(f, "<ID: {}>", sym_get_id(value)),
-                SlType::Keyword => write!(f, "keyword"),
-                SlType::String => write!(f, "string"),
-                SlType::FixInt => write!(f, "{}", fixint_get(value)),
-                SlType::FixFloat => write!(f, "{}", fixfloat_get(value)),
-                SlType::MpInt => write!(f, "mpint"),
-                SlType::MpFloat => write!(f, "mpfloat"),
-                SlType::Rational => write!(f, "rational"),
-                SlType::Complex => write!(f, "complex"),
-                SlType::Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
-                SlType::Other => write!(f, "other"),
-            }
-        }
-    }
-}
-
 impl fmt::Display for SlContextVal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let table = self.tbl;
@@ -1074,16 +1031,7 @@ impl fmt::Display for SlContextVal {
                     write!(f, "(").unwrap();
                     let mut elt = list_get(value);
                     while elt != ptr::null_mut() {
-                        write!(
-                            f,
-                            "{}",
-                            SlContextVal {
-                                tbl: table,
-                                val: elt,
-                            }
-                            .to_string()
-                        )
-                        .unwrap();
+                        write!(f, "{}", context(table, elt).to_string()).unwrap();
                         elt = next_list_elt(elt);
                         if elt != ptr::null_mut() {
                             write!(f, " ").unwrap();
@@ -1095,16 +1043,7 @@ impl fmt::Display for SlContextVal {
                     write!(f, "[").unwrap();
                     let len = vec_get_len(value);
                     for idx in 0..len {
-                        write!(
-                            f,
-                            "{}",
-                            SlContextVal {
-                                tbl: table,
-                                val: vec_idx(value, idx)
-                            }
-                            .to_string()
-                        )
-                        .unwrap();
+                        write!(f, "{}", context(table, vec_idx(value, idx)).to_string()).unwrap();
 
                         if idx < len - 1 {
                             write!(f, " ").unwrap();
@@ -1117,8 +1056,16 @@ impl fmt::Display for SlContextVal {
                 SlType::Lambda => write!(f, "<lambda>"),
                 SlType::Native => write!(f, "<native>"),
                 SlType::Symbol => write!(f, "{}", sym_get_str(sym_tab_lookup_by_id(table, value))),
-                SlType::Keyword => write!(f, "<keyword>"),
-                _ => write!(f, "{}", as_sl_value(value).to_string()),
+                SlType::Keyword => write!(f, "keyword"),
+                SlType::String => write!(f, "string"),
+                SlType::FixInt => write!(f, "{}", fixint_get(value)),
+                SlType::FixFloat => write!(f, "{}", fixfloat_get(value)),
+                SlType::MpInt => write!(f, "mpint"),
+                SlType::MpFloat => write!(f, "mpfloat"),
+                SlType::Rational => write!(f, "rational"),
+                SlType::Complex => write!(f, "complex"),
+                SlType::Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
+                SlType::Other => write!(f, "other"),
             }
         }
     }
@@ -1161,29 +1108,79 @@ impl fmt::Display for SlContextVal {
 //     }
 // }
 
-/// Base environment and symbol table (and maybe more to come)
-struct SailPersistent {
-    env: *mut SlHead,
-    sym: *mut SlHead,
-}
-
-pub fn repl() {
-    // Create persistent environment and symbol table
-    // Load standard / base definitions into environment and symbol table
+/// Accepts an input stream and runs a read - evaluate - print loop perpetually
+pub fn repl(stream_in: std::io::Stdin) {
     // TODO: Consider stack-like environment per function
-
-    // Evaluate provided expressions one by one
-    // Maintain environment and symbol table throughout
     // TODO: Start to think about namespaces etc
+
+    // Create persistent environment and symbol table
+    let sym = unsafe { sym_tab_create() };
+    let env = unsafe { env_create() };
+
+    // Load standard / base definitions into environment and symbol table
+    environment_setup(sym, env);
+
+    loop {
+        let mut input = String::new();
+        stream_in.read_line(&mut input).expect("Failure");
+
+        let expr = match parser::parse(sym, &input) {
+            Ok(out) => out,
+            Err(_) => {
+                println!("Parse Error");
+                continue;
+            }
+        };
+
+        let result = match unsafe { eval(sym, env, expr) } {
+            Ok(out) => out,
+            Err(_) => {
+                println!("Evaluation Error");
+                continue;
+            }
+        };
+
+        println!("{}", context(sym, result).to_string())
+    }
 }
 
 /// Interprets a Sail expression, returning the result
 pub fn interpret(code: &String) -> Result<String, SailErr> {
     let sym = unsafe { sym_tab_create() };
+    let env = unsafe { env_create() };
+
+    environment_setup(sym, env);
 
     // TODO: fix functions so such insanity isn't required to get them in place
-    let (add_id, fst_num, snd_num);
+    let expr = parser::parse(sym, code)?;
+    let result = unsafe { eval(sym, env, expr) }?;
+
+    Ok(context(sym, result).to_string())
+}
+
+/// TODO: fix functions so such insanity isn't required to get them in place
+fn environment_setup(sym: *mut SlHead, env: *mut SlHead) {
+    // Special form symbols
     unsafe {
+        let def_str = init_symbol(false, SlSymbolMode::ByStr, 3);
+        sym_set_str(def_str, b"def");
+        let def_id = init_symbol(false, SlSymbolMode::ById, 0);
+        sym_set_id(def_id, sym_tab_insert(sym, def_str));
+
+        env_layer_ins_entry(car(env), def_id, def_str);
+
+        let fn_str = init_symbol(false, SlSymbolMode::ByStr, 2);
+        sym_set_str(fn_str, b"fn");
+        let fn_id = init_symbol(false, SlSymbolMode::ById, 0);
+        sym_set_id(fn_id, sym_tab_insert(sym, fn_str));
+
+        env_layer_ins_entry(car(env), fn_id, fn_str);
+    }
+
+    // Addition function (prototype)
+    unsafe {
+        let (add_id, fst_num, snd_num);
+
         let fst_str = init_symbol(false, SlSymbolMode::ByStr, 3);
         sym_set_str(fst_str, b"fst");
         fst_num = sym_tab_insert(sym, fst_str);
@@ -1194,27 +1191,13 @@ pub fn interpret(code: &String) -> Result<String, SailErr> {
         sym_set_str(add_str, b"+");
         add_id = init_symbol(false, SlSymbolMode::ById, 0);
         sym_set_id(add_id, sym_tab_insert(sym, add_str));
-    }
 
-    let expr = parser::parse(sym, code)?;
-
-    let env = unsafe { env_create() };
-
-    unsafe {
         let add_fn = init_native(false, 2);
         native_set(add_fn, add);
         proc_set_arg(add_fn, 0, fst_num);
         proc_set_arg(add_fn, 1, snd_num);
         env_layer_ins_entry(car(env), add_id, add_fn);
     }
-
-    let result = unsafe { eval(sym, env, expr) }?;
-
-    Ok(SlContextVal {
-        tbl: sym,
-        val: result,
-    }
-    .to_string())
 }
 
 /// Evaluates a Sail value, returning the result
@@ -1239,15 +1222,47 @@ unsafe fn eval(
                 }
                 SlType::Symbol => {
                     // TODO: special form handling
+                    // TODO: is there a need for special forms? why not just make these native functions?
+                    // TODO: these may be good examples for creating / using native functions cleanly
+                    match sym_get_str(operator) {
+                        "def" => {
+                            env_layer_ins_entry(
+                                car(env),
+                                car(args),
+                                eval(sym, env, car(cdr(args)))?,
+                            );
+                            return Ok(car(args));
+                        }
+                        "fn" => {
+                            let argvec = car(args);
+                            let argct = vec_get_len(argvec);
+                            let out = init_lambda(false, argct);
+                            for i in 0..argct {
+                                proc_set_arg(out, i, sym_get_id(vec_idx(argvec, i)));
+                            }
+
+                            lambda_set(out, car(cdr(args)));
+                            return Ok(out);
+                        }
+                        _ => {
+                            eprintln!("error on special form symbol");
+                            return Err(SailErr::Error);
+                        }
+                    }
+                }
+                _ => {
+                    eprintln!("error on operator type");
                     Err(SailErr::Error)
                 }
-                _ => Err(SailErr::Error),
             }
         }
         _ => return Ok(expr),
     }
 }
 
+/// Applies a Sail procedure to its arguments, returning the result
+/// TODO: execute multiple expressions in a lambda sequentially?
+/// TODO: use an ordered, alist based env layer for procedures
 unsafe fn apply(
     sym: *mut SlHead,
     env: *mut SlHead,
@@ -1261,6 +1276,7 @@ unsafe fn apply(
     let mut arglist = args;
     for i in 0..argct {
         if nil_p(arglist) || list_empty_p(arglist) {
+            eprintln!("error on empty arglist");
             return Err(SailErr::Error);
         }
 
@@ -1277,7 +1293,10 @@ unsafe fn apply(
     let result = match get_type(proc) {
         SlType::Lambda => eval(sym, env, lambda_body(proc)),
         SlType::Native => Ok(native_body(proc)(sym, env)),
-        _ => Err(SailErr::Error),
+        _ => {
+            eprintln!("error on proc type");
+            Err(SailErr::Error)
+        }
     };
 
     env_pop_layer(env);
@@ -1334,18 +1353,18 @@ mod tests {
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
         let val = parser::parse(tbl, &exp).unwrap();
-        let out = SlContextVal { tbl, val }.to_string();
+        let out = context(tbl, val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("(() (()) ((((() ())))))");
         let val = parser::parse(tbl, &exp).unwrap();
-        let out = SlContextVal { tbl, val }.to_string();
+        let out = context(tbl, val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("((1 2 3 4) ;Comment\n5)");
         let gnd = String::from("((1 2 3 4) 5)");
         let val = parser::parse(tbl, &exp).unwrap();
-        let out = SlContextVal { tbl, val }.to_string();
+        let out = context(tbl, val).to_string();
         assert_eq!(gnd, out);
     }
 }
