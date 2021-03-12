@@ -194,7 +194,7 @@ fn read_map(
     tbl: *mut SlHead,
     elt: bool,
 ) -> Result<*mut SlHead, SailErr> {
-    let map = unsafe { super::init_map(elt, 16) };
+    let map = unsafe { super::init_map(elt, super::SlMapMode::Assoc, 16) };
     let mut c = *(chars.peek().unwrap());
     while c != b'}' {
         match c {

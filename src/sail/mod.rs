@@ -71,25 +71,19 @@ unsafe fn get_size(loc: *mut SlHead) -> usize {
         SlType::List => PTR_LEN as usize,
         SlType::Vec => VEC_SH_LEN as usize + (vec_get_cap(loc) as usize * PTR_LEN as usize),
         SlType::Map => MAP_SH_LEN as usize + (map_get_size(loc) as usize * PTR_LEN as usize),
-        SlType::Lambda => {
-            PROC_SH_LEN as usize
-                + PTR_LEN as usize
-                + ((ptr::read_unaligned(value_ptr(loc) as *mut u16) as usize)
-                    * SYMBOL_ID_LEN as usize)
-        }
-        SlType::Native => {
-            PROC_SH_LEN as usize
-                + PTR_LEN as usize
-                + ((ptr::read_unaligned(value_ptr(loc) as *mut u16) as usize)
-                    * SYMBOL_ID_LEN as usize)
-        }
-        SlType::Symbol => {
-            if get_cfg_bits(loc) == SlSymbolMode::ById as u8 {
-                SYMBOL_ID_LEN as usize
-            } else {
-                SYMBOL_SH_LEN as usize + sym_get_len(loc) as usize
+        SlType::Proc => match proc_mode(loc) {
+            SlProcMode::Lambda => {
+                PROC_SH_LEN as usize
+                    + PTR_LEN as usize
+                    + ((ptr::read_unaligned(value_ptr(loc) as *mut u16) as usize)
+                        * SYMBOL_ID_LEN as usize)
             }
-        }
+            SlProcMode::Native => PROC_SH_LEN as usize + PTR_LEN as usize,
+        },
+        SlType::Symbol => match sym_mode(loc) {
+            SlSymbolMode::ById => SYMBOL_ID_LEN as usize,
+            SlSymbolMode::ByStr => SYMBOL_SH_LEN as usize + sym_get_len(loc) as usize,
+        },
         SlType::Keyword => {
             KEYWORD_SH_LEN as usize
                 + ptr::read_unaligned(value_ptr(loc).offset(2) as *mut u16) as usize
@@ -105,6 +99,7 @@ unsafe fn get_size(loc: *mut SlHead) -> usize {
         SlType::Rational => RATIONAL_LEN as usize,
         SlType::Complex => COMPLEX_LEN as usize,
         SlType::Bool => 0,
+        SlType::Err => 0,
         SlType::Other => 0,
     }
 }
@@ -157,42 +152,60 @@ unsafe fn init_vec(list_elt: bool, cap: u16) -> *mut SlHead {
         SlType::Vec,
     );
 
-    ptr::write_unaligned(value_ptr(ptr) as *mut SlVec, SlVec { len: 0, cap });
+    ptr::write_unaligned(value_ptr(ptr) as *mut SlVecSH, SlVecSH { len: 0, cap });
 
     ptr
 }
 
 // Maps will probably all use the same mode for now (list out of each hash value entry)
-unsafe fn init_map(list_elt: bool, size: u16) -> *mut SlHead {
-    let ptr = memmgt::alloc(
-        MAP_SH_LEN as usize + (PTR_LEN as usize * size as usize),
-        list_elt,
-        SlType::Map,
-    );
-
-    ptr::write_unaligned(value_ptr(ptr) as *mut SlMap, SlMap { size });
-
-    for i in 0..size {
-        ptr::write_unaligned(
-            value_ptr(ptr)
-                .offset(MAP_SH_LEN as isize)
-                .offset(i as isize * PTR_LEN as isize) as *mut *mut SlHead,
-            ptr::null_mut(),
-        );
+unsafe fn init_map(list_elt: bool, mode: SlMapMode, size: u16) -> *mut SlHead {
+    let ptr;
+    match mode {
+        SlMapMode::Assoc => {
+            ptr = memmgt::alloc(
+                MAP_SH_LEN as usize + (PTR_LEN as usize * size as usize),
+                list_elt,
+                SlType::Map,
+            );
+            ptr::write_unaligned(value_ptr(ptr) as *mut SlMapSH, SlMapSH { size });
+            for i in 0..size {
+                ptr::write_unaligned(
+                    value_ptr(ptr)
+                        .offset(MAP_SH_LEN as isize)
+                        .offset(i as isize * PTR_LEN as isize)
+                        as *mut *mut SlHead,
+                    ptr::null_mut(),
+                );
+            }
+        }
+        SlMapMode::Alist => {
+            ptr = memmgt::alloc(PTR_LEN as usize, list_elt, SlType::Map);
+            set_cfg_bits(ptr, mode as u8);
+            ptr::write_unaligned(value_ptr(ptr) as *mut *mut SlHead, ptr::null_mut());
+        }
     }
 
     ptr
 }
 
-unsafe fn init_lambda(list_elt: bool, argct: u16) -> *mut SlHead {
-    let ptr = memmgt::alloc(
-        (PROC_SH_LEN + PTR_LEN) as usize + (SYMBOL_ID_LEN as usize * argct as usize),
-        list_elt,
-        SlType::Lambda,
-    );
+unsafe fn init_proc(list_elt: bool, mode: SlProcMode, argct: u16) -> *mut SlHead {
+    let ptr;
+    match mode {
+        SlProcMode::Lambda => {
+            ptr = memmgt::alloc(
+                (PROC_SH_LEN + PTR_LEN) as usize + (SYMBOL_ID_LEN as usize * argct as usize),
+                list_elt,
+                SlType::Proc,
+            );
+        }
+        SlProcMode::Native => {
+            ptr = memmgt::alloc((PROC_SH_LEN + PTR_LEN) as usize, list_elt, SlType::Proc);
+            set_cfg_bits(ptr, mode as u8);
+        }
+    }
 
     let start = value_ptr(ptr);
-    ptr::write_unaligned(start as *mut SlLambda, SlLambda { argct });
+    ptr::write_unaligned(start as *mut SlProcSH, SlProcSH { argct });
     ptr::write_unaligned(
         start.offset(PROC_SH_LEN as isize) as *mut *mut SlHead,
         ptr::null_mut::<SlHead>(),
@@ -201,40 +214,23 @@ unsafe fn init_lambda(list_elt: bool, argct: u16) -> *mut SlHead {
     ptr
 }
 
-unsafe fn init_native(list_elt: bool, argct: u16) -> *mut SlHead {
-    let ptr = memmgt::alloc(
-        (PROC_SH_LEN + PTR_LEN) as usize + (SYMBOL_ID_LEN as usize * argct as usize),
-        list_elt,
-        SlType::Native,
-    );
-
-    let start = value_ptr(ptr);
-    ptr::write_unaligned(start as *mut SlNative, SlNative { argct });
-    ptr::write_unaligned(
-        start.offset(PROC_SH_LEN as isize) as *mut *mut usize,
-        ptr::null_mut::<usize>(),
-    );
-
-    ptr
-}
-
 unsafe fn init_symbol(list_elt: bool, mode: SlSymbolMode, len: u16) -> *mut SlHead {
     let ptr;
 
-    if mode == SlSymbolMode::ById {
-        ptr = memmgt::alloc(SYMBOL_ID_LEN as usize, list_elt, SlType::Symbol)
-    } else {
-        ptr = memmgt::alloc(
-            SYMBOL_SH_LEN as usize + len as usize,
-            list_elt,
-            SlType::Symbol,
-        );
-        ptr::write_unaligned(
-            ptr as *mut u8,
-            ptr::read_unaligned(ptr as *mut u8) | mode as u8,
-        );
-        ptr::write_unaligned(value_ptr(ptr) as *mut SlSymbolSH, SlSymbolSH { len });
-    };
+    match mode {
+        SlSymbolMode::ById => {
+            ptr = memmgt::alloc(SYMBOL_ID_LEN as usize, list_elt, SlType::Symbol);
+        }
+        SlSymbolMode::ByStr => {
+            ptr = memmgt::alloc(
+                SYMBOL_SH_LEN as usize + len as usize,
+                list_elt,
+                SlType::Symbol,
+            );
+            set_cfg_bits(ptr, mode as u8);
+            ptr::write_unaligned(value_ptr(ptr) as *mut SlSymbolSH, SlSymbolSH { len });
+        }
+    }
 
     ptr
 }
@@ -438,43 +434,65 @@ unsafe fn vec_push(loc: *mut SlHead, item: *mut SlHead) {
     }
 }
 
+unsafe fn map_mode(loc: *mut SlHead) -> SlMapMode {
+    mem::transmute::<u8, SlMapMode>(get_cfg_bits(loc))
+}
+
 unsafe fn map_get_size(loc: *mut SlHead) -> u16 {
     assert_eq!(SlType::Map, get_type(loc));
 
     ptr::read_unaligned(value_ptr(loc) as *mut u16)
 }
 
-/// TODO: automatically resize as needed (probably as an option)
+/// TODO: automatically resize as needed (probably as an option) (need "fill" field in subhead)
 /// TODO: clean up shadowed entries sometime
 unsafe fn map_insert(loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
     assert_eq!(SlType::Map, get_type(loc));
 
-    let size = map_get_size(loc);
-    let hash = hash(key) % size as u32;
-
     let entry = cons_copy(true, key, val);
+    let pos;
 
-    let idx = MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize;
-    let pos = ptr::read_unaligned(value_ptr(loc).offset(idx) as *mut *mut SlHead);
-
-    if !pos.is_null() {
-        set_list_elt(entry, pos);
+    match map_mode(loc) {
+        SlMapMode::Assoc => {
+            let size = map_get_size(loc);
+            let hash = hash(key) % size as u32;
+            let idx = MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize;
+            pos = value_ptr(loc).offset(idx) as *mut *mut SlHead;
+        }
+        SlMapMode::Alist => {
+            pos = value_ptr(loc) as *mut *mut SlHead;
+        }
     }
 
-    ptr::write_unaligned(value_ptr(loc).offset(idx) as *mut *mut SlHead, entry)
+    let next = ptr::read_unaligned(pos);
+
+    if !next.is_null() {
+        set_list_elt(entry, next);
+    }
+
+    ptr::write_unaligned(pos, entry)
 }
 
 /// Looks up a key in a map, returning the key-value pair
 unsafe fn map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
     assert_eq!(SlType::Map, get_type(loc));
 
-    let size = map_get_size(loc);
-    let hash = hash(key) % size as u32;
+    let mut entry;
 
-    let mut entry = ptr::read_unaligned(
-        value_ptr(loc).offset(MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize)
-            as *mut *mut SlHead,
-    );
+    match map_mode(loc) {
+        SlMapMode::Assoc => {
+            let size = map_get_size(loc);
+            let hash = hash(key) % size as u32;
+
+            entry = ptr::read_unaligned(
+                value_ptr(loc).offset(MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize)
+                    as *mut *mut SlHead,
+            );
+        }
+        SlMapMode::Alist => {
+            entry = ptr::read_unaligned(value_ptr(loc) as *mut *mut SlHead);
+        }
+    }
 
     loop {
         if entry == ptr::null_mut() {
@@ -491,11 +509,17 @@ unsafe fn map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
     }
 }
 
+unsafe fn proc_mode(loc: *mut SlHead) -> SlProcMode {
+    mem::transmute::<u8, SlProcMode>(get_cfg_bits(loc))
+}
+
 unsafe fn proc_get_argct(loc: *mut SlHead) -> u16 {
     ptr::read_unaligned(value_ptr(loc) as *mut u16)
 }
 
 unsafe fn proc_set_arg(loc: *mut SlHead, ind: u16, arg: u32) {
+    assert_eq!(SlProcMode::Lambda, proc_mode(loc));
+
     ptr::write_unaligned(
         value_ptr(loc)
             .offset((PROC_SH_LEN + PTR_LEN) as isize)
@@ -505,6 +529,8 @@ unsafe fn proc_set_arg(loc: *mut SlHead, ind: u16, arg: u32) {
 }
 
 unsafe fn proc_get_arg(loc: *mut SlHead, ind: u16) -> *mut SlHead {
+    assert_eq!(SlProcMode::Lambda, proc_mode(loc));
+
     let id = ptr::read_unaligned(
         value_ptr(loc)
             .offset((PROC_SH_LEN + PTR_LEN) as isize)
@@ -518,14 +544,14 @@ unsafe fn proc_get_arg(loc: *mut SlHead, ind: u16) -> *mut SlHead {
     sym
 }
 
-unsafe fn lambda_set(loc: *mut SlHead, body: *mut SlHead) {
+unsafe fn proc_lambda_set(loc: *mut SlHead, body: *mut SlHead) {
     ptr::write_unaligned(
         value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut *mut SlHead,
         body,
     )
 }
 
-unsafe fn lambda_body(loc: *mut SlHead) -> *mut SlHead {
+unsafe fn proc_lambda_body(loc: *mut SlHead) -> *mut SlHead {
     // let body_car =
     ptr::read_unaligned(value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut *mut SlHead)
     // let ptr = init_list(false);
@@ -533,13 +559,15 @@ unsafe fn lambda_body(loc: *mut SlHead) -> *mut SlHead {
     // ptr
 }
 
-unsafe fn native_set(loc: *mut SlHead, fun: unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead) {
+unsafe fn proc_native_set(
+    loc: *mut SlHead,
+    fun: unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead,
+) {
     let ptr = mem::transmute::<unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead, u64>(fun);
-
     ptr::write_unaligned(value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut u64, ptr);
 }
 
-unsafe fn native_body(loc: *mut SlHead) -> unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead {
+unsafe fn proc_native_body(loc: *mut SlHead) -> unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead {
     let ptr = ptr::read_unaligned(value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut u64);
     mem::transmute::<u64, unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead>(ptr)
 }
@@ -703,18 +731,18 @@ pub enum SlType {
     List = 0,
     Vec = 1,
     Map = 2,
-    Lambda = 3,
-    Native = 4,
-    Symbol = 5,
-    Keyword = 6,
-    String = 7,
-    FixInt = 8,
-    FixFloat = 9,
-    MpInt = 10,
-    MpFloat = 11,
-    Rational = 12,
-    Complex = 13,
-    Bool = 14,
+    Proc = 3,
+    Symbol = 4,
+    Keyword = 5,
+    String = 6,
+    FixInt = 7,
+    FixFloat = 8,
+    MpInt = 9,
+    MpFloat = 10,
+    Rational = 11,
+    Complex = 12,
+    Bool = 13,
+    Err = 14,
     Other = 15,
 }
 
@@ -725,24 +753,34 @@ struct SlList {
 // TODO: Vecs and Maps should have various modes with various performance characteristics in the future
 const VEC_SH_LEN: u8 = 4;
 #[repr(C)]
-struct SlVec {
+struct SlVecSH {
     len: u16,
     cap: u16,
 }
 
 const MAP_SH_LEN: u8 = 2;
 #[repr(C)]
-struct SlMap {
+struct SlMapSH {
     size: u16,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum SlMapMode {
+    Assoc = 0,
+    Alist = 1,
+}
+
 const PROC_SH_LEN: u8 = 2;
-struct SlLambda {
+struct SlProcSH {
     argct: u16,
 }
 
-struct SlNative {
-    argct: u16,
+#[derive(Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum SlProcMode {
+    Lambda = 0,
+    Native = 1,
 }
 
 const SYMBOL_SH_LEN: u8 = 2;
@@ -779,6 +817,19 @@ struct SlString {
 /// Currently just an i64 or an f64
 /// TODO: Use modes to permit u16 - u128 and i16 - i128 for FixInt
 const FIX_NUM_LEN: u8 = 8;
+
+#[derive(PartialEq, Eq)]
+#[repr(u8)]
+enum SlFixIntMode {
+    I16,
+    I32,
+    I64,
+    I128,
+    U16,
+    U32,
+    U64,
+    U128,
+}
 
 const MP_INT_LEN: u8 = 16;
 struct SlMpInt {
@@ -817,7 +868,7 @@ struct SlRef {
 /// TODO: deal somewhere with dynamic bindings, lexical bindings, argument bindings
 unsafe fn env_create() -> *mut SlHead {
     let head = init_list(false);
-    let base = init_map(true, 255);
+    let base = init_map(true, SlMapMode::Assoc, 255);
 
     list_set(head, base);
 
@@ -843,12 +894,51 @@ unsafe fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> *mut SlHead {
     }
 }
 
+// TODO: use dynamic map mode
 unsafe fn env_new_layer(min_size: u16) -> *mut SlHead {
-    init_map(true, min_size * 2)
+    init_map(true, SlMapMode::Alist, min_size * 2)
 }
 
 unsafe fn env_layer_ins_entry(layer: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
     map_insert(layer, key, val)
+}
+
+/// Uses Alist every time
+/// TODO: many improvements / optimizations possible throughout env system
+unsafe fn env_new_arg_layer() -> *mut SlHead {
+    init_map(true, SlMapMode::Alist, 0)
+}
+
+unsafe fn env_arg_layer_get(layer: *mut SlHead, idx: u16) -> *mut SlHead {
+    assert_eq!(SlType::Map, get_type(layer));
+    assert_eq!(SlMapMode::Alist, map_mode(layer));
+
+    let mut left = idx;
+    let mut pos = ptr::read_unaligned(value_ptr(layer) as *mut *mut SlHead);
+    while left > 0 {
+        pos = next_list_elt(pos);
+        left -= 1;
+    }
+    cdr(pos)
+}
+
+unsafe fn env_arg_layer_ins(layer: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
+    assert_eq!(SlType::Map, get_type(layer));
+    assert_eq!(SlMapMode::Alist, map_mode(layer));
+
+    let entry = cons_copy(true, key, val);
+    let pos = value_ptr(layer) as *mut *mut SlHead;
+
+    let mut next = ptr::read_unaligned(pos);
+    if next.is_null() {
+        ptr::write_unaligned(pos, entry);
+    } else {
+        while !next_list_elt(next).is_null() {
+            next = next_list_elt(next);
+        }
+
+        set_list_elt(next, entry);
+    }
 }
 
 unsafe fn env_push_layer(env: *mut SlHead, layer: *mut SlHead) {
@@ -869,8 +959,8 @@ unsafe fn env_pop_layer(env: *mut SlHead) {
 unsafe fn sym_tab_create() -> *mut SlHead {
     let tbl = init_vec(false, 3);
 
-    let id_to_str = init_map(false, 255);
-    let str_to_id = init_map(false, 255);
+    let id_to_str = init_map(false, SlMapMode::Assoc, 255);
+    let str_to_id = init_map(false, SlMapMode::Assoc, 255);
 
     let id_count = init_symbol(false, SlSymbolMode::ById, 0);
     sym_set_id(id_count, 0);
@@ -1053,8 +1143,7 @@ impl fmt::Display for SlContextVal {
                 }
                 // TODO: function to access all map pairs somehow
                 SlType::Map => write!(f, "map"),
-                SlType::Lambda => write!(f, "<lambda>"),
-                SlType::Native => write!(f, "<native>"),
+                SlType::Proc => write!(f, "<procedure>"),
                 SlType::Symbol => write!(f, "{}", sym_get_str(sym_tab_lookup_by_id(table, value))),
                 SlType::Keyword => write!(f, "keyword"),
                 SlType::String => write!(f, "string"),
@@ -1065,6 +1154,7 @@ impl fmt::Display for SlContextVal {
                 SlType::Rational => write!(f, "rational"),
                 SlType::Complex => write!(f, "complex"),
                 SlType::Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
+                SlType::Err => write!(f, "<error>"),
                 SlType::Other => write!(f, "other"),
             }
         }
@@ -1179,24 +1269,25 @@ fn environment_setup(sym: *mut SlHead, env: *mut SlHead) {
 
     // Addition function (prototype)
     unsafe {
-        let (add_id, fst_num, snd_num);
-
-        let fst_str = init_symbol(false, SlSymbolMode::ByStr, 3);
-        sym_set_str(fst_str, b"fst");
-        fst_num = sym_tab_insert(sym, fst_str);
-        let snd_str = init_symbol(false, SlSymbolMode::ByStr, 3);
-        sym_set_str(snd_str, b"snd");
-        snd_num = sym_tab_insert(sym, snd_str);
         let add_str = init_symbol(false, SlSymbolMode::ByStr, 1);
         sym_set_str(add_str, b"+");
-        add_id = init_symbol(false, SlSymbolMode::ById, 0);
+        let add_id = init_symbol(false, SlSymbolMode::ById, 0);
         sym_set_id(add_id, sym_tab_insert(sym, add_str));
 
-        let add_fn = init_native(false, 2);
-        native_set(add_fn, add);
-        proc_set_arg(add_fn, 0, fst_num);
-        proc_set_arg(add_fn, 1, snd_num);
+        let add_fn = init_proc(false, SlProcMode::Native, 2);
+        proc_native_set(add_fn, add);
         env_layer_ins_entry(car(env), add_id, add_fn);
+    }
+
+    unsafe {
+        let sub_str = init_symbol(false, SlSymbolMode::ByStr, 1);
+        sym_set_str(sub_str, b"-");
+        let sub_id = init_symbol(false, SlSymbolMode::ById, 0);
+        sym_set_id(sub_id, sym_tab_insert(sym, sub_str));
+
+        let sub_fn = init_proc(false, SlProcMode::Native, 2);
+        proc_native_set(sub_fn, sub);
+        env_layer_ins_entry(car(env), sub_id, sub_fn);
     }
 }
 
@@ -1217,7 +1308,7 @@ unsafe fn eval(
             // TODO: replace with next_list_elt(list_get(expr)) to avoid allocation
             let args = cdr(expr);
             match get_type(operator) {
-                SlType::Lambda | SlType::Native => {
+                SlType::Proc => {
                     return apply(sym, env, operator, args);
                 }
                 SlType::Symbol => {
@@ -1236,12 +1327,12 @@ unsafe fn eval(
                         "fn" => {
                             let argvec = car(args);
                             let argct = vec_get_len(argvec);
-                            let out = init_lambda(false, argct);
+                            let out = init_proc(false, SlProcMode::Lambda, argct);
                             for i in 0..argct {
                                 proc_set_arg(out, i, sym_get_id(vec_idx(argvec, i)));
                             }
 
-                            lambda_set(out, car(cdr(args)));
+                            proc_lambda_set(out, car(cdr(args)));
                             return Ok(out);
                         }
                         _ => {
@@ -1270,10 +1361,12 @@ unsafe fn apply(
     args: *mut SlHead,
 ) -> Result<*mut SlHead, SailErr> {
     let argct = proc_get_argct(proc);
+    let mode = proc_mode(proc);
 
-    let proc_env = env_new_layer(argct);
+    let proc_env = env_new_arg_layer();
 
     let mut arglist = args;
+
     for i in 0..argct {
         if nil_p(arglist) || list_empty_p(arglist) {
             eprintln!("error on empty arglist");
@@ -1282,21 +1375,37 @@ unsafe fn apply(
 
         let curarg = eval(sym, env, car(arglist))?;
 
-        // TODO: just get and look up arg by id itself, without allocating
-        env_layer_ins_entry(proc_env, proc_get_arg(proc, i), curarg);
+        match mode {
+            SlProcMode::Lambda => {
+                // TODO: just get and look up arg by id itself, without allocating
+                env_arg_layer_ins(proc_env, proc_get_arg(proc, i), curarg);
+            }
+            SlProcMode::Native => {
+                // special symbols "@0", "@1", "@2", etc for native arguments
+                let mut spec_str = String::from("@");
+                spec_str.push_str(&(i.to_string()));
+
+                let spec_sym_str = init_symbol(false, SlSymbolMode::ByStr, spec_str.len() as u16);
+                sym_set_str(spec_sym_str, &spec_str.into_bytes());
+
+                let mut spec_sym_id = sym_tab_lookup_by_str(sym, spec_sym_str);
+                while get_type(spec_sym_id) != SlType::Symbol {
+                    sym_tab_insert(sym, spec_sym_str);
+                    spec_sym_id = sym_tab_lookup_by_str(sym, spec_sym_str);
+                }
+
+                env_arg_layer_ins(proc_env, spec_sym_id, curarg);
+            }
+        }
 
         arglist = cdr(arglist)
     }
 
     env_push_layer(env, proc_env);
 
-    let result = match get_type(proc) {
-        SlType::Lambda => eval(sym, env, lambda_body(proc)),
-        SlType::Native => Ok(native_body(proc)(sym, env)),
-        _ => {
-            eprintln!("error on proc type");
-            Err(SailErr::Error)
-        }
+    let result = match mode {
+        SlProcMode::Lambda => eval(sym, env, proc_lambda_body(proc)),
+        SlProcMode::Native => Ok(proc_native_body(proc)(sym, env)),
     };
 
     env_pop_layer(env);
@@ -1315,19 +1424,23 @@ sail_fn!(
     }
 );
 
-/// TODO: first attempt at a native function
+/// TODO: need a macro for creating a native Sail function / adding to environment
+/// TODO: native functions MUST be fully safe to use
 unsafe fn add(sym: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
-    let fst_str = init_symbol(false, SlSymbolMode::ByStr, 3);
-    sym_set_str(fst_str, b"fst");
-    let snd_str = init_symbol(false, SlSymbolMode::ByStr, 3);
-    sym_set_str(snd_str, b"snd");
-
-    let fst = env_lookup(env, sym_tab_lookup_by_str(sym, fst_str));
-    let snd = env_lookup(env, sym_tab_lookup_by_str(sym, snd_str));
+    let fst = env_arg_layer_get(car(env), 0);
+    let snd = env_arg_layer_get(car(env), 1);
 
     let out = init_fixint(false);
-    // only the second half of this line actually performs the function's function
     fixint_set(out, fixint_get(fst) + fixint_get(snd));
+    out
+}
+
+unsafe fn sub(sym: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+    let fst = env_arg_layer_get(car(env), 0);
+    let snd = env_arg_layer_get(car(env), 1);
+
+    let out = init_fixint(false);
+    fixint_set(out, fixint_get(fst) - fixint_get(snd));
     out
 }
 
