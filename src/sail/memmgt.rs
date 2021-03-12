@@ -1,7 +1,5 @@
 use super::{SlHead, SlType, HEAD_LEN, PTR_LEN};
 
-// use log::debug;
-
 use std::alloc;
 use std::mem;
 use std::ptr;
@@ -18,10 +16,14 @@ pub unsafe fn alloc(size: usize, list: bool, typ: SlType) -> *mut SlHead {
     let ptr = {
         let length = size + if list { HEAD_LEN + PTR_LEN } else { HEAD_LEN } as usize;
 
-        // debug!(
-        //     "Allocating {} bytes for a {:?}; List elt: {}",
-        //     length, typ, list
-        // );
+        if cfg!(feature = "memdbg") {
+            log::debug!(
+                "Allocating {} bytes for a {:?}; List elt: {}",
+                length,
+                typ,
+                list
+            );
+        }
 
         let zone_ref = MEM_HEAD.as_mut().unwrap();
 

@@ -1,4 +1,4 @@
-use super::{SailErr, SlHead};
+use super::{sym_set_id, sym_tab_get_id, SailErr, SlHead};
 
 use std::iter;
 use std::ptr;
@@ -38,6 +38,10 @@ fn read_value(
     }
 
     match c {
+        b'\'' => {
+            chars.next();
+            value = read_quote(chars, acc, tbl, elt)?;
+        }
         b'(' => {
             chars.next();
             value = read_list(chars, acc, tbl, elt)?;
@@ -91,6 +95,25 @@ fn read_value(
         }
     }
     Ok(value)
+}
+
+fn read_quote(
+    chars: &mut iter::Peekable<str::Bytes>,
+    acc: &mut Vec<u8>,
+    tbl: *mut SlHead,
+    elt: bool,
+) -> Result<*mut SlHead, SailErr> {
+    unsafe {
+        let head = super::init_list(elt);
+        let start = super::init_symbol(true, super::SlSymbolMode::ById, 0);
+        super::sym_set_id(start, super::sym_tab_get_id(tbl, "quote"));
+        super::list_set(head, start);
+
+        let end = read_value(chars, acc, tbl, true)?;
+        super::set_list_elt(start, end);
+
+        Ok(head)
+    }
 }
 
 fn read_list(
@@ -241,21 +264,7 @@ fn read_symbol(
         }
     }
 
-    let strsym =
-        unsafe { super::init_symbol(false, super::SlSymbolMode::ByStr, acc.len() as u16) };
-
-    unsafe { super::sym_set_str(strsym, acc.as_slice()) }
-
-    let exists = unsafe { super::sym_tab_lookup_by_str(tbl, strsym) };
-
-    unsafe {
-        if super::get_type(exists) == super::SlType::Symbol {
-            super::sym_set_id(sym, super::sym_get_id(exists));
-        } else {
-            let newid = super::sym_tab_insert(tbl, strsym);
-            super::sym_set_id(sym, newid);
-        }
-    }
+    unsafe { super::sym_set_id(sym, sym_tab_get_id(tbl, str::from_utf8_unchecked(acc.as_slice()))) }
 
     Ok(sym)
 }
@@ -353,6 +362,10 @@ fn read_special(
             _ if next.is_ascii_alphanumeric() => acc.push(next),
             _ => return Err(SailErr::Error),
         }
+    }
+
+    if acc.len() == 0 {
+        return Err(SailErr::Error);
     }
 
     let val = unsafe { super::init_bool(elt) };

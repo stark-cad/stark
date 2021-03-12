@@ -1,0 +1,24 @@
+if expr is a symbol:
+   return its entry in the environment if it exists
+
+if expr is another atom:
+   return itself
+
+if expr is a list:
+   if (car expr) is a special form symbol:
+      evaluate the contents of the special form
+      return result
+
+   otherwise:
+      evaluate (car expr)
+
+      if it is a function:
+         read the arglist and (cdr expr), associating values in a new env
+         evaluate the function body with the new env
+         return result
+
+      otherwise:
+        fail
+
+othewise:
+    fail, probably

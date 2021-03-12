@@ -364,17 +364,19 @@ unsafe fn hash(loc: *mut SlHead) -> u32 {
                 sym_get_id(loc)
             } else {
                 let slice = sym_get_str(loc);
-
-                let mut out: u32 = 1;
-                for c in slice.bytes() {
-                    out = out.wrapping_add(out << 5).wrapping_add(c as u32);
-                }
-
-                out
+                str_hash(slice)
             }
         }
         _ => 0,
     }
+}
+
+fn str_hash(slice: &str) -> u32 {
+    let mut out: u32 = 1;
+    for c in slice.bytes() {
+        out = out.wrapping_add(out << 5).wrapping_add(c as u32);
+    }
+    out
 }
 
 // TODO: should functions like this check for correct type?
@@ -1098,6 +1100,31 @@ unsafe fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHe
     }
 }
 
+/// Returns ID for any symbol string
+/// Inserts symbol into the table if not already present
+unsafe fn sym_tab_get_id(tbl: *mut SlHead, sym: &str) -> u32 {
+    let map = vec_idx(tbl, 1);
+    let size = map_get_size(map);
+    let hash = str_hash(sym) % size as u32;
+
+    let mut entry = ptr::read_unaligned(
+        value_ptr(map).offset(MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize)
+            as *mut *mut SlHead,
+    );
+
+    while !entry.is_null() {
+        if sym.eq(sym_get_str(next_list_elt(list_get(entry)))) {
+            return sym_get_id(list_get(entry));
+        }
+        entry = next_list_elt(entry);
+    }
+
+    let record = init_symbol(false, SlSymbolMode::ByStr, sym.len() as u16);
+    sym_set_str(record, sym.as_bytes());
+
+    sym_tab_insert(tbl, record)
+}
+
 /// Bundles together a value and associated symbol table for display
 struct SlContextVal {
     tbl: *mut SlHead,
@@ -1121,6 +1148,11 @@ impl fmt::Display for SlContextVal {
                     write!(f, "(").unwrap();
                     let mut elt = list_get(value);
                     while elt != ptr::null_mut() {
+                        if !list_elt_p(elt) {
+                            write!(f, ". ").unwrap();
+                            write!(f, "{}", context(table, elt).to_string()).unwrap();
+                            break;
+                        }
                         write!(f, "{}", context(table, elt).to_string()).unwrap();
                         elt = next_list_elt(elt);
                         if elt != ptr::null_mut() {
@@ -1144,7 +1176,14 @@ impl fmt::Display for SlContextVal {
                 // TODO: function to access all map pairs somehow
                 SlType::Map => write!(f, "map"),
                 SlType::Proc => write!(f, "<procedure>"),
-                SlType::Symbol => write!(f, "{}", sym_get_str(sym_tab_lookup_by_id(table, value))),
+                SlType::Symbol => write!(
+                    f,
+                    "{}",
+                    match sym_mode(value) {
+                        SlSymbolMode::ById => sym_get_str(sym_tab_lookup_by_id(table, value)),
+                        SlSymbolMode::ByStr => sym_get_str(value),
+                    }
+                ),
                 SlType::Keyword => write!(f, "keyword"),
                 SlType::String => write!(f, "string"),
                 SlType::FixInt => write!(f, "{}", fixint_get(value)),
@@ -1251,21 +1290,9 @@ pub fn interpret(code: &String) -> Result<String, SailErr> {
 /// TODO: fix functions so such insanity isn't required to get them in place
 fn environment_setup(sym: *mut SlHead, env: *mut SlHead) {
     // Special form symbols
-    unsafe {
-        let def_str = init_symbol(false, SlSymbolMode::ByStr, 3);
-        sym_set_str(def_str, b"def");
-        let def_id = init_symbol(false, SlSymbolMode::ById, 0);
-        sym_set_id(def_id, sym_tab_insert(sym, def_str));
-
-        env_layer_ins_entry(car(env), def_id, def_str);
-
-        let fn_str = init_symbol(false, SlSymbolMode::ByStr, 2);
-        sym_set_str(fn_str, b"fn");
-        let fn_id = init_symbol(false, SlSymbolMode::ById, 0);
-        sym_set_id(fn_id, sym_tab_insert(sym, fn_str));
-
-        env_layer_ins_entry(car(env), fn_id, fn_str);
-    }
+    insert_special_form(sym, env, b"def");
+    insert_special_form(sym, env, b"fn");
+    insert_special_form(sym, env, b"quote");
 
     // Addition function (prototype)
     unsafe {
@@ -1291,7 +1318,19 @@ fn environment_setup(sym: *mut SlHead, env: *mut SlHead) {
     }
 }
 
+fn insert_special_form(sym: *mut SlHead, env: *mut SlHead, name: &[u8]) {
+    unsafe {
+        let form_str = init_symbol(false, SlSymbolMode::ByStr, name.len() as u16);
+        sym_set_str(form_str, name);
+        let form_id = init_symbol(false, SlSymbolMode::ById, 0);
+        sym_set_id(form_id, sym_tab_insert(sym, form_str));
+
+        env_layer_ins_entry(car(env), form_id, form_str);
+    }
+}
+
 /// Evaluates a Sail value, returning the result
+/// TODO: **Macros**, closures, continuations
 unsafe fn eval(
     sym: *mut SlHead,
     env: *mut SlHead,
@@ -1312,7 +1351,7 @@ unsafe fn eval(
                     return apply(sym, env, operator, args);
                 }
                 SlType::Symbol => {
-                    // TODO: special form handling
+                    // TODO: more special forms: cond, if, etc
                     // TODO: is there a need for special forms? why not just make these native functions?
                     // TODO: these may be good examples for creating / using native functions cleanly
                     match sym_get_str(operator) {
@@ -1335,8 +1374,10 @@ unsafe fn eval(
                             proc_lambda_set(out, car(cdr(args)));
                             return Ok(out);
                         }
+                        "quote" => {
+                            return Ok(car(args));
+                        }
                         _ => {
-                            eprintln!("error on special form symbol");
                             return Err(SailErr::Error);
                         }
                     }
@@ -1377,7 +1418,6 @@ unsafe fn apply(
 
         match mode {
             SlProcMode::Lambda => {
-                // TODO: just get and look up arg by id itself, without allocating
                 env_arg_layer_ins(proc_env, proc_get_arg(proc, i), curarg);
             }
             SlProcMode::Native => {
@@ -1385,14 +1425,8 @@ unsafe fn apply(
                 let mut spec_str = String::from("@");
                 spec_str.push_str(&(i.to_string()));
 
-                let spec_sym_str = init_symbol(false, SlSymbolMode::ByStr, spec_str.len() as u16);
-                sym_set_str(spec_sym_str, &spec_str.into_bytes());
-
-                let mut spec_sym_id = sym_tab_lookup_by_str(sym, spec_sym_str);
-                while get_type(spec_sym_id) != SlType::Symbol {
-                    sym_tab_insert(sym, spec_sym_str);
-                    spec_sym_id = sym_tab_lookup_by_str(sym, spec_sym_str);
-                }
+                let spec_sym_id = init_symbol(false, SlSymbolMode::ById, 0);
+                sym_set_id(spec_sym_id, sym_tab_get_id(sym, &spec_str));
 
                 env_arg_layer_ins(proc_env, spec_sym_id, curarg);
             }
@@ -1418,9 +1452,11 @@ macro_rules! sail_fn {
 }
 
 sail_fn!(
-    + [add1, add2] {
-        fixint_get(add1) + fixint_get(add2);
-        return;
+    + [fst, snd] {
+        let out = init_fixint(false);
+        let result = fixint_get(fst) + fixint_get(snd);
+        fixint_set(out, result);
+        return out;
     }
 );
 
