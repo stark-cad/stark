@@ -84,10 +84,7 @@ unsafe fn get_size(loc: *mut SlHead) -> usize {
             SlSymbolMode::ById => SYMBOL_ID_LEN as usize,
             SlSymbolMode::ByStr => SYMBOL_SH_LEN as usize + sym_get_len(loc) as usize,
         },
-        SlType::Keyword => {
-            KEYWORD_SH_LEN as usize
-                + ptr::read_unaligned(value_ptr(loc).offset(2) as *mut u16) as usize
-        }
+        SlType::Keyword => SYMBOL_ID_LEN as usize,
         SlType::String => {
             STRING_SH_LEN as usize
                 + ptr::read_unaligned(value_ptr(loc).offset(2) as *mut u16) as usize
@@ -235,14 +232,8 @@ unsafe fn init_symbol(list_elt: bool, mode: SlSymbolMode, len: u16) -> *mut SlHe
     ptr
 }
 
-unsafe fn init_keyword(list_elt: bool, cap: u16) -> *mut SlHead {
-    let ptr = memmgt::alloc(
-        KEYWORD_SH_LEN as usize + cap as usize,
-        list_elt,
-        SlType::Keyword,
-    );
-
-    ptr::write_unaligned(value_ptr(ptr) as *mut SlKeyword, SlKeyword { len: 0, cap });
+unsafe fn init_keyword(list_elt: bool) -> *mut SlHead {
+    let ptr = memmgt::alloc(SYMBOL_ID_LEN as usize, list_elt, SlType::Keyword);
 
     ptr
 }
@@ -254,7 +245,10 @@ unsafe fn init_string(list_elt: bool, cap: u16) -> *mut SlHead {
         SlType::String,
     );
 
-    ptr::write_unaligned(value_ptr(ptr) as *mut SlString, SlString { len: 0, cap });
+    ptr::write_unaligned(
+        value_ptr(ptr) as *mut SlStringSH,
+        SlStringSH { len: 0, cap },
+    );
 
     ptr
 }
@@ -359,13 +353,17 @@ unsafe fn eq(fst: *mut SlHead, lst: *mut SlHead) -> bool {
 /// Returns a unique hash value (based on the provided value's content?)
 unsafe fn hash(loc: *mut SlHead) -> u32 {
     match get_type(loc) {
-        SlType::Symbol => {
-            if sym_mode(loc) == SlSymbolMode::ById {
-                sym_get_id(loc)
-            } else {
+        SlType::Symbol => match sym_mode(loc) {
+            SlSymbolMode::ById => sym_get_id(loc),
+            SlSymbolMode::ByStr => {
                 let slice = sym_get_str(loc);
                 str_hash(slice)
             }
+        },
+        SlType::Keyword => key_get_id(loc),
+        SlType::String => {
+            let slice = string_get(loc);
+            str_hash(slice)
         }
         _ => 0,
     }
@@ -606,22 +604,52 @@ unsafe fn sym_get_str(loc: *mut SlHead) -> &'static str {
     ))
 }
 
+unsafe fn key_get_id(loc: *mut SlHead) -> u32 {
+    ptr::read_unaligned(value_ptr(loc) as *mut u32)
+}
+
+unsafe fn key_set_id(loc: *mut SlHead, id: u32) {
+    ptr::write_unaligned(value_ptr(loc) as *mut u32, id)
+}
+
+unsafe fn string_get_len(loc: *mut SlHead) -> u16 {
+    ptr::read_unaligned(value_ptr(loc) as *mut u16)
+}
+
+unsafe fn string_set_len(loc: *mut SlHead, len: u16) {
+    ptr::write_unaligned(value_ptr(loc) as *mut u16, len);
+}
+
 unsafe fn string_get_cap(loc: *mut SlHead) -> u16 {
     ptr::read_unaligned(value_ptr(loc).offset(2) as *mut u16)
 }
 
 unsafe fn string_set(loc: *mut SlHead, val: &str) {
     let cap = string_get_cap(loc);
+    let len = val.len() as u16;
 
-    let count = 0;
-    for c in val.bytes() {
-        if count <= cap {
+    if len <= cap {
+        let mut count = 0;
+        for c in val.bytes() {
             ptr::write_unaligned(
                 value_ptr(loc).offset(STRING_SH_LEN as isize + count as isize),
                 c,
-            )
+            );
+            count += 1;
         }
+        string_set_len(loc, len);
+    } else {
+        panic!("not enough space in string");
     }
+}
+
+unsafe fn string_get(loc: *mut SlHead) -> &'static str {
+    let len = string_get_len(loc);
+
+    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+        value_ptr(loc).offset(STRING_SH_LEN as isize) as *mut u8,
+        len as usize,
+    ))
 }
 
 unsafe fn fixint_set(loc: *mut SlHead, val: i64) {
@@ -790,6 +818,7 @@ struct SlSymbolSH {
     len: u16,
 }
 
+// for now, keywords and symbols byid use the same representation
 const SYMBOL_ID_LEN: u8 = 4;
 struct SlSymbolId {
     id: u32,
@@ -802,16 +831,9 @@ enum SlSymbolMode {
     ByStr = 1,
 }
 
-const KEYWORD_SH_LEN: u8 = 4;
-#[repr(C)]
-struct SlKeyword {
-    len: u16,
-    cap: u16,
-}
-
 const STRING_SH_LEN: u8 = 4;
 #[repr(C)]
-struct SlString {
+struct SlStringSH {
     len: u16,
     cap: u16,
 }
@@ -1094,6 +1116,33 @@ unsafe fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHe
 
         if eq(next_list_elt(list_get(entry)), qry) {
             return list_get(entry);
+        }
+
+        entry = next_list_elt(entry);
+    }
+}
+
+/// Looks up by ID number directly
+unsafe fn sym_tab_lookup_id_num(tbl: *mut SlHead, id: u32) -> *mut SlHead {
+    let map = vec_idx(tbl, 0);
+
+    let size = map_get_size(map);
+    let hash = id % size as u32;
+
+    let mut entry = ptr::read_unaligned(
+        value_ptr(map).offset(MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize)
+            as *mut *mut SlHead,
+    );
+
+    loop {
+        if entry.is_null() {
+            let out = init_bool(false);
+            bool_set(out, false);
+            return out;
+        }
+
+        if sym_get_id(list_get(entry)) == id {
+            return next_list_elt(list_get(entry));
         }
 
         entry = next_list_elt(entry);

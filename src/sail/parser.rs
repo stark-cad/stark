@@ -1,4 +1,4 @@
-use super::{sym_set_id, sym_tab_get_id, SailErr, SlHead};
+use super::{SailErr, SlHead};
 
 use std::iter;
 use std::ptr;
@@ -264,7 +264,12 @@ fn read_symbol(
         }
     }
 
-    unsafe { super::sym_set_id(sym, sym_tab_get_id(tbl, str::from_utf8_unchecked(acc.as_slice()))) }
+    unsafe {
+        super::sym_set_id(
+            sym,
+            super::sym_tab_get_id(tbl, str::from_utf8_unchecked(acc.as_slice())),
+        )
+    }
 
     Ok(sym)
 }
@@ -275,8 +280,7 @@ fn read_keyword(
     tbl: *mut SlHead,
     elt: bool,
 ) -> Result<*mut SlHead, SailErr> {
-    // TODO: figure out how keywords work and then fix this
-    let key = unsafe { super::init_keyword(elt, 8) };
+    let key = unsafe { super::init_keyword(elt) };
     while {
         let peek = chars.peek().unwrap();
         match peek {
@@ -292,6 +296,18 @@ fn read_keyword(
             _ => return Err(SailErr::Error),
         }
     }
+
+    if acc.len() == 0 {
+        return Err(SailErr::Error);
+    }
+
+    unsafe {
+        super::key_set_id(
+            key,
+            super::sym_tab_get_id(tbl, str::from_utf8_unchecked(acc.as_slice())),
+        )
+    }
+
     Ok(key)
 }
 
@@ -306,6 +322,8 @@ fn read_string(
         acc.push(chars.next().unwrap());
         next = *(chars.peek().unwrap());
     }
+
+    chars.next();
 
     unsafe {
         super::string_set(
