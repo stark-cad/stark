@@ -1190,7 +1190,6 @@ impl fmt::Display for SlContextVal {
         let table = self.tbl;
         let value = self.val;
 
-        // TODO: Implement special cons cell display
         unsafe {
             match get_type(value) {
                 SlType::List => {
@@ -1223,7 +1222,47 @@ impl fmt::Display for SlContextVal {
                     write!(f, "]")
                 }
                 // TODO: function to access all map pairs somehow
-                SlType::Map => write!(f, "map"),
+                SlType::Map => {
+                    write!(f, "{{").unwrap();
+                    match map_mode(value) {
+                        SlMapMode::Assoc => {
+                            // visit every position and traverse each entry list as below
+                            let size = map_get_size(value);
+                            let mut fst = true;
+                            for idx in 0..size {
+                                let mut pos = ptr::read_unaligned(
+                                    value_ptr(value).offset(
+                                        MAP_SH_LEN as isize + (PTR_LEN as isize * idx as isize),
+                                    ) as *mut *mut SlHead,
+                                );
+                                while !pos.is_null() {
+                                    if !fst {
+                                        write!(f, " ").unwrap()
+                                    }
+                                    write!(f, "{} ", context(table, car(pos)).to_string()).unwrap();
+                                    write!(f, "{}", context(table, cdr(pos)).to_string()).unwrap();
+                                    pos = next_list_elt(pos);
+                                    fst = false;
+                                }
+                            }
+                        }
+                        SlMapMode::Alist => {
+                            // go down the list, printing key value key value until null
+                            let mut pos = ptr::read_unaligned(value_ptr(value) as *mut *mut SlHead);
+                            let mut fst = true;
+                            while !pos.is_null() {
+                                if !fst {
+                                    write!(f, " ").unwrap()
+                                }
+                                write!(f, "{} ", context(table, car(pos)).to_string()).unwrap();
+                                write!(f, "{}", context(table, cdr(pos)).to_string()).unwrap();
+                                pos = next_list_elt(pos);
+                                fst = false;
+                            }
+                        }
+                    }
+                    write!(f, "}}")
+                }
                 SlType::Proc => write!(f, "<procedure>"),
                 SlType::Symbol => write!(
                     f,
@@ -1233,8 +1272,12 @@ impl fmt::Display for SlContextVal {
                         SlSymbolMode::ByStr => sym_get_str(value),
                     }
                 ),
-                SlType::Keyword => write!(f, "keyword"),
-                SlType::String => write!(f, "string"),
+                SlType::Keyword => write!(
+                    f,
+                    ":{}",
+                    sym_get_str(sym_tab_lookup_id_num(table, key_get_id(value)))
+                ),
+                SlType::String => write!(f, "\"{}\"", string_get(value)),
                 SlType::FixInt => write!(f, "{}", fixint_get(value)),
                 SlType::FixFloat => write!(f, "{}", fixfloat_get(value)),
                 SlType::MpInt => write!(f, "mpint"),
@@ -1242,6 +1285,7 @@ impl fmt::Display for SlContextVal {
                 SlType::Rational => write!(f, "rational"),
                 SlType::Complex => write!(f, "complex"),
                 SlType::Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
+                // TODO: consider how to store / handle  / display errors
                 SlType::Err => write!(f, "<error>"),
                 SlType::Other => write!(f, "other"),
             }
@@ -1249,42 +1293,7 @@ impl fmt::Display for SlContextVal {
     }
 }
 
-// SLATED FOR DELETION
-// impl fmt::Display for Cons {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         let car = self.car.to_string();
-//         let cdr = self.cdr.to_string();
-//         write!(f, "({} . {})", car, cdr)
-//     }
-// }
-// impl fmt::Display for Value {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         match self {
-//             Value::Map(x) => write!(
-//                 f,
-//                 "{{{}}}",
-//                 x.iter().fold(String::new(), |acc, new| acc
-//                     + &new.0.to_string()
-//                     + " "
-//                     + &new.1.to_string()
-//                     + " ")
-//             ),
-//             Value::Lambda { args, body } => write!(
-//                 f,
-//                 "<lambda fn: [{}] ({})>",
-//                 args.iter().fold(String::new(), |acc, new| acc + new + " "),
-//                 unsafe {
-//                     match body.as_ref() {
-//                         Some(x) => x.to_string(),
-//                         None => String::new(),
-//                     }
-//                 }
-//             ),
-//             Value::Keyword(x) => write!(f, ":{}", x),
-//             Value::String(x) => write!(f, "\"{}\"", x),
-//         }
-//     }
-// }
+// TODO: interpret a file of Sail code such as "example.sl"
 
 /// Accepts an input stream and runs a read - evaluate - print loop perpetually
 pub fn repl(stream_in: std::io::Stdin) {
@@ -1341,30 +1350,13 @@ fn environment_setup(sym: *mut SlHead, env: *mut SlHead) {
     // Special form symbols
     insert_special_form(sym, env, b"def");
     insert_special_form(sym, env, b"fn");
+    insert_special_form(sym, env, b"if");
     insert_special_form(sym, env, b"quote");
 
-    // Addition function (prototype)
-    unsafe {
-        let add_str = init_symbol(false, SlSymbolMode::ByStr, 1);
-        sym_set_str(add_str, b"+");
-        let add_id = init_symbol(false, SlSymbolMode::ById, 0);
-        sym_set_id(add_id, sym_tab_insert(sym, add_str));
-
-        let add_fn = init_proc(false, SlProcMode::Native, 2);
-        proc_native_set(add_fn, add);
-        env_layer_ins_entry(car(env), add_id, add_fn);
-    }
-
-    unsafe {
-        let sub_str = init_symbol(false, SlSymbolMode::ByStr, 1);
-        sym_set_str(sub_str, b"-");
-        let sub_id = init_symbol(false, SlSymbolMode::ById, 0);
-        sym_set_id(sub_id, sym_tab_insert(sym, sub_str));
-
-        let sub_fn = init_proc(false, SlProcMode::Native, 2);
-        proc_native_set(sub_fn, sub);
-        env_layer_ins_entry(car(env), sub_id, sub_fn);
-    }
+    // Native functions
+    insert_native_proc(sym, env, b"+", add, 2);
+    insert_native_proc(sym, env, b"-", sub, 2);
+    insert_native_proc(sym, env, b"=", equal, 2);
 }
 
 fn insert_special_form(sym: *mut SlHead, env: *mut SlHead, name: &[u8]) {
@@ -1375,6 +1367,68 @@ fn insert_special_form(sym: *mut SlHead, env: *mut SlHead, name: &[u8]) {
         sym_set_id(form_id, sym_tab_insert(sym, form_str));
 
         env_layer_ins_entry(car(env), form_id, form_str);
+    }
+}
+
+/// TODO: intended to be temporary; still relies on some "magic values"
+fn insert_native_proc(
+    sym: *mut SlHead,
+    env: *mut SlHead,
+    name: &[u8],
+    func: unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead,
+    argct: u16,
+) {
+    unsafe {
+        let proc_str = init_symbol(false, SlSymbolMode::ByStr, name.len() as u16);
+        sym_set_str(proc_str, name);
+        let proc_id = init_symbol(false, SlSymbolMode::ById, 0);
+        sym_set_id(proc_id, sym_tab_insert(sym, proc_str));
+
+        let proc_fn = init_proc(false, SlProcMode::Native, argct);
+        proc_native_set(proc_fn, func);
+        env_layer_ins_entry(car(env), proc_id, proc_fn);
+    }
+}
+
+/// TODO: improve macro to allow adding functions to environment?
+/// TODO: type checks and variable length arglists for native functions
+macro_rules! sail_fn {
+    ( $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
+        $(
+            unsafe fn $fn_name (_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+                let mut _ind = 0;
+                $(
+                    let $args = env_arg_layer_get(car(env), _ind);
+                    _ind += 1;
+                )*
+
+                $body
+            }
+        )+
+    };
+}
+
+// TODO: native functions MUST be fully safe to use
+sail_fn! {
+    add [fst, snd] {
+        let out = init_fixint(false);
+        let result = fixint_get(fst) + fixint_get(snd);
+        fixint_set(out, result);
+        return out;
+    }
+
+    sub [fst, snd] {
+        let out = init_fixint(false);
+        let result = fixint_get(fst) - fixint_get(snd);
+        fixint_set(out, result);
+        return out;
+    }
+
+    equal [fst, snd] {
+        let out = init_bool(false);
+        let result = fixint_get(fst) == fixint_get(snd);
+        bool_set(out, result);
+        return out;
     }
 }
 
@@ -1400,9 +1454,10 @@ unsafe fn eval(
                     return apply(sym, env, operator, args);
                 }
                 SlType::Symbol => {
-                    // TODO: more special forms: cond, if, etc
+                    // TODO: what other special forms are needed?
                     // TODO: is there a need for special forms? why not just make these native functions?
                     // TODO: these may be good examples for creating / using native functions cleanly
+                    // TODO: just like native functions, these special forms should check for type
                     match sym_get_str(operator) {
                         "def" => {
                             env_layer_ins_entry(
@@ -1422,6 +1477,17 @@ unsafe fn eval(
 
                             proc_lambda_set(out, car(cdr(args)));
                             return Ok(out);
+                        }
+                        "if" => {
+                            let test = car(args);
+                            let fst = car(cdr(args));
+                            let snd = car(cdr(cdr(args)));
+
+                            if bool_get(eval(sym, env, test)?) {
+                                return eval(sym, env, fst);
+                            } else {
+                                return eval(sym, env, snd);
+                            }
                         }
                         "quote" => {
                             return Ok(car(args));
@@ -1443,7 +1509,7 @@ unsafe fn eval(
 
 /// Applies a Sail procedure to its arguments, returning the result
 /// TODO: execute multiple expressions in a lambda sequentially?
-/// TODO: use an ordered, alist based env layer for procedures
+/// TODO: match the argument structure to the number of arguments needed
 unsafe fn apply(
     sym: *mut SlHead,
     env: *mut SlHead,
@@ -1459,7 +1525,6 @@ unsafe fn apply(
 
     for i in 0..argct {
         if nil_p(arglist) || list_empty_p(arglist) {
-            eprintln!("error on empty arglist");
             return Err(SailErr::Error);
         }
 
@@ -1494,39 +1559,6 @@ unsafe fn apply(
     env_pop_layer(env);
 
     result
-}
-
-macro_rules! sail_fn {
-    ( $fn_name:tt [ $($args:ident),* ] { $($body:stmt)* } ) => {};
-}
-
-sail_fn!(
-    + [fst, snd] {
-        let out = init_fixint(false);
-        let result = fixint_get(fst) + fixint_get(snd);
-        fixint_set(out, result);
-        return out;
-    }
-);
-
-/// TODO: need a macro for creating a native Sail function / adding to environment
-/// TODO: native functions MUST be fully safe to use
-unsafe fn add(sym: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
-    let fst = env_arg_layer_get(car(env), 0);
-    let snd = env_arg_layer_get(car(env), 1);
-
-    let out = init_fixint(false);
-    fixint_set(out, fixint_get(fst) + fixint_get(snd));
-    out
-}
-
-unsafe fn sub(sym: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
-    let fst = env_arg_layer_get(car(env), 0);
-    let snd = env_arg_layer_get(car(env), 1);
-
-    let out = init_fixint(false);
-    fixint_set(out, fixint_get(fst) - fixint_get(snd));
-    out
 }
 
 #[cfg(test)]

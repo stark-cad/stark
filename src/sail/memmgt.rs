@@ -4,6 +4,7 @@ use std::alloc;
 use std::mem;
 use std::ptr;
 
+// TODO: current memory model does not work for multiple threads
 static mut MEM_HEAD: *mut SlMemHead = ptr::null_mut();
 
 // TODO: Enable getting and linking in more zones if we run out
