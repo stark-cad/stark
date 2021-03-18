@@ -1163,17 +1163,17 @@ pub fn repl(stream_in: std::io::Stdin) {
     // TODO: Start to think about namespaces etc
 
     // Create persistent environment and symbol table
-    let sym = unsafe { sym_tab_create() };
+    let tbl = unsafe { sym_tab_create() };
     let env = unsafe { env_create() };
 
     // Load standard / base definitions into environment and symbol table
-    environment_setup(sym, env);
+    environment_setup(tbl, env);
 
     loop {
         let mut input = String::new();
         stream_in.read_line(&mut input).expect("Failure");
 
-        let expr = match parser::parse(sym, &input) {
+        let expr = match parser::parse(tbl, &input) {
             Ok(out) => out,
             Err(_) => {
                 println!("Parse Error");
@@ -1181,7 +1181,7 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         };
 
-        let result = match unsafe { eval(sym, env, expr) } {
+        let result = match unsafe { eval(tbl, env, expr) } {
             Ok(out) => out,
             Err(_) => {
                 println!("Evaluation Error");
@@ -1189,44 +1189,45 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         };
 
-        println!("{}", context(sym, result).to_string())
+        println!("{}", context(tbl, result).to_string())
     }
 }
 
 /// Interprets a Sail expression, returning the result
 pub fn interpret(code: &String) -> Result<String, SailErr> {
-    let sym = unsafe { sym_tab_create() };
+    let tbl = unsafe { sym_tab_create() };
     let env = unsafe { env_create() };
 
-    environment_setup(sym, env);
+    environment_setup(tbl, env);
 
-    // TODO: fix functions so such insanity isn't required to get them in place
-    let expr = parser::parse(sym, code)?;
-    let result = unsafe { eval(sym, env, expr) }?;
+    let expr = parser::parse(tbl, code)?;
+    let result = unsafe { eval(tbl, env, expr) }?;
 
-    Ok(context(sym, result).to_string())
+    Ok(context(tbl, result).to_string())
 }
 
 /// TODO: fix functions so such insanity isn't required to get them in place
-fn environment_setup(sym: *mut SlHead, env: *mut SlHead) {
-    // Special form symbols
-    insert_special_form(sym, env, b"def");
-    insert_special_form(sym, env, b"fn");
-    insert_special_form(sym, env, b"if");
-    insert_special_form(sym, env, b"quote");
+pub fn environment_setup(tbl: *mut SlHead, env: *mut SlHead) {
+    // Special form tblbols
+    insert_special_form(tbl, env, b"def");
+    insert_special_form(tbl, env, b"fn");
+    insert_special_form(tbl, env, b"if");
+    insert_special_form(tbl, env, b"quote");
 
     // Native functions
-    insert_native_proc(sym, env, b"+", add, 2);
-    insert_native_proc(sym, env, b"-", sub, 2);
-    insert_native_proc(sym, env, b"=", equal, 2);
+    insert_native_proc(tbl, env, b"+", add, 2);
+    insert_native_proc(tbl, env, b"-", sub, 2);
+    insert_native_proc(tbl, env, b"=", equal, 2);
+    insert_native_proc(tbl, env, b"printenv", printenv, 0);
+    insert_native_proc(tbl, env, b"color", color, 4);
 }
 
-fn insert_special_form(sym: *mut SlHead, env: *mut SlHead, name: &[u8]) {
+fn insert_special_form(tbl: *mut SlHead, env: *mut SlHead, name: &[u8]) {
     unsafe {
         let form_str = init_symbol(false, SlSymbolMode::ByStr, name.len() as u16);
         sym_set_str(form_str, name);
         let form_id = init_symbol(false, SlSymbolMode::ById, 0);
-        sym_set_id(form_id, sym_tab_insert(sym, form_str));
+        sym_set_id(form_id, sym_tab_insert(tbl, form_str));
 
         env_layer_ins_entry(car(env), form_id, form_str);
     }
@@ -1234,7 +1235,7 @@ fn insert_special_form(sym: *mut SlHead, env: *mut SlHead, name: &[u8]) {
 
 /// TODO: intended to be temporary; still relies on some "magic values"
 fn insert_native_proc(
-    sym: *mut SlHead,
+    tbl: *mut SlHead,
     env: *mut SlHead,
     name: &[u8],
     func: unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead,
@@ -1244,7 +1245,7 @@ fn insert_native_proc(
         let proc_str = init_symbol(false, SlSymbolMode::ByStr, name.len() as u16);
         sym_set_str(proc_str, name);
         let proc_id = init_symbol(false, SlSymbolMode::ById, 0);
-        sym_set_id(proc_id, sym_tab_insert(sym, proc_str));
+        sym_set_id(proc_id, sym_tab_insert(tbl, proc_str));
 
         let proc_fn = init_proc(false, SlProcMode::Native, argct);
         proc_native_set(proc_fn, func);
@@ -1294,10 +1295,19 @@ sail_fn! {
     }
 }
 
+// TODO: sail_fn macro does not work for functions that access higher environment levels
+unsafe fn printenv(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+    println!("{}", context(_tbl, env).to_string());
+    // TODO: from_bool function or similar
+    let out = init_bool(false);
+    bool_set(out, true);
+    return out;
+}
+
 /// Evaluates a Sail value, returning the result
 /// TODO: **Macros**, closures, continuations
-unsafe fn eval(
-    sym: *mut SlHead,
+pub unsafe fn eval(
+    tbl: *mut SlHead,
     env: *mut SlHead,
     expr: *mut SlHead,
 ) -> Result<*mut SlHead, SailErr> {
@@ -1308,12 +1318,12 @@ unsafe fn eval(
                 return Ok(expr);
             }
 
-            let operator = eval(sym, env, car(expr))?;
+            let operator = eval(tbl, env, car(expr))?;
             // TODO: replace with next_list_elt(list_get(expr)) to avoid allocation
             let args = cdr(expr);
             match get_type(operator) {
                 SlType::Proc => {
-                    return apply(sym, env, operator, args);
+                    return apply(tbl, env, operator, args);
                 }
                 SlType::Symbol => {
                     // TODO: what other special forms are needed?
@@ -1325,7 +1335,7 @@ unsafe fn eval(
                             env_layer_ins_entry(
                                 car(env),
                                 car(args),
-                                eval(sym, env, car(cdr(args)))?,
+                                eval(tbl, env, car(cdr(args)))?,
                             );
                             return Ok(car(args));
                         }
@@ -1345,10 +1355,10 @@ unsafe fn eval(
                             let fst = car(cdr(args));
                             let snd = car(cdr(cdr(args)));
 
-                            if bool_get(eval(sym, env, test)?) {
-                                return eval(sym, env, fst);
+                            if bool_get(eval(tbl, env, test)?) {
+                                return eval(tbl, env, fst);
                             } else {
-                                return eval(sym, env, snd);
+                                return eval(tbl, env, snd);
                             }
                         }
                         "quote" => {
@@ -1372,8 +1382,9 @@ unsafe fn eval(
 /// Applies a Sail procedure to its arguments, returning the result
 /// TODO: execute multiple expressions in a lambda sequentially?
 /// TODO: match the argument structure to the number of arguments needed
+/// TODO: tail call optimization
 unsafe fn apply(
-    sym: *mut SlHead,
+    tbl: *mut SlHead,
     env: *mut SlHead,
     proc: *mut SlHead,
     args: *mut SlHead,
@@ -1390,7 +1401,7 @@ unsafe fn apply(
             return Err(SailErr::Error);
         }
 
-        let curarg = eval(sym, env, car(arglist))?;
+        let curarg = eval(tbl, env, car(arglist))?;
 
         match mode {
             SlProcMode::Lambda => {
@@ -1402,7 +1413,7 @@ unsafe fn apply(
                 spec_str.push_str(&(i.to_string()));
 
                 let spec_sym_id = init_symbol(false, SlSymbolMode::ById, 0);
-                sym_set_id(spec_sym_id, sym_tab_get_id(sym, &spec_str));
+                sym_set_id(spec_sym_id, sym_tab_get_id(tbl, &spec_str));
 
                 env_arg_layer_ins(proc_env, spec_sym_id, curarg);
             }
@@ -1414,8 +1425,8 @@ unsafe fn apply(
     env_push_layer(env, proc_env);
 
     let result = match mode {
-        SlProcMode::Lambda => eval(sym, env, proc_lambda_body(proc)),
-        SlProcMode::Native => Ok(proc_native_body(proc)(sym, env)),
+        SlProcMode::Lambda => eval(tbl, env, proc_lambda_body(proc)),
+        SlProcMode::Native => Ok(proc_native_body(proc)(tbl, env)),
     };
 
     env_pop_layer(env);
