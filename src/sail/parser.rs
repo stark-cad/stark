@@ -10,7 +10,6 @@ struct Parser {
 }
 
 /// Parses a Sail expression into the internal representation
-/// TODO: Parse Keyword
 pub fn parse(tbl: *mut SlHead, code: &str) -> Result<*mut SlHead, SailErr> {
     // Accumulator for collecting string values
     let mut acc: Vec<u8> = Vec::new();
@@ -104,10 +103,10 @@ fn read_quote(
     elt: bool,
 ) -> Result<*mut SlHead, SailErr> {
     unsafe {
-        let head = super::init_list(elt);
+        let head = super::init_ref(elt, super::SlRefMode::List);
         let start = super::init_symbol(true, super::SlSymbolMode::ById, 0);
         super::sym_set_id(start, super::sym_tab_get_id(tbl, "quote"));
-        super::list_set(head, start);
+        super::ref_set(head, start);
 
         let end = read_value(chars, acc, tbl, true)?;
         super::set_list_elt(start, end);
@@ -122,12 +121,12 @@ fn read_list(
     tbl: *mut SlHead,
     elt: bool,
 ) -> Result<*mut SlHead, SailErr> {
-    let head = unsafe { super::init_list(elt) };
+    let head = unsafe { super::init_ref(elt, super::SlRefMode::List) };
 
     let mut c = *(chars.peek().unwrap());
 
     if c == b')' {
-        unsafe { super::list_set(head, ptr::null_mut()) }
+        unsafe { super::ref_set(head, ptr::null_mut()) }
         chars.next();
         return Ok(head);
     }
@@ -169,7 +168,7 @@ fn read_list(
                 tail = unsafe {
                     let next = read_value(chars, acc, tbl, true)?;
                     if count < 1 {
-                        super::list_set(tail, next)
+                        super::ref_set(tail, next)
                     } else {
                         super::set_list_elt(tail, next)
                     }
@@ -195,7 +194,7 @@ fn read_vec(
     tbl: *mut SlHead,
     elt: bool,
 ) -> Result<*mut SlHead, SailErr> {
-    let vec = unsafe { super::init_vec(elt, 8) };
+    let vec = unsafe { super::init_vec(elt, super::SlVecMode::Default, 8) };
     let mut c = *(chars.peek().unwrap());
     while c != b']' {
         match c {
