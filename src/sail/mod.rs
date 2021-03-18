@@ -32,10 +32,10 @@ impl fmt::Debug for SailErr {
     }
 }
 
-// TODO: MINIMIZE the use of *unsafe* functions
+// TODO: MINIMIZE the use of *pub* and *unsafe* functions
 
 /// Returns the type of a valid Sail value
-unsafe fn get_type(loc: *mut SlHead) -> SlType {
+pub unsafe fn get_type(loc: *mut SlHead) -> SlType {
     let typ = ptr::read_unaligned(loc as *mut u8) >> 4;
     mem::transmute::<u8, SlType>(typ)
 }
@@ -195,7 +195,7 @@ unsafe fn init_proc(list_elt: bool, mode: SlProcMode, argct: u16) -> *mut SlHead
     ptr
 }
 
-unsafe fn init_symbol(list_elt: bool, mode: SlSymbolMode, len: u16) -> *mut SlHead {
+pub unsafe fn init_symbol(list_elt: bool, mode: SlSymbolMode, len: u16) -> *mut SlHead {
     let ptr;
 
     match mode {
@@ -409,6 +409,16 @@ unsafe fn vec_idx(loc: *mut SlHead, idx: u16) -> *mut SlHead {
     )
 }
 
+pub unsafe fn vec_idx_f32(loc: *mut SlHead, idx: u16) -> f32 {
+    typechk!(Vec FlatF32 ; loc);
+
+    ptr::read_unaligned(
+        value_ptr(loc)
+            .offset(VEC_SH_LEN as isize)
+            .offset(idx as isize * FIXNUM_32_LEN as isize) as *mut f32,
+    )
+}
+
 unsafe fn vec_push(loc: *mut SlHead, item: *mut SlHead) {
     typechk!(Vec Default ; loc);
 
@@ -418,6 +428,23 @@ unsafe fn vec_push(loc: *mut SlHead, item: *mut SlHead) {
         ptr::write_unaligned(
             value_ptr(loc).offset(VEC_SH_LEN as isize + (len as isize * PTR_LEN as isize))
                 as *mut *mut SlHead,
+            item,
+        );
+        vec_set_len(loc, len + 1);
+    } else {
+        panic!("not enough space in vec");
+    }
+}
+
+unsafe fn vec_push_f32(loc: *mut SlHead, item: f32) {
+    typechk!(Vec FlatF32 ; loc);
+
+    let (len, cap) = (vec_get_len(loc), vec_get_cap(loc));
+
+    if len < cap {
+        ptr::write_unaligned(
+            value_ptr(loc).offset(VEC_SH_LEN as isize + (len as isize * FIXNUM_32_LEN as isize))
+                as *mut f32,
             item,
         );
         vec_set_len(loc, len + 1);
@@ -782,7 +809,7 @@ unsafe fn env_new_layer(min_size: u16) -> *mut SlHead {
     init_map(true, SlMapMode::Alist, min_size * 2)
 }
 
-unsafe fn env_layer_ins_entry(layer: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
+pub unsafe fn env_layer_ins_entry(layer: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
     map_insert(layer, key, val)
 }
 
@@ -837,8 +864,8 @@ unsafe fn env_pop_layer(env: *mut SlHead) {
 /// This should take the form of a bimap, a 1 to 1 association between strings and IDs
 /// Two maps, one for each direction, pointing to the same set of cons cells (id . string)
 /// Must keep track of id to assign (counter) and reclaim unused slots if counter reaches max
-unsafe fn sym_tab_create() -> *mut SlHead {
-    let tbl = init_vec(false, 3);
+pub unsafe fn sym_tab_create() -> *mut SlHead {
+    let tbl = init_vec(false, SlVecMode::Default, 3);
 
     let id_to_str = init_map(false, SlMapMode::Assoc, 255);
     let str_to_id = init_map(false, SlMapMode::Assoc, 255);
@@ -1038,12 +1065,12 @@ unsafe fn sym_tab_get_id(tbl: *mut SlHead, sym: &str) -> u32 {
 }
 
 /// Bundles together a value and associated symbol table for display
-struct SlContextVal {
+pub struct SlContextVal {
     tbl: *mut SlHead,
     val: *mut SlHead,
 }
 
-fn context(tbl: *mut SlHead, val: *mut SlHead) -> SlContextVal {
+pub fn context(tbl: *mut SlHead, val: *mut SlHead) -> SlContextVal {
     SlContextVal { tbl, val }
 }
 
@@ -1076,7 +1103,14 @@ impl fmt::Display for SlContextVal {
                     write!(f, "[").unwrap();
                     let len = vec_get_len(value);
                     for idx in 0..len {
-                        write!(f, "{}", context(table, vec_idx(value, idx)).to_string()).unwrap();
+                        match vec_mode(value) {
+                            SlVecMode::Default => {
+                                write!(f, "{}", context(table, vec_idx(value, idx)).to_string())
+                                    .unwrap()
+                            }
+                            SlVecMode::FlatF32 => write!(f, "{}", vec_idx_f32(value, idx)).unwrap(),
+                            _ => write!(f, "oof").unwrap(),
+                        }
 
                         if idx < len - 1 {
                             write!(f, " ").unwrap();
@@ -1300,6 +1334,31 @@ sail_fn! {
 unsafe fn printenv(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
     println!("{}", context(_tbl, env).to_string());
     // TODO: from_bool function or similar
+    let out = init_bool(false);
+    bool_set(out, true);
+    return out;
+}
+
+unsafe fn color(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+    let r = env_arg_layer_get(car(env), 0);
+    let g = env_arg_layer_get(car(env), 1);
+    let b = env_arg_layer_get(car(env), 2);
+    let a = env_arg_layer_get(car(env), 3);
+
+    let qstr = init_symbol(false, SlSymbolMode::ByStr, 7);
+    sym_set_str(qstr, b"g_queue");
+
+    let queue = env_lookup(env, sym_tab_lookup_by_str(_tbl, qstr));
+
+    let vec = init_vec(false, SlVecMode::FlatF32, 4);
+
+    vec_push_f32(vec, fixfloat_get(r) as f32);
+    vec_push_f32(vec, fixfloat_get(g) as f32);
+    vec_push_f32(vec, fixfloat_get(b) as f32);
+    vec_push_f32(vec, fixfloat_get(a) as f32);
+
+    queue::queue_tx(queue, vec);
+
     let out = init_bool(false);
     bool_set(out, true);
     return out;
