@@ -49,6 +49,7 @@ pub struct GraphicsState<B: gfx_hal::Backend> {
     queue_group: QueueGroup<B>,
     surface_color_format: Format,
     render_passes: Vec<B::RenderPass>,
+    framebuffer: Option<B::Framebuffer>,
     command_pool: Option<B::CommandPool>,
     command_buffers: Vec<B::CommandBuffer>,
     vertex_memory: Vec<B::Memory>,
@@ -137,6 +138,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
             surface: Some(surface),
             adapter,
             device,
+            framebuffer: None,
             queue_group,
             surface_color_format,
             render_passes: vec![render_pass],
@@ -185,6 +187,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                 .reset_fence(self.submission_complete_fence.as_mut().unwrap())
                 .unwrap();
 
+            // TODO: just reset command buffer instead?
             self.command_pool.as_mut().unwrap().reset(false);
         }
 
@@ -193,29 +196,6 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                 Ok((image, _)) => image,
                 Err(_) => return Err("Could not acquire image"),
             }
-        };
-
-        let framebuffer = unsafe {
-            let caps = self
-                .surface
-                .as_ref()
-                .unwrap()
-                .capabilities(&self.adapter.physical_device);
-            let swapchain_config =
-                SwapchainConfig::from_caps(&caps, self.surface_color_format, self.surface_extent);
-            let framebuffer_attachment = swapchain_config.framebuffer_attachment();
-
-            self.device
-                .create_framebuffer(
-                    &self.render_passes[0],
-                    iter::once(framebuffer_attachment),
-                    Extent {
-                        width: self.surface_extent.width,
-                        height: self.surface_extent.height,
-                        depth: 1,
-                    },
-                )
-                .unwrap()
         };
 
         unsafe {
@@ -264,7 +244,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
 
             buffer.begin_render_pass(
                 &self.render_passes[0],
-                &framebuffer,
+                &self.framebuffer.as_ref().unwrap(),
                 viewport.rect,
                 iter::once(RenderAttachmentInfo {
                     image_view: surface_image.borrow(),
@@ -305,12 +285,6 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                     self.rendering_complete_semaphore.as_mut(),
                 )
                 .unwrap();
-
-            self.device
-                .wait_for_fence(self.submission_complete_fence.as_ref().unwrap(), timeout_ns)
-                .unwrap();
-
-            self.device.destroy_framebuffer(framebuffer);
         }
 
         Ok(())
@@ -327,6 +301,8 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
             self.device
                 .reset_fence(self.submission_complete_fence.as_mut().unwrap())
                 .unwrap();
+
+            self.command_pool.as_mut().unwrap().reset(false);
         }
 
         let surface_image = unsafe {
@@ -336,33 +312,6 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
             }
         };
 
-        let framebuffer = unsafe {
-            let caps = self
-                .surface
-                .as_ref()
-                .unwrap()
-                .capabilities(&self.adapter.physical_device);
-            let swapchain_config =
-                SwapchainConfig::from_caps(&caps, self.surface_color_format, self.surface_extent);
-            let framebuffer_attachment = swapchain_config.framebuffer_attachment();
-
-            self.device
-                .create_framebuffer(
-                    &self.render_passes[0],
-                    iter::once(framebuffer_attachment),
-                    Extent {
-                        width: self.surface_extent.width,
-                        height: self.surface_extent.height,
-                        depth: 1,
-                    },
-                )
-                .unwrap()
-        };
-
-        unsafe {
-            self.command_pool.as_mut().unwrap().reset(false);
-        }
-
         unsafe {
             let buffer = &mut self.command_buffers[0];
 
@@ -370,7 +319,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
 
             buffer.begin_render_pass(
                 &self.render_passes[0],
-                &framebuffer,
+                &self.framebuffer.as_ref().unwrap(),
                 Rect {
                     x: 0,
                     y: 0,
@@ -405,8 +354,6 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                     self.rendering_complete_semaphore.as_mut(),
                 )
                 .unwrap();
-
-            self.device.destroy_framebuffer(framebuffer);
         }
 
         Ok(())
@@ -422,6 +369,29 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         let swapchain_config =
             SwapchainConfig::from_caps(&caps, self.surface_color_format, self.surface_extent);
         self.surface_extent = swapchain_config.extent;
+
+        let framebuffer = unsafe {
+            if self.framebuffer.is_some() {
+                self.device
+                    .destroy_framebuffer(self.framebuffer.take().unwrap());
+            }
+
+            let framebuffer_attachment = swapchain_config.framebuffer_attachment();
+
+            self.device
+                .create_framebuffer(
+                    &self.render_passes[0],
+                    iter::once(framebuffer_attachment),
+                    Extent {
+                        width: self.surface_extent.width,
+                        height: self.surface_extent.height,
+                        depth: 1,
+                    },
+                )
+                .unwrap()
+        };
+
+        self.framebuffer = Some(framebuffer);
 
         unsafe {
             self.surface
@@ -610,6 +580,9 @@ impl<B: gfx_hal::Backend> Drop for GraphicsState<B> {
                 .destroy_semaphore(self.rendering_complete_semaphore.take().unwrap());
             self.device
                 .destroy_fence(self.submission_complete_fence.take().unwrap());
+
+            self.device
+                .destroy_framebuffer(self.framebuffer.take().unwrap());
 
             for render_pass in self.render_passes.drain(..) {
                 self.device.destroy_render_pass(render_pass);

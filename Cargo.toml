@@ -17,7 +17,7 @@ rug = "1.11.0"
 
 shaderc = "0.6.3"
 
-arrayvec = "0.5.2"
+# arrayvec = "0.5.2"
 png = "0.16.7"
 
 log = "0.4.11"
@@ -25,11 +25,11 @@ simple_logger = "1.11.0"
 
 # [target.'cfg(target_os = "macos")'.dependencies.backend]
 # package = "gfx-backend-metal"
-# path = "../gfx/src/backend"
+# path = "../gfx/src/backend/metal"
 
 # [target.'cfg(windows)'.dependencies.backend]
 # package = "gfx-backend-dx12"
-# path = "../gfx/src/backend"
+# path = "../gfx/src/backend/dx12"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.backend]
 package = "gfx-backend-vulkan"
