@@ -13,7 +13,8 @@ mod types;
 pub use self::types::*;
 
 mod memmgt;
-mod parser;
+pub mod parser;
+pub mod queue;
 
 pub enum SailErr {
     Error,

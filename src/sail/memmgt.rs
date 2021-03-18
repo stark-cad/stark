@@ -4,6 +4,8 @@ use std::alloc;
 use std::mem;
 use std::ptr;
 
+// TODO: could use a freelist in empty portions of a memory zone
+
 // TODO: current memory model does not work for multiple threads
 static mut MEM_HEAD: *mut SlMemHead = ptr::null_mut();
 
