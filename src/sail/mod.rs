@@ -12,7 +12,7 @@ use rug;
 mod types;
 pub use self::types::*;
 
-mod memmgt;
+pub mod memmgt;
 pub mod parser;
 pub mod queue;
 
@@ -1106,7 +1106,7 @@ unsafe fn sym_tab_lookup_id_num(tbl: *mut SlHead, id: u32) -> *mut SlHead {
 
 /// Returns ID for any symbol string
 /// Inserts symbol into the table if not already present
-unsafe fn sym_tab_get_id(tbl: *mut SlHead, sym: &str) -> u32 {
+pub unsafe fn sym_tab_get_id(tbl: *mut SlHead, sym: &str) -> u32 {
     let map = vec_idx(tbl, 1);
     let size = map_get_size(map);
     let hash = str_hash(sym) % size as u32;
@@ -1132,6 +1132,11 @@ unsafe fn sym_tab_get_id(tbl: *mut SlHead, sym: &str) -> u32 {
     sym_set_str(record, sym.as_bytes());
 
     sym_tab_insert(tbl, record)
+}
+
+pub union SlSend {
+    ptr: *mut SlHead,
+    num: usize,
 }
 
 /// Bundles together a value and associated symbol table for display

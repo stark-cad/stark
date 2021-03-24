@@ -1,4 +1,4 @@
-use crate::InputStatus;
+use super::{sail, InputStatus};
 
 use png;
 use winit::{
@@ -20,6 +20,118 @@ pub enum ContextMsg {
     Destroy,
 }
 
+pub fn init_context(
+    title: &str,
+    icon_file: &str,
+    width: u32,
+    height: u32,
+) -> (Window, EventLoop<()>) {
+    let event_loop = EventLoop::new();
+    let window = WindowBuilder::new()
+        .with_title(title)
+        .with_window_icon(get_icon(icon_file))
+        .with_inner_size(dpi::Size::Physical(dpi::PhysicalSize { width, height }))
+        .build(&event_loop)
+        .unwrap();
+
+    (window, event_loop)
+}
+
+pub fn run_loop<Ij: 'static>(
+    event_loop: EventLoop<()>,
+    threads: Ij,
+    sl_sector: usize,
+    main_tx: usize,
+    render_tx: usize,
+) where
+    Ij: Iterator<Item = thread::JoinHandle<()>>,
+{
+    let sl_sector = sl_sector as *mut sail::memmgt::MemSector;
+    let main_tx = main_tx as *mut sail::SlHead;
+    let render_tx = render_tx as *mut sail::SlHead;
+
+    let mut joins = Some(threads);
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+
+        match event {
+            Event::LoopDestroyed => {
+                // TODO: send messages using Sail queues
+
+                // tx.send(ContextMsg::Destroy).unwrap();
+                joins.take().unwrap().for_each(|x| x.join().unwrap());
+            }
+
+            Event::RedrawRequested(..) => {
+                // tx.send(ContextMsg::Redraw).unwrap();
+            }
+
+            Event::WindowEvent { event, .. } => match event {
+                WindowEvent::CloseRequested => {
+                    *control_flow = ControlFlow::Exit;
+                }
+                WindowEvent::Resized(dims) => {
+                    // tx.send(ContextMsg::Resize(dims.width, dims.height))
+                    // .unwrap();
+                    // tx.send(ContextMsg::Redraw).unwrap();
+                }
+                WindowEvent::ScaleFactorChanged {
+                    new_inner_size: dims,
+                    ..
+                } => {
+                    // tx.send(ContextMsg::Resize(dims.width, dims.height))
+                    // .unwrap();
+                }
+                WindowEvent::MouseInput { state, button, .. } => {
+                    // input_status.lock().unwrap().update_mouse(button, state);
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    // input_status
+                    // .lock()
+                    // .unwrap()
+                    // .update_pos(position.x as u32, position.y as u32);
+                }
+                _ => {}
+            },
+
+            Event::DeviceEvent { event, .. } => match event {
+                DeviceEvent::Key(key) => {
+                    // input_status
+                    // .lock()
+                    // .unwrap()
+                    // .update_keys(key.scancode, key.state);
+                }
+                DeviceEvent::MouseWheel {
+                    delta: event::MouseScrollDelta::LineDelta(xdel, ydel),
+                } => {
+                    // input_statu   s.lock().unwrap( ).   update_scroll(xd el, ydel);
+                }
+                DeviceEvent::MouseMotion {
+                    delta: (xdel, ydel),
+                } => {
+                    // input_statu  s.lock().unwrap(  ).  update_motion(xd  el, ydel );
+                }
+                _ => {}
+            },
+
+            _ => {}
+        }
+    });
+}
+
+/// Retrieves an icon from a PNG file and outputs it in the format desired by Winit
+fn get_icon(filename: &str) -> Option<window::Icon> {
+    let decoder = png::Decoder::new(File::open(filename).unwrap());
+    let (info, mut reader) = decoder.read_info().unwrap();
+
+    let mut buf = vec![0; info.buffer_size()];
+
+    reader.next_frame(&mut buf).unwrap();
+
+    Some(window::Icon::from_rgba(buf, info.width, info.height).unwrap())
+}
+
 /// Window context within which STARK runs
 /// TODO: Determine whether to keep input status here
 pub struct Context {
@@ -35,7 +147,7 @@ impl Context {
         Context {
             window: WindowBuilder::new()
                 .with_title(title)
-                .with_window_icon(Context::get_icon(icon_file))
+                .with_window_icon(get_icon(icon_file))
                 .with_inner_size(dpi::Size::Physical(dpi::PhysicalSize { width, height }))
                 .build(&event_loop)
                 .unwrap(),
@@ -120,17 +232,5 @@ impl Context {
                 _ => {}
             }
         });
-    }
-
-    /// Retrieves an icon from a PNG file and outputs it in the format desired by Winit
-    fn get_icon(filename: &str) -> Option<window::Icon> {
-        let decoder = png::Decoder::new(File::open(filename).unwrap());
-        let (info, mut reader) = decoder.read_info().unwrap();
-
-        let mut buf = vec![0; info.buffer_size()];
-
-        reader.next_frame(&mut buf).unwrap();
-
-        Some(window::Icon::from_rgba(buf, info.width, info.height).unwrap())
     }
 }

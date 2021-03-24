@@ -1,14 +1,8 @@
-use stark::{
-    context::{Context, ContextMsg},
-    graphics::GraphicsState,
-    sail, InputStatus,
-};
-
-use log::info;
+use stark::{context, graphics, sail, InputStatus};
 
 use std::env;
 use std::io;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 // TODO: Have a static base Sail environment so that native functions
@@ -27,50 +21,74 @@ fn main() {
         sail::repl(io::stdin())
     }
 
-    let context = Context::new(NAME, ICON, SIZE[0], SIZE[1]);
+    let (window, event_loop) = context::init_context(NAME, ICON, SIZE[0], SIZE[1]);
+
+    // let context = Context::new(NAME, ICON, SIZE[0], SIZE[1]);
     let input_status = Arc::new(Mutex::new(InputStatus::new()));
     // this channel transmits a message to the manager on event loop destruction
-    let (tx, rx) = mpsc::channel::<ContextMsg>();
+    // let (tx, rx) = mpsc::channel::<ContextMsg>();
 
-    let mut graphics: GraphicsState<backend::Backend> =
-        GraphicsState::new(&context, NAME, SIZE[0], SIZE[1]);
-    graphics.setup();
-
-    let mut should_configure_swapchain = true;
-
-    // This thread manages the program, treating the actual main thread as a source of user input
     let inputs = Arc::clone(&input_status);
 
     let (mut w, mut h) = (SIZE[0], SIZE[1]);
     let (mut x, mut y) = (0, 0);
 
+    let main_sector = unsafe { sail::memmgt::acquire_mem_sector(1000000) };
+    let render_sector = unsafe { sail::memmgt::acquire_mem_sector(1000000) };
+    let context_sector = unsafe { sail::memmgt::acquire_mem_sector(100000) };
+
+    let (sl_tbl, sl_env) = unsafe {
+        let tbl = sail::sym_tab_create(main_sector);
+        let env = sail::env_create(main_sector);
+
+        sail::environment_setup(tbl, env);
+
+        (tbl as usize, env as usize)
+    };
+
+    let (mr_send, mr_recv) = unsafe { sail::queue::queue_create(main_sector, render_sector) };
+    let (cm_send, cm_recv) = unsafe { sail::queue::queue_create(context_sector, main_sector) };
+    let (cr_send, cr_recv) = unsafe { sail::queue::queue_create(context_sector, render_sector) };
+
+    let (
+        main_sector,
+        render_sector,
+        context_sector,
+        mr_send,
+        mr_recv,
+        cm_send,
+        cm_recv,
+        cr_send,
+        cr_recv,
+    ) = (
+        main_sector as usize,
+        render_sector as usize,
+        context_sector as usize,
+        mr_send as usize,
+        mr_recv as usize,
+        cm_send as usize,
+        cm_recv as usize,
+        cr_send as usize,
+        cr_recv as usize,
+    );
+
+    // This thread manages the program, treating the actual main thread as a source of user input
     let manager = thread::spawn(move || {
-        let (sl_tbl, sl_env) = unsafe {
-            let tbl = sail::sym_tab_create();
-            let env = sail::env_create();
-
-            sail::environment_setup(tbl, env);
-
-            (tbl, env)
-        };
-
-        let (g_send, g_recv) = unsafe { sail::queue::queue_create() };
+        let (sl_tbl, sl_env) = (sl_tbl as *mut sail::SlHead, sl_env as *mut sail::SlHead);
+        let main_sector = main_sector as *mut sail::memmgt::MemSector;
+        let (mr_send, cm_recv) = (mr_send as *mut sail::SlHead, cm_recv as *mut sail::SlHead);
 
         unsafe {
-            let send_str = sail::init_symbol(false, sail::SlSymbolMode::ByStr, 7);
-            sail::sym_set_str(send_str, b"g_queue");
-            let send_id = sail::init_symbol(false, sail::SlSymbolMode::ById, 0);
-            sail::sym_set_id(send_id, sail::sym_tab_insert(sl_tbl, send_str));
-
-            sail::env_layer_ins_entry(sail::car(sl_env), send_id, g_send);
+            let send_id = sail::init_symbol(main_sector, false, sail::SlSymbolMode::ById, 0);
+            sail::sym_set_id(send_id, sail::sym_tab_get_id(sl_tbl, "g_queue"));
+            sail::env_layer_ins_entry(sail::car(sl_env), send_id, mr_send);
         }
 
-        loop {
-            if should_configure_swapchain {
-                graphics.config_swapchain();
-                should_configure_swapchain = false;
-            }
+        let _a = mr_recv as usize;
+        let _b = cr_recv as usize;
+        let render = thread::spawn(move || graphics::render_loop(NAME, SIZE, &window, _a, _b));
 
+        loop {
             let mut curr_stat = inputs.lock().unwrap();
             // Should check_keys() and check_mouse() return iterators / iterable?
             if let Some(keys) = curr_stat.check_keys() {
@@ -138,61 +156,49 @@ fn main() {
 
             println!("{}", sail::context(sl_tbl, sl_result).to_string());
 
-            unsafe {
-                let next = sail::queue::queue_rx(g_recv);
+            // match rx.try_recv() {
+            //     // Last block to run in the manager thread
+            //     Ok(ContextMsg::Destroy) => {
+            //         info!("Manager got destruction message");
+            //         break;
+            //     }
+            //     Ok(ContextMsg::Resize(width, height)) => {
+            //         info!("Resized to {} by {}", width, height);
+            //         // graphics.set_extent(width, height);
+            //         // should_configure_swapchain = true;
 
-                if sail::get_type(next) != sail::SlType::Vec
-                    || sail::vec_mode(next) != sail::SlVecMode::FlatF32
-                {
-                    println!("garbage from queue");
-                } else {
-                    graphics
-                        .draw_clear_frame([
-                            sail::vec_idx_f32(next, 0),
-                            sail::vec_idx_f32(next, 1),
-                            sail::vec_idx_f32(next, 2),
-                            sail::vec_idx_f32(next, 3),
-                        ])
-                        .unwrap();
-                }
-            }
+            //         w = width;
+            //         h = height;
+            //     }
+            //     Ok(ContextMsg::Redraw) => {
+            //         info!("Received redraw message");
+            //         // graphics.draw_clear_frame([0.2, 0.1, 0.7, 1.0]).unwrap();
 
-            match rx.try_recv() {
-                // Last block to run in the manager thread
-                Ok(ContextMsg::Destroy) => {
-                    info!("Manager got destruction message");
-                    break;
-                }
-                Ok(ContextMsg::Resize(width, height)) => {
-                    info!("Resized to {} by {}", width, height);
-                    graphics.set_extent(width, height);
-                    should_configure_swapchain = true;
-
-                    w = width;
-                    h = height;
-                }
-                Ok(ContextMsg::Redraw) => {
-                    info!("Received redraw message");
-                    // graphics.draw_clear_frame([0.2, 0.1, 0.7, 1.0]).unwrap();
-
-                    // graphics
-                    //     .draw_triangle_frame(stark::graphics::Triangle {
-                    //         points: [
-                    //             [-0.5, 0.5],
-                    //             [-0.5, -0.5],
-                    //             [
-                    //                 ((x as f32 / w as f32) * 2.0) - 1.0,
-                    //                 ((y as f32 / h as f32) * 2.0) - 1.0,
-                    //             ],
-                    //         ],
-                    //     })
-                    //     .unwrap();
-                }
-                _ => {}
-            }
+            //         // graphics
+            //         //     .draw_triangle_frame(stark::graphics::Triangle {
+            //         //         points: [
+            //         //             [-0.5, 0.5],
+            //         //             [-0.5, -0.5],
+            //         //             [
+            //         //                 ((x as f32 / w as f32) * 2.0) - 1.0,
+            //         //                 ((y as f32 / h as f32) * 2.0) - 1.0,
+            //         //             ],
+            //         //         ],
+            //         //     })
+            //         //     .unwrap();
+            //     }
+            //     _ => {}
+            // }
         }
     });
 
     // Completely takes over the main thread; no code after this will run
-    context.run(input_status, tx, manager);
+    // context.run(input_status, tx, manager);
+    context::run_loop(
+        event_loop,
+        std::iter::once(manager),
+        context_sector as usize,
+        cm_send as usize,
+        cr_send as usize,
+    );
 }

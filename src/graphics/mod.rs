@@ -1,4 +1,4 @@
-use crate::context::Context;
+use super::sail;
 
 use gfx_hal::{
     adapter::{Adapter, PhysicalDevice},
@@ -38,8 +38,49 @@ impl Triangle {
     }
 }
 
-/// Stores all `gfx-hal` objects which must persist
-/// TODO: the device and instance fields do not need to be Option
+pub fn render_loop(
+    name: &'static str,
+    size: [u32; 2],
+    window: &winit::window::Window,
+    draw_rx: usize,
+    context_rx: usize,
+) {
+    let draw_rx = draw_rx as *mut sail::SlHead;
+    let context_rx = context_rx as *mut sail::SlHead;
+
+    let mut state: GraphicsState<backend::Backend> =
+        GraphicsState::new(window, name, size[0], size[1]);
+    let mut should_configure_swapchain = true;
+
+    loop {
+        if should_configure_swapchain {
+            state.config_swapchain();
+            should_configure_swapchain = false;
+        }
+
+        unsafe {
+            match sail::queue::queue_rx_result(draw_rx) {
+                Ok(next) => {
+                    if sail::get_type(next) == sail::SlType::Vec
+                        || sail::vec_mode(next) == sail::SlVecMode::FlatF32
+                    {
+                        state
+                            .draw_clear_frame([
+                                sail::vec_idx_f32(next, 0),
+                                sail::vec_idx_f32(next, 1),
+                                sail::vec_idx_f32(next, 2),
+                                sail::vec_idx_f32(next, 3),
+                            ])
+                            .unwrap();
+                    }
+                }
+                Err(_) => std::hint::spin_loop(),
+            }
+        }
+    }
+}
+
+/// Stores all persistent `gfx-hal` objects
 pub struct GraphicsState<B: gfx_hal::Backend> {
     surface_extent: Extent2D,
     instance: B::Instance,
@@ -62,10 +103,10 @@ pub struct GraphicsState<B: gfx_hal::Backend> {
 
 /// Initialize the graphics system and track necessary state
 impl<B: gfx_hal::Backend> GraphicsState<B> {
-    pub fn new(context: &Context, name: &str, width: u32, height: u32) -> Self {
+    pub fn new(window: &winit::window::Window, name: &str, width: u32, height: u32) -> Self {
         let surface_extent = Extent2D { width, height };
         let instance = B::Instance::create(name, 1).unwrap();
-        let surface = unsafe { instance.create_surface(&context.window).unwrap() };
+        let surface = unsafe { instance.create_surface(window).unwrap() };
         let adapter = instance
             .enumerate_adapters()
             .into_iter()
@@ -166,8 +207,14 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         let vertex_shader = include_str!("shaders/test.vert");
         let fragment_shader = include_str!("shaders/test.frag");
 
-        let pipeline =
-            unsafe { self.make_pipeline(&pipeline_layout, vertex_shader, fragment_shader) };
+        let pipeline = unsafe {
+            self.make_pipeline(
+                &pipeline_layout,
+                vertex_shader,
+                fragment_shader,
+                Primitive::TriangleList,
+            )
+        };
 
         self.pipeline_layouts.push(pipeline_layout);
         self.pipelines.push(pipeline);
@@ -373,6 +420,13 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         let framebuffer = unsafe {
             if self.framebuffer.is_some() {
                 self.device
+                    .wait_for_fence(
+                        self.submission_complete_fence.as_ref().unwrap(),
+                        1_000_000_000,
+                    )
+                    .unwrap();
+
+                self.device
                     .destroy_framebuffer(self.framebuffer.take().unwrap());
             }
 
@@ -478,6 +532,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         pipeline_layout: &B::PipelineLayout,
         vertex_shader: &str,
         fragment_shader: &str,
+        primitive_type: Primitive,
     ) -> B::GraphicsPipeline {
         let vertex_shader_module = self
             .device
@@ -522,7 +577,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                     offset: 0,
                 },
             }],
-            input_assembler: InputAssemblerDesc::new(Primitive::TriangleList),
+            input_assembler: InputAssemblerDesc::new(primitive_type),
             vertex: vs_entry,
             tessellation: None,
             geometry: None,
