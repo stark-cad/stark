@@ -42,8 +42,12 @@ pub unsafe fn get_type(loc: *mut SlHead) -> SlType {
 
 /// Returns the size of a valid Sail value
 unsafe fn get_size(loc: *mut SlHead) -> usize {
+    // There's a reason the casts are in every arm, not at the end
     match get_type(loc) {
-        SlType::Ref => PTR_LEN as usize,
+        SlType::Ref => match ref_mode(loc) {
+            SlRefMode::QSend => (PTR_LEN * 2) as usize,
+            _ => PTR_LEN as usize,
+        },
         SlType::Vec => VEC_SH_LEN as usize + (vec_get_cap(loc) as usize * PTR_LEN as usize),
         SlType::Map => MAP_SH_LEN as usize + (map_get_size(loc) as usize * PTR_LEN as usize),
         SlType::Proc => match proc_mode(loc) {
@@ -418,6 +422,21 @@ unsafe fn ref_get(loc: *mut SlHead) -> *mut SlHead {
 
 unsafe fn ref_empty_p(loc: *mut SlHead) -> bool {
     nil_p(ref_get(loc))
+}
+
+unsafe fn ref_qsend_set_target(loc: *mut SlHead, target: *mut memmgt::MemSector) {
+    typechk!(Ref QSend ; loc);
+
+    ptr::write_unaligned(
+        value_ptr(loc).offset(PTR_LEN as isize) as *mut *mut memmgt::MemSector,
+        target,
+    )
+}
+
+unsafe fn ref_qsend_get_target(loc: *mut SlHead) -> *mut memmgt::MemSector {
+    typechk!(Ref QSend ; loc);
+
+    ptr::read_unaligned(value_ptr(loc).offset(PTR_LEN as isize) as *mut *mut memmgt::MemSector)
 }
 
 pub unsafe fn vec_mode(loc: *mut SlHead) -> SlVecMode {
@@ -1133,23 +1152,28 @@ impl fmt::Display for SlContextVal {
 
         unsafe {
             match get_type(value) {
-                SlType::Ref => {
-                    write!(f, "(").unwrap();
-                    let mut elt = ref_get(value);
-                    while elt != ptr::null_mut() {
-                        if !list_elt_p(elt) {
-                            write!(f, ". ").unwrap();
+                SlType::Ref => match ref_mode(value) {
+                    SlRefMode::List => {
+                        write!(f, "(").unwrap();
+                        let mut elt = ref_get(value);
+                        while elt != ptr::null_mut() {
+                            if !list_elt_p(elt) {
+                                write!(f, ". ").unwrap();
+                                write!(f, "{}", context(table, elt).to_string()).unwrap();
+                                break;
+                            }
                             write!(f, "{}", context(table, elt).to_string()).unwrap();
-                            break;
+                            elt = next_list_elt(elt);
+                            if elt != ptr::null_mut() {
+                                write!(f, " ").unwrap();
+                            }
                         }
-                        write!(f, "{}", context(table, elt).to_string()).unwrap();
-                        elt = next_list_elt(elt);
-                        if elt != ptr::null_mut() {
-                            write!(f, " ").unwrap();
-                        }
+                        write!(f, ")")
                     }
-                    write!(f, ")")
-                }
+                    SlRefMode::QReceive => write!(f, "<queue receiver>"),
+                    SlRefMode::QSend => write!(f, "<queue sender>"),
+                    _ => write!(f, "cannot display ref"),
+                },
                 SlType::Vec => {
                     write!(f, "[").unwrap();
                     let len = vec_get_len(value);

@@ -1,3 +1,5 @@
+#![feature(core_intrinsics)]
+
 use winit::event;
 
 use std::collections::HashSet;

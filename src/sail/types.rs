@@ -1,6 +1,6 @@
 macro_rules! typechk {
     ( $var:ident == $typ:ident ) => {
-        assert_eq!($crate::sail::get_type($var), $crate::sail::types::SlType::$typ);
+        typechk!(; $typ ; $var);
     };
 
     ( Ref $($mode:ident)? ; $var:ident ) => {
@@ -30,6 +30,32 @@ macro_rules! typechk {
 
     ( ; $typ:ident ; $var:ident ) => {
         assert_eq!($crate::sail::get_type($var), $crate::sail::types::SlType::$typ);
+    };
+}
+
+macro_rules! typep {
+    ( Ref $($mode:ident)? ; $var: ident ) => {
+        $crate::sail::get_type($var) == $crate::sail::types::SlType::Ref
+            $(&& $crate::sail::ref_mode($var) == $crate::sail::types::SlRefMode::$mode)?
+    };
+    ( Vec $($mode:ident)? ; $var: ident ) => {
+        $crate::sail::get_type($var) == $crate::sail::types::SlType::Vec
+            $(&& $crate::sail::vec_mode($var) == $crate::sail::types::SlVecMode::$mode)?
+    };
+    ( Map $($mode:ident)? ; $var: ident ) => {
+        $crate::sail::get_type($var) == $crate::sail::types::SlType::Map
+            $(&& $crate::sail::map_mode($var) == $crate::sail::types::SlMapMode::$mode)?
+    };
+    ( Proc $($mode:ident)? ; $var: ident ) => {
+        $crate::sail::get_type($var) == $crate::sail::types::SlType::Proc
+            $(&& $crate::sail::proc_mode($var) == $crate::sail::types::SlProcMode::$mode)?
+    };
+    ( Symbol $($mode:ident)? ; $var: ident ) => {
+        $crate::sail::get_type($var) == $crate::sail::types::SlType::Symbol
+            $(&& $crate::sail::sym_mode($var) == $crate::sail::types::SlSymbolMode::$mode)?
+    };
+    ( ; $typ:ident ; $var: ident ) => {
+        $crate::sail::get_type($var) == $crate::sail::types::SlType::$typ
     };
 }
 
