@@ -55,6 +55,10 @@ pub enum SlType {
     Other = 15,
 }
 
+// TODO: potential change: halve the number of top level types (or
+// reduce the refct size) and add a "shared" bit to indicate that a
+// value may be read and / or written by other threads
+
 pub const HEAD_LEN: u8 = 2;
 pub const PTR_LEN: u8 = 8;
 pub const VEC_SH_LEN: u8 = 4;

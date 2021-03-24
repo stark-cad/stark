@@ -101,8 +101,13 @@ unsafe fn value_ptr(loc: *mut SlHead) -> *mut u8 {
     } as isize)
 }
 
-unsafe fn init_ref(list_elt: bool, mode: SlRefMode) -> *mut SlHead {
-    let ptr = memmgt::alloc(PTR_LEN as usize, list_elt, SlType::Ref);
+unsafe fn init_ref(sector: *mut memmgt::MemSector, list_elt: bool, mode: SlRefMode) -> *mut SlHead {
+    let size = match mode {
+        SlRefMode::QSend => 2 * PTR_LEN,
+        _ => PTR_LEN,
+    };
+
+    let ptr = memmgt::alloc(sector, size as usize, list_elt, SlType::Ref);
 
     if mode != SlRefMode::List {
         set_cfg_bits(ptr, mode as u8);
@@ -117,7 +122,12 @@ unsafe fn init_ref(list_elt: bool, mode: SlRefMode) -> *mut SlHead {
 }
 
 // TODO: bit vectors
-unsafe fn init_vec(list_elt: bool, mode: SlVecMode, cap: u16) -> *mut SlHead {
+unsafe fn init_vec(
+    sector: *mut memmgt::MemSector,
+    list_elt: bool,
+    mode: SlVecMode,
+    cap: u16,
+) -> *mut SlHead {
     let size = VEC_SH_LEN as usize
         + (match mode {
             SlVecMode::Default => PTR_LEN,
@@ -127,7 +137,7 @@ unsafe fn init_vec(list_elt: bool, mode: SlVecMode, cap: u16) -> *mut SlHead {
         } as usize
             * cap as usize);
 
-    let ptr = memmgt::alloc(size, list_elt, SlType::Vec);
+    let ptr = memmgt::alloc(sector, size, list_elt, SlType::Vec);
 
     if mode != SlVecMode::Default {
         set_cfg_bits(ptr, mode as u8);
@@ -139,11 +149,17 @@ unsafe fn init_vec(list_elt: bool, mode: SlVecMode, cap: u16) -> *mut SlHead {
 }
 
 // Maps will probably all use the same mode for now (list out of each hash value entry)
-unsafe fn init_map(list_elt: bool, mode: SlMapMode, size: u16) -> *mut SlHead {
+unsafe fn init_map(
+    sector: *mut memmgt::MemSector,
+    list_elt: bool,
+    mode: SlMapMode,
+    size: u16,
+) -> *mut SlHead {
     let ptr;
     match mode {
         SlMapMode::Assoc => {
             ptr = memmgt::alloc(
+                sector,
                 MAP_SH_LEN as usize + (PTR_LEN as usize * size as usize),
                 list_elt,
                 SlType::Map,
@@ -160,7 +176,7 @@ unsafe fn init_map(list_elt: bool, mode: SlMapMode, size: u16) -> *mut SlHead {
             }
         }
         SlMapMode::Alist => {
-            ptr = memmgt::alloc(PTR_LEN as usize, list_elt, SlType::Map);
+            ptr = memmgt::alloc(sector, PTR_LEN as usize, list_elt, SlType::Map);
             set_cfg_bits(ptr, mode as u8);
             ptr::write_unaligned(value_ptr(ptr) as *mut *mut SlHead, ptr::null_mut());
         }
@@ -169,18 +185,29 @@ unsafe fn init_map(list_elt: bool, mode: SlMapMode, size: u16) -> *mut SlHead {
     ptr
 }
 
-unsafe fn init_proc(list_elt: bool, mode: SlProcMode, argct: u16) -> *mut SlHead {
+unsafe fn init_proc(
+    sector: *mut memmgt::MemSector,
+    list_elt: bool,
+    mode: SlProcMode,
+    argct: u16,
+) -> *mut SlHead {
     let ptr;
     match mode {
         SlProcMode::Lambda => {
             ptr = memmgt::alloc(
+                sector,
                 (PROC_SH_LEN + PTR_LEN) as usize + (SYMBOL_ID_LEN as usize * argct as usize),
                 list_elt,
                 SlType::Proc,
             );
         }
         SlProcMode::Native => {
-            ptr = memmgt::alloc((PROC_SH_LEN + PTR_LEN) as usize, list_elt, SlType::Proc);
+            ptr = memmgt::alloc(
+                sector,
+                (PROC_SH_LEN + PTR_LEN) as usize,
+                list_elt,
+                SlType::Proc,
+            );
             set_cfg_bits(ptr, mode as u8);
         }
     }
@@ -195,15 +222,21 @@ unsafe fn init_proc(list_elt: bool, mode: SlProcMode, argct: u16) -> *mut SlHead
     ptr
 }
 
-pub unsafe fn init_symbol(list_elt: bool, mode: SlSymbolMode, len: u16) -> *mut SlHead {
+pub unsafe fn init_symbol(
+    sector: *mut memmgt::MemSector,
+    list_elt: bool,
+    mode: SlSymbolMode,
+    len: u16,
+) -> *mut SlHead {
     let ptr;
 
     match mode {
         SlSymbolMode::ById => {
-            ptr = memmgt::alloc(SYMBOL_ID_LEN as usize, list_elt, SlType::Symbol);
+            ptr = memmgt::alloc(sector, SYMBOL_ID_LEN as usize, list_elt, SlType::Symbol);
         }
         SlSymbolMode::ByStr => {
             ptr = memmgt::alloc(
+                sector,
                 SYMBOL_SH_LEN as usize + len as usize,
                 list_elt,
                 SlType::Symbol,
@@ -216,14 +249,15 @@ pub unsafe fn init_symbol(list_elt: bool, mode: SlSymbolMode, len: u16) -> *mut 
     ptr
 }
 
-unsafe fn init_keyword(list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(SYMBOL_ID_LEN as usize, list_elt, SlType::Keyword);
+unsafe fn init_keyword(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
+    let ptr = memmgt::alloc(sector, SYMBOL_ID_LEN as usize, list_elt, SlType::Keyword);
 
     ptr
 }
 
-unsafe fn init_string(list_elt: bool, cap: u16) -> *mut SlHead {
+unsafe fn init_string(sector: *mut memmgt::MemSector, list_elt: bool, cap: u16) -> *mut SlHead {
     let ptr = memmgt::alloc(
+        sector,
         STRING_SH_LEN as usize + cap as usize,
         list_elt,
         SlType::String,
@@ -237,52 +271,58 @@ unsafe fn init_string(list_elt: bool, cap: u16) -> *mut SlHead {
     ptr
 }
 
-unsafe fn init_fixint(list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(FIXNUM_64_LEN as usize, list_elt, SlType::FixInt);
+unsafe fn init_fixint(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
+    let ptr = memmgt::alloc(sector, FIXNUM_64_LEN as usize, list_elt, SlType::FixInt);
 
     ptr
 }
 
-unsafe fn init_fixfloat(list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(FIXNUM_64_LEN as usize, list_elt, SlType::FixFloat);
+unsafe fn init_fixfloat(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
+    let ptr = memmgt::alloc(sector, FIXNUM_64_LEN as usize, list_elt, SlType::FixFloat);
 
     ptr
 }
 
-unsafe fn init_mpint(list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(MP_INT_LEN as usize, list_elt, SlType::MpInt);
+unsafe fn init_mpint(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
+    let ptr = memmgt::alloc(sector, MP_INT_LEN as usize, list_elt, SlType::MpInt);
 
     ptr::write_unaligned(value_ptr(ptr) as *mut rug::Integer, rug::Integer::new());
 
     ptr
 }
 
-unsafe fn init_mpfloat(list_elt: bool, prec: u32) -> *mut SlHead {
-    let ptr = memmgt::alloc(MP_FLOAT_LEN as usize, list_elt, SlType::MpFloat);
+unsafe fn init_mpfloat(sector: *mut memmgt::MemSector, list_elt: bool, prec: u32) -> *mut SlHead {
+    let ptr = memmgt::alloc(sector, MP_FLOAT_LEN as usize, list_elt, SlType::MpFloat);
 
     ptr::write_unaligned(value_ptr(ptr) as *mut rug::Float, rug::Float::new(prec));
 
     ptr
 }
 
-unsafe fn init_rational(list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(RATIONAL_LEN as usize, list_elt, SlType::Rational);
+unsafe fn init_rational(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
+    let ptr = memmgt::alloc(sector, RATIONAL_LEN as usize, list_elt, SlType::Rational);
 
     ptr::write_unaligned(value_ptr(ptr) as *mut rug::Rational, rug::Rational::new());
 
     ptr
 }
 
-unsafe fn init_complex(list_elt: bool, prec: u32) -> *mut SlHead {
-    let ptr = memmgt::alloc(COMPLEX_LEN as usize, list_elt, SlType::Complex);
+unsafe fn init_complex(sector: *mut memmgt::MemSector, list_elt: bool, prec: u32) -> *mut SlHead {
+    let ptr = memmgt::alloc(sector, COMPLEX_LEN as usize, list_elt, SlType::Complex);
 
     ptr::write_unaligned(value_ptr(ptr) as *mut rug::Complex, rug::Complex::new(prec));
 
     ptr
 }
 
-unsafe fn init_bool(list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(0, list_elt, SlType::Bool);
+unsafe fn init_bool(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
+    let ptr = memmgt::alloc(sector, 0, list_elt, SlType::Bool);
+
+    ptr
+}
+
+unsafe fn init_err(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
+    let ptr = memmgt::alloc(sector, 0, list_elt, SlType::Err);
 
     ptr
 }
@@ -467,9 +507,9 @@ unsafe fn map_get_size(loc: *mut SlHead) -> u16 {
 /// TODO: automatically resize as needed (probably as an option) (need "fill" field in subhead)
 /// TODO: clean up shadowed entries sometime
 unsafe fn map_insert(loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
-    typechk!(loc == Map);
+    typechk!(Map ; loc);
 
-    let entry = cons_copy(true, key, val);
+    let entry = cons_copy(memmgt::which_mem_sector(loc), true, key, val);
     let pos;
 
     match map_mode(loc) {
@@ -495,7 +535,7 @@ unsafe fn map_insert(loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
 
 /// Looks up a key in a map, returning the key-value pair
 unsafe fn map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
-    typechk!(loc == Map);
+    typechk!(Map ; loc);
 
     let mut entry;
 
@@ -516,8 +556,7 @@ unsafe fn map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
 
     loop {
         if entry == ptr::null_mut() {
-            let out = init_bool(false);
-            bool_set(out, false);
+            let out = init_err(memmgt::which_mem_sector(loc), false);
             return out;
         }
 
@@ -559,7 +598,7 @@ unsafe fn proc_get_arg(loc: *mut SlHead, ind: u16) -> *mut SlHead {
             .offset(ind as isize * SYMBOL_ID_LEN as isize) as *mut u32,
     );
 
-    let sym = init_symbol(false, SlSymbolMode::ById, 0);
+    let sym = init_symbol(memmgt::which_mem_sector(loc), false, SlSymbolMode::ById, 0);
 
     sym_set_id(sym, id);
 
@@ -720,20 +759,29 @@ unsafe fn bool_get(loc: *mut SlHead) -> bool {
     ptr::read_unaligned(loc as *mut u8) & 0b00000001 != 0
 }
 
-unsafe fn copy_val(src: *mut SlHead, list_elt: bool) -> *mut SlHead {
+unsafe fn copy_val(
+    sector: *mut memmgt::MemSector,
+    src: *mut SlHead,
+    list_elt: bool,
+) -> *mut SlHead {
     let (typ, siz, cfg) = (get_type(src), get_size(src), get_cfg_bits(src));
 
-    let dst = memmgt::alloc(siz, list_elt, typ);
+    let dst = memmgt::alloc(sector, siz, list_elt, typ);
     set_cfg_bits(dst, cfg);
     ptr::copy_nonoverlapping(value_ptr(src), value_ptr(dst), siz);
 
     dst
 }
 
-unsafe fn cons_copy(list_elt: bool, car: *mut SlHead, cdr: *mut SlHead) -> *mut SlHead {
-    let new_cdr = copy_val(cdr, false);
-    let new_car = copy_val(car, true);
-    let head = init_ref(list_elt, SlRefMode::List);
+unsafe fn cons_copy(
+    sector: *mut memmgt::MemSector,
+    list_elt: bool,
+    car: *mut SlHead,
+    cdr: *mut SlHead,
+) -> *mut SlHead {
+    let new_cdr = copy_val(sector, cdr, false);
+    let new_car = copy_val(sector, car, true);
+    let head = init_ref(sector, list_elt, SlRefMode::List);
 
     set_list_elt(new_car, new_cdr);
     ref_set(head, new_car);
@@ -766,7 +814,7 @@ unsafe fn cdr(loc: *mut SlHead) -> *mut SlHead {
     if nil_p(cadr) {
         cadr
     } else if list_elt_p(cadr) {
-        let ptr = init_ref(false, SlRefMode::List);
+        let ptr = init_ref(memmgt::which_mem_sector(loc), false, SlRefMode::List);
         ref_set(ptr, cadr);
         ptr
     } else {
@@ -776,9 +824,9 @@ unsafe fn cdr(loc: *mut SlHead) -> *mut SlHead {
 
 /// An environment is a list of maps: should function as a LIFO stack
 /// TODO: deal somewhere with dynamic bindings, lexical bindings, argument bindings
-pub unsafe fn env_create() -> *mut SlHead {
-    let head = init_ref(false, SlRefMode::List);
-    let base = init_map(true, SlMapMode::Assoc, 255);
+pub unsafe fn env_create(sector: *mut memmgt::MemSector) -> *mut SlHead {
+    let head = init_ref(sector, false, SlRefMode::List);
+    let base = init_map(sector, true, SlMapMode::Assoc, 255);
 
     ref_set(head, base);
 
@@ -796,8 +844,7 @@ unsafe fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> *mut SlHead {
 
     let next = cdr(env);
     if nil_p(next) {
-        let out = init_bool(false);
-        bool_set(out, false);
+        let out = init_err(memmgt::which_mem_sector(env), false);
         out
     } else {
         env_lookup(next, sym)
@@ -805,8 +852,8 @@ unsafe fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> *mut SlHead {
 }
 
 // TODO: use dynamic map mode
-unsafe fn env_new_layer(min_size: u16) -> *mut SlHead {
-    init_map(true, SlMapMode::Alist, min_size * 2)
+unsafe fn env_new_layer(sector: *mut memmgt::MemSector, min_size: u16) -> *mut SlHead {
+    init_map(sector, true, SlMapMode::Alist, min_size * 2)
 }
 
 pub unsafe fn env_layer_ins_entry(layer: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
@@ -815,8 +862,8 @@ pub unsafe fn env_layer_ins_entry(layer: *mut SlHead, key: *mut SlHead, val: *mu
 
 /// Uses Alist every time
 /// TODO: many improvements / optimizations possible throughout env system
-unsafe fn env_new_arg_layer() -> *mut SlHead {
-    init_map(true, SlMapMode::Alist, 0)
+unsafe fn env_new_arg_layer(sector: *mut memmgt::MemSector) -> *mut SlHead {
+    init_map(sector, true, SlMapMode::Alist, 0)
 }
 
 unsafe fn env_arg_layer_get(layer: *mut SlHead, idx: u16) -> *mut SlHead {
@@ -834,7 +881,7 @@ unsafe fn env_arg_layer_get(layer: *mut SlHead, idx: u16) -> *mut SlHead {
 unsafe fn env_arg_layer_ins(layer: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
     typechk!(Map Alist ; layer);
 
-    let entry = cons_copy(true, key, val);
+    let entry = cons_copy(memmgt::which_mem_sector(layer), true, key, val);
     let pos = value_ptr(layer) as *mut *mut SlHead;
 
     let mut next = ptr::read_unaligned(pos);
@@ -864,13 +911,13 @@ unsafe fn env_pop_layer(env: *mut SlHead) {
 /// This should take the form of a bimap, a 1 to 1 association between strings and IDs
 /// Two maps, one for each direction, pointing to the same set of cons cells (id . string)
 /// Must keep track of id to assign (counter) and reclaim unused slots if counter reaches max
-pub unsafe fn sym_tab_create() -> *mut SlHead {
-    let tbl = init_vec(false, SlVecMode::Default, 3);
+pub unsafe fn sym_tab_create(sector: *mut memmgt::MemSector) -> *mut SlHead {
+    let tbl = init_vec(sector, false, SlVecMode::Default, 3);
 
-    let id_to_str = init_map(false, SlMapMode::Assoc, 255);
-    let str_to_id = init_map(false, SlMapMode::Assoc, 255);
+    let id_to_str = init_map(sector, false, SlMapMode::Assoc, 255);
+    let str_to_id = init_map(sector, false, SlMapMode::Assoc, 255);
 
-    let id_count = init_symbol(false, SlSymbolMode::ById, 0);
+    let id_count = init_symbol(sector, false, SlSymbolMode::ById, 0);
     sym_set_id(id_count, 0);
 
     vec_push(tbl, id_to_str);
@@ -885,11 +932,13 @@ pub unsafe fn sym_tab_insert(tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
     typechk!(Vec ; tbl);
     typechk!(Symbol ByStr ; sym);
 
+    let sector = memmgt::which_mem_sector(tbl);
+
     let next_id = vec_idx(tbl, 2);
     let id_num = sym_get_id(next_id);
 
     let entry = {
-        let id = copy_val(next_id, true);
+        let id = copy_val(sector, next_id, true);
         set_list_elt(id, sym);
         id
     };
@@ -910,13 +959,13 @@ pub unsafe fn sym_tab_insert(tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
     let mut str_pos = ptr::read_unaligned(value_ptr(str_to_id).offset(str_idx) as *mut *mut SlHead);
 
     let id_entry = {
-        let ptr = init_ref(true, SlRefMode::List);
+        let ptr = init_ref(sector, true, SlRefMode::List);
         ref_set(ptr, entry);
         ptr
     };
 
     let str_entry = {
-        let ptr = init_ref(true, SlRefMode::List);
+        let ptr = init_ref(sector, true, SlRefMode::List);
         ref_set(ptr, entry);
         ptr
     };
@@ -969,8 +1018,7 @@ unsafe fn sym_tab_lookup_by_id(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHea
 
     loop {
         if entry == ptr::null_mut() {
-            let out = init_bool(false);
-            bool_set(out, false);
+            let out = init_err(memmgt::which_mem_sector(tbl), false);
             return out;
         }
 
@@ -999,8 +1047,7 @@ unsafe fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHe
 
     loop {
         if entry == ptr::null_mut() {
-            let out = init_bool(false);
-            bool_set(out, false);
+            let out = init_err(memmgt::which_mem_sector(tbl), false);
             return out;
         }
 
@@ -1026,8 +1073,7 @@ unsafe fn sym_tab_lookup_id_num(tbl: *mut SlHead, id: u32) -> *mut SlHead {
 
     loop {
         if entry.is_null() {
-            let out = init_bool(false);
-            bool_set(out, false);
+            let out = init_err(memmgt::which_mem_sector(tbl), false);
             return out;
         }
 
@@ -1058,7 +1104,12 @@ unsafe fn sym_tab_get_id(tbl: *mut SlHead, sym: &str) -> u32 {
         entry = next_list_elt(entry);
     }
 
-    let record = init_symbol(false, SlSymbolMode::ByStr, sym.len() as u16);
+    let record = init_symbol(
+        memmgt::which_mem_sector(tbl),
+        false,
+        SlSymbolMode::ByStr,
+        sym.len() as u16,
+    );
     sym_set_str(record, sym.as_bytes());
 
     sym_tab_insert(tbl, record)
@@ -1109,7 +1160,7 @@ impl fmt::Display for SlContextVal {
                                     .unwrap()
                             }
                             SlVecMode::FlatF32 => write!(f, "{}", vec_idx_f32(value, idx)).unwrap(),
-                            _ => write!(f, "oof").unwrap(),
+                            _ => write!(f, "can't display this vector").unwrap(),
                         }
 
                         if idx < len - 1 {
@@ -1197,9 +1248,11 @@ pub fn repl(stream_in: std::io::Stdin) {
     // TODO: Consider stack-like environment per function
     // TODO: Start to think about namespaces etc
 
+    let sector = unsafe { memmgt::acquire_mem_sector(1000000) };
+
     // Create persistent environment and symbol table
-    let tbl = unsafe { sym_tab_create() };
-    let env = unsafe { env_create() };
+    let tbl = unsafe { sym_tab_create(sector) };
+    let env = unsafe { env_create(sector) };
 
     // Load standard / base definitions into environment and symbol table
     environment_setup(tbl, env);
@@ -1224,14 +1277,16 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         };
 
-        println!("{}", context(tbl, result).to_string())
+        println!("{}\n", context(tbl, result).to_string())
     }
 }
 
 /// Interprets a Sail expression, returning the result
 pub fn interpret(code: &String) -> Result<String, SailErr> {
-    let tbl = unsafe { sym_tab_create() };
-    let env = unsafe { env_create() };
+    let sector = unsafe { memmgt::acquire_mem_sector(100000) };
+
+    let tbl = unsafe { sym_tab_create(sector) };
+    let env = unsafe { env_create(sector) };
 
     environment_setup(tbl, env);
 
@@ -1243,7 +1298,7 @@ pub fn interpret(code: &String) -> Result<String, SailErr> {
 
 /// TODO: fix functions so such insanity isn't required to get them in place
 pub fn environment_setup(tbl: *mut SlHead, env: *mut SlHead) {
-    // Special form tblbols
+    // Special form symbols
     insert_special_form(tbl, env, b"def");
     insert_special_form(tbl, env, b"fn");
     insert_special_form(tbl, env, b"if");
@@ -1259,9 +1314,11 @@ pub fn environment_setup(tbl: *mut SlHead, env: *mut SlHead) {
 
 fn insert_special_form(tbl: *mut SlHead, env: *mut SlHead, name: &[u8]) {
     unsafe {
-        let form_str = init_symbol(false, SlSymbolMode::ByStr, name.len() as u16);
+        let sector = memmgt::which_mem_sector(tbl);
+
+        let form_str = init_symbol(sector, false, SlSymbolMode::ByStr, name.len() as u16);
         sym_set_str(form_str, name);
-        let form_id = init_symbol(false, SlSymbolMode::ById, 0);
+        let form_id = init_symbol(sector, false, SlSymbolMode::ById, 0);
         sym_set_id(form_id, sym_tab_insert(tbl, form_str));
 
         env_layer_ins_entry(car(env), form_id, form_str);
@@ -1277,12 +1334,14 @@ fn insert_native_proc(
     argct: u16,
 ) {
     unsafe {
-        let proc_str = init_symbol(false, SlSymbolMode::ByStr, name.len() as u16);
+        let sector = memmgt::which_mem_sector(tbl);
+
+        let proc_str = init_symbol(sector, false, SlSymbolMode::ByStr, name.len() as u16);
         sym_set_str(proc_str, name);
-        let proc_id = init_symbol(false, SlSymbolMode::ById, 0);
+        let proc_id = init_symbol(sector, false, SlSymbolMode::ById, 0);
         sym_set_id(proc_id, sym_tab_insert(tbl, proc_str));
 
-        let proc_fn = init_proc(false, SlProcMode::Native, argct);
+        let proc_fn = init_proc(sector, false, SlProcMode::Native, argct);
         proc_native_set(proc_fn, func);
         env_layer_ins_entry(car(env), proc_id, proc_fn);
     }
@@ -1290,10 +1349,14 @@ fn insert_native_proc(
 
 /// TODO: improve macro to allow adding functions to environment?
 /// TODO: type checks and variable length arglists for native functions
+/// TODO: add memory sector to function signature
+/// TODO: generate these functions somehow else if macros won't cut it
 macro_rules! sail_fn {
-    ( $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
+    ( $sector:ident; $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
         $(
             unsafe fn $fn_name (_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+                let $sector = memmgt::which_mem_sector(_tbl);
+
                 let mut _ind = 0;
                 $(
                     let $args = env_arg_layer_get(car(env), _ind);
@@ -1308,22 +1371,24 @@ macro_rules! sail_fn {
 
 // TODO: native functions MUST be fully safe to use
 sail_fn! {
+    sector;
+
     add [fst, snd] {
-        let out = init_fixint(false);
+        let out = init_fixint(sector, false);
         let result = fixint_get(fst) + fixint_get(snd);
         fixint_set(out, result);
         return out;
     }
 
     sub [fst, snd] {
-        let out = init_fixint(false);
+        let out = init_fixint(sector, false);
         let result = fixint_get(fst) - fixint_get(snd);
         fixint_set(out, result);
         return out;
     }
 
     equal [fst, snd] {
-        let out = init_bool(false);
+        let out = init_bool(sector, false);
         let result = fixint_get(fst) == fixint_get(snd);
         bool_set(out, result);
         return out;
@@ -1334,23 +1399,25 @@ sail_fn! {
 unsafe fn printenv(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
     println!("{}", context(_tbl, env).to_string());
     // TODO: from_bool function or similar
-    let out = init_bool(false);
+    let out = init_bool(memmgt::which_mem_sector(_tbl), false);
     bool_set(out, true);
     return out;
 }
 
 unsafe fn color(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+    let sector = memmgt::which_mem_sector(_tbl);
+
     let r = env_arg_layer_get(car(env), 0);
     let g = env_arg_layer_get(car(env), 1);
     let b = env_arg_layer_get(car(env), 2);
     let a = env_arg_layer_get(car(env), 3);
 
-    let qstr = init_symbol(false, SlSymbolMode::ByStr, 7);
+    let qstr = init_symbol(sector, false, SlSymbolMode::ByStr, 7);
     sym_set_str(qstr, b"g_queue");
 
     let queue = env_lookup(env, sym_tab_lookup_by_str(_tbl, qstr));
 
-    let vec = init_vec(false, SlVecMode::FlatF32, 4);
+    let vec = init_vec(sector, false, SlVecMode::FlatF32, 4);
 
     vec_push_f32(vec, fixfloat_get(r) as f32);
     vec_push_f32(vec, fixfloat_get(g) as f32);
@@ -1359,7 +1426,7 @@ unsafe fn color(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
 
     queue::queue_tx(queue, vec);
 
-    let out = init_bool(false);
+    let out = init_bool(sector, false);
     bool_set(out, true);
     return out;
 }
@@ -1371,6 +1438,8 @@ pub unsafe fn eval(
     env: *mut SlHead,
     expr: *mut SlHead,
 ) -> Result<*mut SlHead, SailErr> {
+    let sector = memmgt::which_mem_sector(expr);
+
     match get_type(expr) {
         SlType::Symbol => return Ok(env_lookup(env, expr)),
         SlType::Ref => {
@@ -1402,7 +1471,7 @@ pub unsafe fn eval(
                         "fn" => {
                             let argvec = car(args);
                             let argct = vec_get_len(argvec);
-                            let out = init_proc(false, SlProcMode::Lambda, argct);
+                            let out = init_proc(sector, false, SlProcMode::Lambda, argct);
                             for i in 0..argct {
                                 proc_set_arg(out, i, sym_get_id(vec_idx(argvec, i)));
                             }
@@ -1449,10 +1518,12 @@ unsafe fn apply(
     proc: *mut SlHead,
     args: *mut SlHead,
 ) -> Result<*mut SlHead, SailErr> {
+    let sector = memmgt::which_mem_sector(proc);
+
     let argct = proc_get_argct(proc);
     let mode = proc_mode(proc);
 
-    let proc_env = env_new_arg_layer();
+    let proc_env = env_new_arg_layer(sector);
 
     let mut arglist = args;
 
@@ -1472,7 +1543,7 @@ unsafe fn apply(
                 let mut spec_str = String::from("@");
                 spec_str.push_str(&(i.to_string()));
 
-                let spec_sym_id = init_symbol(false, SlSymbolMode::ById, 0);
+                let spec_sym_id = init_symbol(sector, false, SlSymbolMode::ById, 0);
                 sym_set_id(spec_sym_id, sym_tab_get_id(tbl, &spec_str));
 
                 env_arg_layer_ins(proc_env, spec_sym_id, curarg);
@@ -1512,7 +1583,10 @@ mod tests {
 
     #[test]
     fn parses() {
-        let tbl = unsafe { sym_tab_create() };
+        let tbl = unsafe {
+            let sec = memmgt::acquire_mem_sector(10000);
+            sym_tab_create(sec)
+        };
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
         let val = parser::parse(tbl, &exp).unwrap();
