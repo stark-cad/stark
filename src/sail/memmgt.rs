@@ -4,10 +4,19 @@ use std::alloc;
 use std::mem;
 use std::ptr;
 
+/// TODO: allow the user to handle atomic operations if needed?
+/// TODO: global memory, thread local memory
+/// TODO: region and block instead of sector and zone
+
+// TODO: if this is going to remain, writes must be atomic
+// TODO: might need a different / nicer data structure
+/// TODO: three parallel arrays altered via atomic operations (lock for expansion if needed)
 /// zone start; zone end; sector the zone belongs to
-/// TODO: if this is going to remain, writes must be atomic
-/// TODO: might need a different / nicer data structure
 static mut SECTOR_TABLE: Vec<(usize, usize, *mut MemSector)> = vec![];
+
+// pub fn create(region: *mut MemSector, typ: u32, list: bool) -> *mut SlHead {
+
+// }
 
 // TODO: *garbage collection*
 // TODO: separate zones for values with static size and those with variable size?
@@ -92,7 +101,7 @@ const MEM_SECTOR_HEAD_SIZE: usize = mem::size_of::<MemSector>();
 const MEM_ZONE_HEAD_SIZE: usize = mem::size_of::<MemZone>();
 
 pub unsafe fn acquire_mem_sector(zone_size: usize) -> *mut MemSector {
-    log::debug!("Creating mem sector / region");
+    // log::debug!("Creating mem sector / region");
 
     let out = Box::into_raw(Box::from(MemSector {
         zone_size,
@@ -121,7 +130,7 @@ pub unsafe fn which_mem_sector(ptr: *mut SlHead) -> *mut MemSector {
 unsafe fn new_mem_zone(sector: *mut MemSector) {
     assert_ne!(sector, ptr::null_mut());
 
-    log::debug!("Creating mem zone / block");
+    // log::debug!("Creating mem zone / block");
 
     let sector_head = sector.as_mut().unwrap();
     let size = sector_head.zone_size;

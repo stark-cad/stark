@@ -1,3 +1,5 @@
+//! TODO: Gradual typing; more extensible type system; subtypes
+
 macro_rules! typechk {
     ( $var:ident == $typ:ident ) => {
         typechk!(; $typ ; $var);
@@ -34,31 +36,32 @@ macro_rules! typechk {
 }
 
 macro_rules! typep {
-    ( Ref $($mode:ident)? ; $var: ident ) => {
+    ( Ref $($mode:ident)? ; $var:ident ) => {
         $crate::sail::get_type($var) == $crate::sail::types::SlType::Ref
             $(&& $crate::sail::ref_mode($var) == $crate::sail::types::SlRefMode::$mode)?
     };
-    ( Vec $($mode:ident)? ; $var: ident ) => {
+    ( Vec $($mode:ident)? ; $var:ident ) => {
         $crate::sail::get_type($var) == $crate::sail::types::SlType::Vec
             $(&& $crate::sail::vec_mode($var) == $crate::sail::types::SlVecMode::$mode)?
     };
-    ( Map $($mode:ident)? ; $var: ident ) => {
+    ( Map $($mode:ident)? ; $var:ident ) => {
         $crate::sail::get_type($var) == $crate::sail::types::SlType::Map
             $(&& $crate::sail::map_mode($var) == $crate::sail::types::SlMapMode::$mode)?
     };
-    ( Proc $($mode:ident)? ; $var: ident ) => {
+    ( Proc $($mode:ident)? ; $var:ident ) => {
         $crate::sail::get_type($var) == $crate::sail::types::SlType::Proc
             $(&& $crate::sail::proc_mode($var) == $crate::sail::types::SlProcMode::$mode)?
     };
-    ( Symbol $($mode:ident)? ; $var: ident ) => {
+    ( Symbol $($mode:ident)? ; $var:ident ) => {
         $crate::sail::get_type($var) == $crate::sail::types::SlType::Symbol
             $(&& $crate::sail::sym_mode($var) == $crate::sail::types::SlSymbolMode::$mode)?
     };
-    ( ; $typ:ident ; $var: ident ) => {
+    ( ; $typ:ident ; $var:ident ) => {
         $crate::sail::get_type($var) == $crate::sail::types::SlType::$typ
     };
 }
 
+/// TODO: Strings are just Vecs; Keywords are just Symbols
 /// Primary Sail types; each Sail value must be one of these
 #[derive(Debug, PartialEq, Eq)]
 #[repr(u8)]

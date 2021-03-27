@@ -16,8 +16,16 @@ fn main() {
     // TODO: add useful logging throughout the program
     simple_logger::SimpleLogger::new().init().unwrap();
 
+    // cargo run file <filename> to run a Sail file
+    // cargo run repl for Sail REPL
     let args: Vec<String> = env::args().collect();
-    if args.len() >= 2 {
+    if args.len() >= 3 {
+        match sail::run_file(&args[2]) {
+            Ok(out) => println!("{}", out),
+            Err(_) => println!("Error"),
+        }
+        std::process::exit(0);
+    } else if args.len() >= 2 {
         sail::repl(io::stdin())
     }
 
@@ -72,6 +80,10 @@ fn main() {
         cr_recv as usize,
     );
 
+    // This thread handles all rendering to the graphical frame: the output interface
+    let render =
+        thread::spawn(move || graphics::render_loop(NAME, SIZE, &window, mr_recv, cr_recv));
+
     // This thread manages the program, treating the actual main thread as a source of user input
     let manager = thread::spawn(move || {
         let (sl_tbl, sl_env) = (sl_tbl as *mut sail::SlHead, sl_env as *mut sail::SlHead);
@@ -83,10 +95,6 @@ fn main() {
             sail::sym_set_id(send_id, sail::sym_tab_get_id(sl_tbl, "g_queue"));
             sail::env_layer_ins_entry(sail::car(sl_env), send_id, mr_send);
         }
-
-        let _a = mr_recv as usize;
-        let _b = cr_recv as usize;
-        let render = thread::spawn(move || graphics::render_loop(NAME, SIZE, &window, _a, _b));
 
         loop {
             let mut curr_stat = inputs.lock().unwrap();
@@ -192,13 +200,13 @@ fn main() {
         }
     });
 
+    // This loop gets input from the user and detects changes to the context
     // Completely takes over the main thread; no code after this will run
-    // context.run(input_status, tx, manager);
     context::run_loop(
         event_loop,
-        std::iter::once(manager),
-        context_sector as usize,
-        cm_send as usize,
-        cr_send as usize,
+        vec![manager, render].into_iter(),
+        context_sector,
+        cm_send,
+        cr_send,
     );
 }

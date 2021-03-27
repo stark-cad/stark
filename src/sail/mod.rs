@@ -42,7 +42,7 @@ pub unsafe fn get_type(loc: *mut SlHead) -> SlType {
 
 /// Returns the size of a valid Sail value
 unsafe fn get_size(loc: *mut SlHead) -> usize {
-    // There's a reason the casts are in every arm, not at the end
+    // There's a reason the `usize` casts are in every arm, not at the end
     match get_type(loc) {
         SlType::Ref => match ref_mode(loc) {
             SlRefMode::QSend => (PTR_LEN * 2) as usize,
@@ -1310,8 +1310,13 @@ pub fn repl(stream_in: std::io::Stdin) {
     }
 }
 
+pub fn run_file(filename: &str) -> Result<String, SailErr> {
+    let file = std::fs::read_to_string(filename).unwrap();
+    interpret(&file)
+}
+
 /// Interprets a Sail expression, returning the result
-pub fn interpret(code: &String) -> Result<String, SailErr> {
+pub fn interpret(code: &str) -> Result<String, SailErr> {
     let sector = unsafe { memmgt::acquire_mem_sector(100000) };
 
     let tbl = unsafe { sym_tab_create(sector) };
@@ -1329,6 +1334,7 @@ pub fn interpret(code: &String) -> Result<String, SailErr> {
 pub fn environment_setup(tbl: *mut SlHead, env: *mut SlHead) {
     // Special form symbols
     insert_special_form(tbl, env, b"def");
+    insert_special_form(tbl, env, b"do");
     insert_special_form(tbl, env, b"fn");
     insert_special_form(tbl, env, b"if");
     insert_special_form(tbl, env, b"quote");
@@ -1336,9 +1342,12 @@ pub fn environment_setup(tbl: *mut SlHead, env: *mut SlHead) {
     // Native functions
     insert_native_proc(tbl, env, b"+", add, 2);
     insert_native_proc(tbl, env, b"-", sub, 2);
+    insert_native_proc(tbl, env, b"mod", modulus, 2);
     insert_native_proc(tbl, env, b"=", equal, 2);
+    insert_native_proc(tbl, env, b"print", print, 1);
     insert_native_proc(tbl, env, b"printenv", printenv, 0);
     insert_native_proc(tbl, env, b"color", color, 4);
+    insert_native_proc(tbl, env, b"qtx", qtx, 2);
 }
 
 fn insert_special_form(tbl: *mut SlHead, env: *mut SlHead, name: &[u8]) {
@@ -1416,12 +1425,34 @@ sail_fn! {
         return out;
     }
 
+    modulus [fst, snd] {
+        let out = init_fixint(sector, false);
+        let result = fixint_get(fst) % fixint_get(snd);
+        fixint_set(out, result);
+        return out;
+    }
+
     equal [fst, snd] {
         let out = init_bool(sector, false);
         let result = fixint_get(fst) == fixint_get(snd);
         bool_set(out, result);
         return out;
     }
+
+    qtx [sender, item] {
+        queue::queue_tx(sender, item);
+
+        let out = init_bool(sector, false);
+        bool_set(out, true);
+        return out;
+    }
+}
+
+unsafe fn print(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+    let arg = env_arg_layer_get(car(env), 0);
+    println!("{}", context(_tbl, arg).to_string());
+    let out = init_ref(memmgt::which_mem_sector(_tbl), false, SlRefMode::List);
+    return out;
 }
 
 // TODO: sail_fn macro does not work for functions that access higher environment levels
@@ -1433,6 +1464,7 @@ unsafe fn printenv(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
     return out;
 }
 
+/// TODO: replace with Sail-defined function
 unsafe fn color(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
     let sector = memmgt::which_mem_sector(_tbl);
 
@@ -1496,6 +1528,20 @@ pub unsafe fn eval(
                                 eval(tbl, env, car(cdr(args)))?,
                             );
                             return Ok(car(args));
+                        }
+                        "do" => {
+                            let mut remain = args;
+                            let mut result = ptr::null_mut();
+                            while !nil_p(remain) {
+                                result = eval(tbl, env, car(remain))?;
+                                remain = cdr(remain)
+                            }
+                            if !result.is_null() {
+                                return Ok(result);
+                            } else {
+                                let out = init_ref(sector, false, SlRefMode::List);
+                                return Ok(out);
+                            }
                         }
                         "fn" => {
                             let argvec = car(args);

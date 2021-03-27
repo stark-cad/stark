@@ -31,7 +31,12 @@ fn read_value(
     let value;
 
     let mut c = *(chars.peek().unwrap());
-    while c.is_ascii_whitespace() {
+    while c.is_ascii_whitespace() || c == b';' {
+        if c == b';' {
+            while *(chars.peek().unwrap()) != b'\n' {
+                chars.next();
+            }
+        }
         chars.next();
         c = *(chars.peek().ok_or(SailErr::Error)?);
     }
@@ -396,7 +401,7 @@ fn read_special(
     elt: bool,
 ) -> Result<*mut SlHead, SailErr> {
     while {
-        let peek = chars.peek().unwrap();
+        let peek = chars.peek().unwrap_or(&b' ');
         match peek {
             b')' | b']' | b'}' => false,
             _ if peek.is_ascii_whitespace() => false,

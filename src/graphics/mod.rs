@@ -72,6 +72,8 @@ pub fn render_loop(
                                 sail::vec_idx_f32(next, 3),
                             ])
                             .unwrap();
+                    } else if sail::get_type(next) == sail::SlType::Keyword {
+                        println!("wow");
                     }
                 }
                 Err(_) => std::hint::spin_loop(),
