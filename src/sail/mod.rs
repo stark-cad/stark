@@ -711,24 +711,24 @@ mod tests {
 
     #[test]
     fn parses() {
-        let tbl = unsafe {
-            let sec = memmgt::acquire_mem_sector(10000);
-            sym_tab_create(sec)
+        let (reg, tbl) = unsafe {
+            let reg = memmgt::acquire_mem_region(10000);
+            (reg, prep_environment(reg).0)
         };
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
-        let val = parser::parse(tbl, &exp).unwrap();
+        let val = parser::parse(reg, tbl, &exp).unwrap();
         let out = context(tbl, val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("(() (()) ((((() ())))))");
-        let val = parser::parse(tbl, &exp).unwrap();
+        let val = parser::parse(reg, tbl, &exp).unwrap();
         let out = context(tbl, val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("((1 2 3 4) ;Comment\n5)");
         let gnd = String::from("((1 2 3 4) 5)");
-        let val = parser::parse(tbl, &exp).unwrap();
+        let val = parser::parse(reg, tbl, &exp).unwrap();
         let out = context(tbl, val).to_string();
         assert_eq!(gnd, out);
     }
