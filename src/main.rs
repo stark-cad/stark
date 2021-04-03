@@ -41,60 +41,61 @@ fn main() {
     let (mut w, mut h) = (SIZE[0], SIZE[1]);
     let (mut x, mut y) = (0, 0);
 
-    let main_sector = unsafe { sail::memmgt::acquire_mem_sector(1000000) };
-    let render_sector = unsafe { sail::memmgt::acquire_mem_sector(1000000) };
-    let context_sector = unsafe { sail::memmgt::acquire_mem_sector(100000) };
+    // let main_sector = unsafe { sail::memmgt::acquire_mem_sector(1000000) };
+    // let render_sector = unsafe { sail::memmgt::acquire_mem_sector(1000000) };
+    // let context_sector = unsafe { sail::memmgt::acquire_mem_sector(100000) };
 
-    let (sl_tbl, sl_env) = unsafe {
-        let tbl = sail::sym_tab_create(main_sector);
-        let env = sail::env_create(main_sector);
+    // let (sl_tbl, sl_env) = unsafe {
+    //     let tbl = sail::sym_tab_create(main_sector);
+    //     let env = sail::env_create(main_sector);
 
-        sail::environment_setup(tbl, env);
+    //     sail::environment_setup(tbl, env);
 
-        (tbl as usize, env as usize)
-    };
+    //     (tbl as usize, env as usize)
+    // };
 
-    let (mr_send, mr_recv) = unsafe { sail::queue::queue_create(main_sector, render_sector) };
-    let (cm_send, cm_recv) = unsafe { sail::queue::queue_create(context_sector, main_sector) };
-    let (cr_send, cr_recv) = unsafe { sail::queue::queue_create(context_sector, render_sector) };
+    // let (mr_send, mr_recv) = unsafe { sail::queue::queue_create(main_sector, render_sector) };
+    // let (cm_send, cm_recv) = unsafe { sail::queue::queue_create(context_sector, main_sector) };
+    // let (cr_send, cr_recv) = unsafe { sail::queue::queue_create(context_sector, render_sector) };
 
-    let (
-        main_sector,
-        render_sector,
-        context_sector,
-        mr_send,
-        mr_recv,
-        cm_send,
-        cm_recv,
-        cr_send,
-        cr_recv,
-    ) = (
-        main_sector as usize,
-        render_sector as usize,
-        context_sector as usize,
-        mr_send as usize,
-        mr_recv as usize,
-        cm_send as usize,
-        cm_recv as usize,
-        cr_send as usize,
-        cr_recv as usize,
-    );
+    // let (
+    //     main_sector,
+    //     render_sector,
+    //     context_sector,
+    //     mr_send,
+    //     mr_recv,
+    //     cm_send,
+    //     cm_recv,
+    //     cr_send,
+    //     cr_recv,
+    // ) = (
+    //     main_sector as usize,
+    //     render_sector as usize,
+    //     context_sector as usize,
+    //     mr_send as usize,
+    //     mr_recv as usize,
+    //     cm_send as usize,
+    //     cm_recv as usize,
+    //     cr_send as usize,
+    //     cr_recv as usize,
+    // );
 
     // This thread handles all rendering to the graphical frame: the output interface
-    let render =
-        thread::spawn(move || graphics::render_loop(NAME, SIZE, &window, mr_recv, cr_recv));
+    let render = thread::spawn(move || {
+        graphics::render_loop(NAME, SIZE, &window, 0, /*mr_recv*/ 0 /*cr_recv*/)
+    });
 
     // This thread manages the program, treating the actual main thread as a source of user input
     let manager = thread::spawn(move || {
-        let (sl_tbl, sl_env) = (sl_tbl as *mut sail::SlHead, sl_env as *mut sail::SlHead);
-        let main_sector = main_sector as *mut sail::memmgt::MemSector;
-        let (mr_send, cm_recv) = (mr_send as *mut sail::SlHead, cm_recv as *mut sail::SlHead);
+        // let (sl_tbl, sl_env) = (sl_tbl as *mut sail::SlHead, sl_env as *mut sail::SlHead);
+        // let main_sector = main_sector as *mut sail::memmgt::MemSector;
+        // let (mr_send, cm_recv) = (mr_send as *mut sail::SlHead, cm_recv as *mut sail::SlHead);
 
-        unsafe {
-            let send_id = sail::init_symbol(main_sector, false, sail::SlSymbolMode::ById, 0);
-            sail::sym_set_id(send_id, sail::sym_tab_get_id(sl_tbl, "g_queue"));
-            sail::env_layer_ins_entry(sail::car(sl_env), send_id, mr_send);
-        }
+        // unsafe {
+        //     let send_id = sail::init_symbol(main_sector, false, sail::SlSymbolMode::ById, 0);
+        //     sail::sym_set_id(send_id, sail::sym_tab_get_id(sl_tbl, "g_queue"));
+        //     sail::env_layer_ins_entry(sail::car(sl_env), send_id, mr_send);
+        // }
 
         loop {
             let mut curr_stat = inputs.lock().unwrap();
@@ -143,26 +144,26 @@ fn main() {
             // functions; call graphics functions from a Sail native
             // function?
 
-            let mut sl_input = String::new();
-            io::stdin().read_line(&mut sl_input).expect("Read Failure");
+            // let mut sl_input = String::new();
+            // io::stdin().read_line(&mut sl_input).expect("Read Failure");
 
-            let sl_expr = match sail::parser::parse(sl_tbl, &sl_input) {
-                Ok(out) => out,
-                Err(_) => {
-                    println!("Parse Error");
-                    continue;
-                }
-            };
+            // let sl_expr = match sail::parser::parse(sl_tbl, &sl_input) {
+            //     Ok(out) => out,
+            //     Err(_) => {
+            //         println!("Parse Error");
+            //         continue;
+            //     }
+            // };
 
-            let sl_result = match unsafe { sail::eval(sl_tbl, sl_env, sl_expr) } {
-                Ok(out) => out,
-                Err(_) => {
-                    println!("Evaluation Error");
-                    continue;
-                }
-            };
+            // let sl_result = match unsafe { sail::eval(sl_tbl, sl_env, sl_expr) } {
+            //     Ok(out) => out,
+            //     Err(_) => {
+            //         println!("Evaluation Error");
+            //         continue;
+            //     }
+            // };
 
-            println!("{}", sail::context(sl_tbl, sl_result).to_string());
+            // println!("{}", sail::context(sl_tbl, sl_result).to_string());
 
             // match rx.try_recv() {
             //     // Last block to run in the manager thread
@@ -205,8 +206,8 @@ fn main() {
     context::run_loop(
         event_loop,
         vec![manager, render].into_iter(),
-        context_sector,
-        cm_send,
-        cr_send,
+        0, //context_sector,
+        0, //cm_send,
+        0, //cr_send,
     );
 }

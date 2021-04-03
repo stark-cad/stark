@@ -40,13 +40,13 @@ pub fn init_context(
 pub fn run_loop<Ij: 'static>(
     event_loop: EventLoop<()>,
     threads: Ij,
-    sl_sector: usize,
+    sl_region: usize,
     main_tx: usize,
     render_tx: usize,
 ) where
     Ij: Iterator<Item = thread::JoinHandle<()>>,
 {
-    let sl_sector = sl_sector as *mut sail::memmgt::MemSector;
+    let sl_region = sl_region as *mut sail::memmgt::Region;
     let main_tx = main_tx as *mut sail::SlHead;
     let render_tx = render_tx as *mut sail::SlHead;
 

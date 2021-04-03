@@ -1,4 +1,5 @@
 #![feature(core_intrinsics)]
+#![feature(const_fn_transmute)]
 
 use winit::event;
 

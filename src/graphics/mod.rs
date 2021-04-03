@@ -58,27 +58,34 @@ pub fn render_loop(
             should_configure_swapchain = false;
         }
 
-        unsafe {
-            match sail::queue::queue_rx_result(draw_rx) {
-                Ok(next) => {
-                    if sail::get_type(next) == sail::SlType::Vec
-                        || sail::vec_mode(next) == sail::SlVecMode::FlatF32
-                    {
-                        state
-                            .draw_clear_frame([
-                                sail::vec_idx_f32(next, 0),
-                                sail::vec_idx_f32(next, 1),
-                                sail::vec_idx_f32(next, 2),
-                                sail::vec_idx_f32(next, 3),
-                            ])
-                            .unwrap();
-                    } else if sail::get_type(next) == sail::SlType::Keyword {
-                        println!("wow");
-                    }
-                }
-                Err(_) => std::hint::spin_loop(),
-            }
-        }
+        // unsafe {
+        //     match sail::queue::queue_rx_result(draw_rx) {
+        //         Ok(next) => {
+        //             if sail::get_type(next) == sail::SlType::Vec
+        //                 || sail::vec_mode(next) == sail::SlVecMode::FlatF32
+        //             {
+        //                 state
+        //                     .draw_clear_frame([
+        //                         sail::vec_idx_f32(next, 0),
+        //                         sail::vec_idx_f32(next, 1),
+        //                         sail::vec_idx_f32(next, 2),
+        //                         sail::vec_idx_f32(next, 3),
+        //                     ])
+        //                     .unwrap();
+        //             } else if sail::get_type(next) == sail::SlType::Keyword {
+        //                 println!("wow");
+        //             }
+        //         }
+        //         Err(_) => std::hint::spin_loop(),
+        //     }
+
+        //     match sail::queue::queue_rx_result(context_rx) {
+        //         Ok(next) => {
+                    
+        //         }
+        //         Err(_) => std::hint::spin_loop(),
+        //     }
+        // }
     }
 }
 
