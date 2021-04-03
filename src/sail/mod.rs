@@ -1390,14 +1390,14 @@ fn insert_native_proc(
 /// TODO: add memory sector to function signature
 /// TODO: generate these functions somehow else if macros won't cut it
 macro_rules! sail_fn {
-    ( $sector:ident; $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
+    ( $reg:ident; $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
         $(
-            unsafe fn $fn_name (_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
-                let $sector = memmgt::which_mem_sector(_tbl);
+            fn $fn_name (_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+                let $reg = unsafe { memmgt::which_mem_region(_tbl) };
 
                 let mut _ind = 0;
                 $(
-                    let $args = env_arg_layer_get(car(env), _ind);
+                    let $args = env_arg_layer_get($reg, car(env), _ind);
                     _ind += 1;
                 )*
 
@@ -1439,58 +1439,59 @@ sail_fn! {
         return out;
     }
 
-    qtx [sender, item] {
-        queue::queue_tx(sender, item);
+    // qtx [sender, item] {
+    //     queue::queue_tx(sender, item);
 
-        let out = init_bool(sector, false);
-        bool_set(out, true);
-        return out;
-    }
+    //     let out = init_bool(reg);
+    //     bool_set(out, true);
+    //     return out;
+    // }
 }
 
-unsafe fn print(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
-    let arg = env_arg_layer_get(car(env), 0);
+fn print(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+    let reg = unsafe { memmgt::which_mem_region(_tbl) };
+    let arg = env_arg_layer_get(reg, car(env), 0);
     println!("{}", context(_tbl, arg).to_string());
-    let out = init_ref(memmgt::which_mem_sector(_tbl), false, SlRefMode::List);
-    return out;
+    return nil();
 }
 
 // TODO: sail_fn macro does not work for functions that access higher environment levels
-unsafe fn printenv(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+fn printenv(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+    let reg = unsafe { memmgt::which_mem_region(_tbl) };
     println!("{}", context(_tbl, env).to_string());
     // TODO: from_bool function or similar
-    let out = init_bool(memmgt::which_mem_sector(_tbl), false);
+    let out = init_bool(reg);
     bool_set(out, true);
     return out;
 }
 
 /// TODO: replace with Sail-defined function
-unsafe fn color(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
-    let sector = memmgt::which_mem_sector(_tbl);
+// fn color(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
+//     let region = memmgt::which_mem_region(_tbl);
 
-    let r = env_arg_layer_get(car(env), 0);
-    let g = env_arg_layer_get(car(env), 1);
-    let b = env_arg_layer_get(car(env), 2);
-    let a = env_arg_layer_get(car(env), 3);
+//     let r = env_arg_layer_get(car(env), 0);
+//     let g = env_arg_layer_get(car(env), 1);
+//     let b = env_arg_layer_get(car(env), 2);
+//     let a = env_arg_layer_get(car(env), 3);
 
-    let qstr = init_symbol(sector, false, SlSymbolMode::ByStr, 7);
-    sym_set_str(qstr, b"g_queue");
+//     let qstr = init_symbol(sector, false, SlSymbolMode::ByStr, 7);
+//     sym_set_str(qstr, b"g_queue");
 
-    let queue = env_lookup(env, sym_tab_lookup_by_str(_tbl, qstr));
+//     let queue = env_lookup(env, sym_tab_lookup_by_str(_tbl, qstr));
 
-    let vec = init_vec(sector, false, SlVecMode::FlatF32, 4);
+//     let vec = init_vec(sector, false, SlVecMode::FlatF32, 4);
 
-    vec_push_f32(vec, fixfloat_get(r) as f32);
-    vec_push_f32(vec, fixfloat_get(g) as f32);
-    vec_push_f32(vec, fixfloat_get(b) as f32);
-    vec_push_f32(vec, fixfloat_get(a) as f32);
+//     vec_push_f32(vec, fixfloat_get(r) as f32);
+//     vec_push_f32(vec, fixfloat_get(g) as f32);
+//     vec_push_f32(vec, fixfloat_get(b) as f32);
+//     vec_push_f32(vec, fixfloat_get(a) as f32);
 
-    queue::queue_tx(queue, vec);
+//     queue::queue_tx(queue, vec);
 
-    let out = init_bool(sector, false);
-    bool_set(out, true);
-    return out;
-}
+//     let out = init_bool(region);
+//     bool_set(out, true);
+//     return out;
+// }
 
 /// Evaluates a Sail value, returning the result
 /// TODO: **Macros**, closures, continuations
