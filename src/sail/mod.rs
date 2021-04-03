@@ -6,11 +6,9 @@ use std::fmt;
 use std::mem;
 use std::ptr;
 
-use rug;
-
 #[macro_use]
-mod types;
-pub use self::types::*;
+mod core;
+pub use self::core::*;
 
 pub mod memmgt;
 pub mod parser;
@@ -32,1107 +30,243 @@ impl fmt::Debug for SailErr {
     }
 }
 
+/// TODO: remember types that are parents / children of others
+/// TODO: types with children cannot be a self type
+/// TODO: these items must be added to the symtab and env on every run
+/// TODO: remember to have a bitvec type
+/// TODO: use a script to automatically generate a Rust "env" file
+/// TODO: separate all core types from other types a little bit more
+macro_rules! incl_symbols {
+    ( $array:ident : $( $id:literal $name:ident $strng:literal $mode:ident; )+ ; $size:literal ) => {
+        $(
+            const $name: (u32, &str) = (modeize_sym($id, SymbolMode::$mode), $strng);
+        )+
+            const $array: [&str; $size] = [$($strng),+];
+    };
+}
+
+incl_symbols! {
+    SYM_ARRAY:
+    0  T_T           "t"       Type;
+    1  T_NIL         "nil"     Type;
+    2  T_BOOL        "bool"    Type;
+    3  T_U8          "u8"      Type;
+    4  T_I8          "i8"      Type;
+    5  T_U16         "u16"     Type;
+    6  T_I16         "i16"     Type;
+    7  T_U32         "u32"     Type;
+    8  T_I32         "i32"     Type;
+    9  T_U64         "u64"     Type;
+    10 T_I64         "i64"     Type;
+    11 T_U128        "u128"    Type;
+    12 T_I128        "i128"    Type;
+    13 T_F32         "f32"     Type;
+    14 T_F64         "f64"     Type;
+    15 T_SYMBOL      "symbol"  Type;
+    16 T_REF         "ref"     Type;
+    17 T_VECTOR      "vector"  Type;
+    18 T_STDVEC      "stdvec"  Type;
+    19 T_STRING      "string"  Type;
+    20 T_HASHVEC     "hashvec" Type;
+    21 T_ANYVEC      "anyvec"  Type;
+    22 T_MAP         "map"     Type;
+    23 T_ALISMAP     "alismap" Type;
+    24 T_HASHMAP     "hashmap" Type;
+    25 T_PROC        "proc"    Type;
+    26 T_PROC_LAMBDA "sail-fn" Type;
+    27 T_PROC_NATIVE "rust-fn" Type;
+    28 T_ERR         "err"     Type;
+    29 SP_DEF        "def"     Basic;
+    30 SP_DO         "do"      Basic;
+    31 SP_FN         "fn"      Basic;
+    32 SP_IF         "if"      Basic;
+    33 SP_QUOTE      "quote"   Basic;;
+    34
+}
+
+/// Set a symbol to one of the four symbol modes
+const fn modeize_sym(sym: u32, mode: SymbolMode) -> u32 {
+    (sym & 0x3FFFFFFF) + ((mode as u32) << 30)
+}
+
+/// Returns a symbol set to the default, basic mode
+const fn demodes_sym(sym: u32) -> u32 {
+    sym & 0x3FFFFFFF
+}
+
+/// Get the mode of a symbol
+const fn mode_of_sym(sym: u32) -> SymbolMode {
+    unsafe { mem::transmute::<u8, SymbolMode>((sym >> 30) as u8) }
+}
+
 // TODO: MINIMIZE the use of *pub* and *unsafe* functions
 
-/// Returns the type of a valid Sail value
-pub unsafe fn get_type(loc: *mut SlHead) -> SlType {
-    let typ = ptr::read_unaligned(loc as *mut u8) >> 4;
-    mem::transmute::<u8, SlType>(typ)
+fn get_self_type(loc: *mut SlHead) -> u32 {
+    if nil_p(loc) {
+        return T_NIL.0;
+    }
+    use Cfg::*;
+    match get_cfg_spec(loc) {
+        B0BoolF | B0BoolT => T_BOOL.0,
+        B1U8 => T_U8.0,
+        B1I8 => T_I8.0,
+        B2U16 => T_U16.0,
+        B2I16 => T_I16.0,
+        B4U32 => T_U32.0,
+        B4I32 => T_I32.0,
+        B4F32 => T_F32.0,
+        B4Sym => T_SYMBOL.0,
+        B8U64 => T_U64.0,
+        B8I64 => T_I64.0,
+        B8F64 => T_F64.0,
+        B8Ptr => T_REF.0,
+        B16U128 => T_U128.0,
+        B16I128 => T_I128.0,
+        VecStd => T_STDVEC.0,
+        VecStr => T_STRING.0,
+        VecHash => T_HASHVEC.0,
+        VecAny => T_ANYVEC.0,
+        ProcLambda => T_PROC_LAMBDA.0,
+        ProcNative => T_PROC_NATIVE.0,
+        _ => {
+            assert!(self_type_p(loc));
+            unsafe { ptr::read_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *const u32) }
+        }
+    }
+}
+
+fn get_pred_type(loc: *mut SlHead) -> u32 {
+    if nil_p(loc) {
+        T_NIL.0
+    } else if pred_type_p(loc) {
+        unsafe {
+            ptr::read_unaligned((loc as *const u8).add(if !self_type_p(loc) {
+                HEAD_LEN
+            } else {
+                HEAD_LEN + SYMBOL_LEN
+            } as usize) as *const u32)
+        }
+    } else {
+        // return $t, true for all types
+        T_T.0
+    }
 }
 
 /// Returns the size of a valid Sail value
-unsafe fn get_size(loc: *mut SlHead) -> usize {
-    // There's a reason the `usize` casts are in every arm, not at the end
-    match get_type(loc) {
-        SlType::Ref => match ref_mode(loc) {
-            SlRefMode::QSend => (PTR_LEN * 2) as usize,
-            _ => PTR_LEN as usize,
-        },
-        SlType::Vec => VEC_SH_LEN as usize + (vec_get_cap(loc) as usize * PTR_LEN as usize),
-        SlType::Map => MAP_SH_LEN as usize + (map_get_size(loc) as usize * PTR_LEN as usize),
-        SlType::Proc => match proc_mode(loc) {
-            SlProcMode::Lambda => {
-                PROC_SH_LEN as usize
-                    + PTR_LEN as usize
-                    + (proc_get_argct(loc) as usize * SYMBOL_ID_LEN as usize)
-            }
-            SlProcMode::Native => PROC_SH_LEN as usize + PTR_LEN as usize,
-        },
-        SlType::Symbol => match sym_mode(loc) {
-            SlSymbolMode::ById => SYMBOL_ID_LEN as usize,
-            SlSymbolMode::ByStr => SYMBOL_SH_LEN as usize + sym_get_len(loc) as usize,
-        },
-        SlType::Keyword => SYMBOL_ID_LEN as usize,
-        SlType::String => STRING_SH_LEN as usize + string_get_cap(loc) as usize,
-        SlType::FixInt => FIXNUM_64_LEN as usize,
-        SlType::FixFloat => FIXNUM_64_LEN as usize,
-        SlType::MpInt => MP_INT_LEN as usize,
-        SlType::MpFloat => MP_FLOAT_LEN as usize,
-        SlType::Rational => RATIONAL_LEN as usize,
-        SlType::Complex => COMPLEX_LEN as usize,
-        SlType::Bool => 0,
-        SlType::Err => 0,
-        SlType::Other => 0,
-    }
-}
+fn get_size(
+    reg: *mut memmgt::Region,
+    tbl: *mut SlHead,
+    env: *mut SlHead,
+    loc: *mut SlHead,
+) -> usize {
+    use BaseSize::*;
+    match get_base_size(loc) {
+        B0 => 0,
+        B1 => 1,
+        B2 => 2,
+        B4 => 4,
+        B8 => 8,
+        B16 => 16,
+        _ => match core_type(loc) {
+            Some(_) => core_size(loc),
+            None => {
+                let entry = env_lookup_by_id(reg, env, get_self_type(loc));
+                let entry_type = get_self_type(entry);
 
-unsafe fn get_cfg_bits(loc: *mut SlHead) -> u8 {
-    ptr::read_unaligned(loc as *const u8) & 0b00000111
-}
-
-unsafe fn set_cfg_bits(loc: *mut SlHead, cfg: u8) {
-    let head = ptr::read_unaligned(loc as *const u8) & 0b11111000;
-    ptr::write_unaligned(loc as *mut u8, head | cfg)
-}
-
-/// Checks a valid Sail value to determine whether it is a list element
-unsafe fn list_elt_p(loc: *mut SlHead) -> bool {
-    (ptr::read_unaligned(loc as *const u8) & 0b00001000) != 0
-}
-
-unsafe fn nil_p(loc: *mut SlHead) -> bool {
-    loc == ptr::null_mut::<SlHead>()
-}
-
-/// From a valid Sail value, returns a pointer to the start of the value proper
-/// (After the header and list element pointer, if it exists)
-/// TODO: explicitly inline functions like this if necessary
-unsafe fn value_ptr(loc: *mut SlHead) -> *mut u8 {
-    (loc as *mut u8).offset(if list_elt_p(loc) {
-        HEAD_LEN + PTR_LEN
-    } else {
-        HEAD_LEN
-    } as isize)
-}
-
-unsafe fn init_ref(sector: *mut memmgt::MemSector, list_elt: bool, mode: SlRefMode) -> *mut SlHead {
-    let size = match mode {
-        SlRefMode::QSend => 2 * PTR_LEN,
-        _ => PTR_LEN,
-    };
-
-    let ptr = memmgt::alloc(sector, size as usize, list_elt, SlType::Ref);
-
-    if mode != SlRefMode::List {
-        set_cfg_bits(ptr, mode as u8);
-    }
-
-    ptr::write_unaligned(
-        value_ptr(ptr) as *mut *mut SlHead,
-        ptr::null_mut::<SlHead>(),
-    );
-
-    ptr
-}
-
-// TODO: bit vectors
-unsafe fn init_vec(
-    sector: *mut memmgt::MemSector,
-    list_elt: bool,
-    mode: SlVecMode,
-    cap: u16,
-) -> *mut SlHead {
-    let size = VEC_SH_LEN as usize
-        + (match mode {
-            SlVecMode::Default => PTR_LEN,
-            SlVecMode::FlatF32 | SlVecMode::FlatI32 | SlVecMode::FlatU32 => FIXNUM_32_LEN,
-            SlVecMode::FlatF64 | SlVecMode::FlatI64 | SlVecMode::FlatU64 => FIXNUM_64_LEN,
-            SlVecMode::FlatBit => panic!("bit vectors not implemented"),
-        } as usize
-            * cap as usize);
-
-    let ptr = memmgt::alloc(sector, size, list_elt, SlType::Vec);
-
-    if mode != SlVecMode::Default {
-        set_cfg_bits(ptr, mode as u8);
-    }
-
-    ptr::write_unaligned(value_ptr(ptr) as *mut SlVecSH, SlVecSH { len: 0, cap });
-
-    ptr
-}
-
-// Maps will probably all use the same mode for now (list out of each hash value entry)
-unsafe fn init_map(
-    sector: *mut memmgt::MemSector,
-    list_elt: bool,
-    mode: SlMapMode,
-    size: u16,
-) -> *mut SlHead {
-    let ptr;
-    match mode {
-        SlMapMode::Assoc => {
-            ptr = memmgt::alloc(
-                sector,
-                MAP_SH_LEN as usize + (PTR_LEN as usize * size as usize),
-                list_elt,
-                SlType::Map,
-            );
-            ptr::write_unaligned(value_ptr(ptr) as *mut SlMapSH, SlMapSH { size });
-            for i in 0..size {
-                ptr::write_unaligned(
-                    value_ptr(ptr)
-                        .offset(MAP_SH_LEN as isize)
-                        .offset(i as isize * PTR_LEN as isize)
-                        as *mut *mut SlHead,
-                    ptr::null_mut(),
-                );
-            }
-        }
-        SlMapMode::Alist => {
-            ptr = memmgt::alloc(sector, PTR_LEN as usize, list_elt, SlType::Map);
-            set_cfg_bits(ptr, mode as u8);
-            ptr::write_unaligned(value_ptr(ptr) as *mut *mut SlHead, ptr::null_mut());
-        }
-    }
-
-    ptr
-}
-
-unsafe fn init_proc(
-    sector: *mut memmgt::MemSector,
-    list_elt: bool,
-    mode: SlProcMode,
-    argct: u16,
-) -> *mut SlHead {
-    let ptr;
-    match mode {
-        SlProcMode::Lambda => {
-            ptr = memmgt::alloc(
-                sector,
-                (PROC_SH_LEN + PTR_LEN) as usize + (SYMBOL_ID_LEN as usize * argct as usize),
-                list_elt,
-                SlType::Proc,
-            );
-        }
-        SlProcMode::Native => {
-            ptr = memmgt::alloc(
-                sector,
-                (PROC_SH_LEN + PTR_LEN) as usize,
-                list_elt,
-                SlType::Proc,
-            );
-            set_cfg_bits(ptr, mode as u8);
-        }
-    }
-
-    let start = value_ptr(ptr);
-    ptr::write_unaligned(start as *mut SlProcSH, SlProcSH { argct });
-    ptr::write_unaligned(
-        start.offset(PROC_SH_LEN as isize) as *mut *mut SlHead,
-        ptr::null_mut::<SlHead>(),
-    );
-
-    ptr
-}
-
-pub unsafe fn init_symbol(
-    sector: *mut memmgt::MemSector,
-    list_elt: bool,
-    mode: SlSymbolMode,
-    len: u16,
-) -> *mut SlHead {
-    let ptr;
-
-    match mode {
-        SlSymbolMode::ById => {
-            ptr = memmgt::alloc(sector, SYMBOL_ID_LEN as usize, list_elt, SlType::Symbol);
-        }
-        SlSymbolMode::ByStr => {
-            ptr = memmgt::alloc(
-                sector,
-                SYMBOL_SH_LEN as usize + len as usize,
-                list_elt,
-                SlType::Symbol,
-            );
-            set_cfg_bits(ptr, mode as u8);
-            ptr::write_unaligned(value_ptr(ptr) as *mut SlSymbolSH, SlSymbolSH { len });
-        }
-    }
-
-    ptr
-}
-
-unsafe fn init_keyword(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(sector, SYMBOL_ID_LEN as usize, list_elt, SlType::Keyword);
-
-    ptr
-}
-
-unsafe fn init_string(sector: *mut memmgt::MemSector, list_elt: bool, cap: u16) -> *mut SlHead {
-    let ptr = memmgt::alloc(
-        sector,
-        STRING_SH_LEN as usize + cap as usize,
-        list_elt,
-        SlType::String,
-    );
-
-    ptr::write_unaligned(
-        value_ptr(ptr) as *mut SlStringSH,
-        SlStringSH { len: 0, cap },
-    );
-
-    ptr
-}
-
-unsafe fn init_fixint(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(sector, FIXNUM_64_LEN as usize, list_elt, SlType::FixInt);
-
-    ptr
-}
-
-unsafe fn init_fixfloat(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(sector, FIXNUM_64_LEN as usize, list_elt, SlType::FixFloat);
-
-    ptr
-}
-
-unsafe fn init_mpint(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(sector, MP_INT_LEN as usize, list_elt, SlType::MpInt);
-
-    ptr::write_unaligned(value_ptr(ptr) as *mut rug::Integer, rug::Integer::new());
-
-    ptr
-}
-
-unsafe fn init_mpfloat(sector: *mut memmgt::MemSector, list_elt: bool, prec: u32) -> *mut SlHead {
-    let ptr = memmgt::alloc(sector, MP_FLOAT_LEN as usize, list_elt, SlType::MpFloat);
-
-    ptr::write_unaligned(value_ptr(ptr) as *mut rug::Float, rug::Float::new(prec));
-
-    ptr
-}
-
-unsafe fn init_rational(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(sector, RATIONAL_LEN as usize, list_elt, SlType::Rational);
-
-    ptr::write_unaligned(value_ptr(ptr) as *mut rug::Rational, rug::Rational::new());
-
-    ptr
-}
-
-unsafe fn init_complex(sector: *mut memmgt::MemSector, list_elt: bool, prec: u32) -> *mut SlHead {
-    let ptr = memmgt::alloc(sector, COMPLEX_LEN as usize, list_elt, SlType::Complex);
-
-    ptr::write_unaligned(value_ptr(ptr) as *mut rug::Complex, rug::Complex::new(prec));
-
-    ptr
-}
-
-unsafe fn init_bool(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(sector, 0, list_elt, SlType::Bool);
-
-    ptr
-}
-
-unsafe fn init_err(sector: *mut memmgt::MemSector, list_elt: bool) -> *mut SlHead {
-    let ptr = memmgt::alloc(sector, 0, list_elt, SlType::Err);
-
-    ptr
-}
-
-/// Still causing memory leaks...
-unsafe fn set_list_elt(loc: *mut SlHead, next: *mut SlHead) {
-    ptr::write_unaligned(
-        (loc as *mut u8).offset(HEAD_LEN as isize) as *mut *mut SlHead,
-        next,
-    )
-}
-
-/// TODO: check for types and handle errors?
-/// Gets the pointer to the next element from a list element
-unsafe fn next_list_elt(loc: *mut SlHead) -> *mut SlHead {
-    ptr::read_unaligned((loc as *mut u8).offset(HEAD_LEN as isize) as *mut *mut SlHead)
-}
-
-/// Returns true if both arguments are the same Sail value
-/// TODO: symbol handling etc
-unsafe fn id(fst: *mut SlHead, lst: *mut SlHead) -> bool {
-    if fst == lst {
-        true
-    } else {
-        false
-    }
-}
-
-/// Returns true if both arguments match in structure
-/// TODO: make eq and hash actually function for all types
-unsafe fn eq(fst: *mut SlHead, lst: *mut SlHead) -> bool {
-    if id(fst, lst) {
-        true
-    } else if get_type(fst) != get_type(lst) {
-        false
-    } else {
-        match get_type(fst) {
-            SlType::Symbol => {
-                if sym_mode(fst) != sym_mode(lst) {
-                    false
-                } else if sym_mode(fst) == SlSymbolMode::ById {
-                    sym_get_id(fst) == sym_get_id(lst)
+                if entry_type == T_U64.0 {
+                    return u64_get(entry) as usize;
+                } else if entry_type == T_PROC_LAMBDA.0 || entry_type == T_PROC_NATIVE.0 {
+                    u64_get(apply(reg, tbl, env, entry, loc).unwrap()) as usize
                 } else {
-                    sym_get_str(fst).eq(sym_get_str(lst))
+                    panic!("wrong type in type entry")
                 }
             }
-            _ => false,
-        }
-    }
-}
-
-/// Returns a unique hash value (based on the provided value's content?)
-unsafe fn hash(loc: *mut SlHead) -> u32 {
-    match get_type(loc) {
-        SlType::Symbol => match sym_mode(loc) {
-            SlSymbolMode::ById => sym_get_id(loc),
-            SlSymbolMode::ByStr => {
-                let slice = sym_get_str(loc);
-                str_hash(slice)
-            }
         },
-        SlType::Keyword => key_get_id(loc),
-        SlType::String => {
-            let slice = string_get(loc);
-            str_hash(slice)
-        }
-        _ => 0,
     }
 }
 
-fn str_hash(slice: &str) -> u32 {
-    let mut out: u32 = 1;
-    for c in slice.bytes() {
-        out = out.wrapping_add(out << 5).wrapping_add(c as u32);
-    }
-    out
+fn set_self_type(loc: *mut SlHead, typ: u32) {
+    assert!(self_type_p(loc));
+    unsafe { ptr::write_unaligned(loc.add(HEAD_LEN as usize) as *mut u32, typ) }
 }
 
-unsafe fn ref_mode(loc: *mut SlHead) -> SlRefMode {
-    mem::transmute::<u8, SlRefMode>(get_cfg_bits(loc))
-}
-
-// TODO: should functions like this check for correct type?
-/// TODO: this implementation will **easily** cause memory leaks
-unsafe fn ref_set(loc: *mut SlHead, next: *mut SlHead) {
-    ptr::write_unaligned(value_ptr(loc) as *mut *mut SlHead, next)
-}
-
-/// Gets the pointer contained within a list head
-unsafe fn ref_get(loc: *mut SlHead) -> *mut SlHead {
-    ptr::read_unaligned(value_ptr(loc) as *mut *mut SlHead)
-}
-
-unsafe fn ref_empty_p(loc: *mut SlHead) -> bool {
-    nil_p(ref_get(loc))
-}
-
-unsafe fn ref_qsend_set_target(loc: *mut SlHead, target: *mut memmgt::MemSector) {
-    typechk!(Ref QSend ; loc);
-
-    ptr::write_unaligned(
-        value_ptr(loc).offset(PTR_LEN as isize) as *mut *mut memmgt::MemSector,
-        target,
-    )
-}
-
-unsafe fn ref_qsend_get_target(loc: *mut SlHead) -> *mut memmgt::MemSector {
-    typechk!(Ref QSend ; loc);
-
-    ptr::read_unaligned(value_ptr(loc).offset(PTR_LEN as isize) as *mut *mut memmgt::MemSector)
-}
-
-pub unsafe fn vec_mode(loc: *mut SlHead) -> SlVecMode {
-    mem::transmute::<u8, SlVecMode>(get_cfg_bits(loc))
-}
-
-unsafe fn vec_set_len(loc: *mut SlHead, len: u16) {
-    typechk!(Vec ; loc);
-    ptr::write_unaligned(value_ptr(loc) as *mut u16, len)
-}
-
-unsafe fn vec_get_len(loc: *mut SlHead) -> u16 {
-    typechk!(Vec ; loc);
-    ptr::read_unaligned(value_ptr(loc) as *mut u16)
-}
-
-unsafe fn vec_get_cap(loc: *mut SlHead) -> u16 {
-    typechk!(Vec ; loc);
-    ptr::read_unaligned(value_ptr(loc).offset(2) as *mut u16)
-}
-
-unsafe fn vec_idx(loc: *mut SlHead, idx: u16) -> *mut SlHead {
-    typechk!(Vec ; loc);
-
-    ptr::read_unaligned(
-        value_ptr(loc)
-            .offset(VEC_SH_LEN as isize)
-            .offset(idx as isize * PTR_LEN as isize) as *mut *mut SlHead,
-    )
-}
-
-pub unsafe fn vec_idx_f32(loc: *mut SlHead, idx: u16) -> f32 {
-    typechk!(Vec FlatF32 ; loc);
-
-    ptr::read_unaligned(
-        value_ptr(loc)
-            .offset(VEC_SH_LEN as isize)
-            .offset(idx as isize * FIXNUM_32_LEN as isize) as *mut f32,
-    )
-}
-
-unsafe fn vec_push(loc: *mut SlHead, item: *mut SlHead) {
-    typechk!(Vec Default ; loc);
-
-    let (len, cap) = (vec_get_len(loc), vec_get_cap(loc));
-
-    if len < cap {
+fn set_pred_type(loc: *mut SlHead, typ: u32) {
+    assert!(pred_type_p(loc));
+    unsafe {
         ptr::write_unaligned(
-            value_ptr(loc).offset(VEC_SH_LEN as isize + (len as isize * PTR_LEN as isize))
-                as *mut *mut SlHead,
-            item,
-        );
-        vec_set_len(loc, len + 1);
-    } else {
-        panic!("not enough space in vec");
+            loc.add(if self_type_p(loc) {
+                HEAD_LEN + SYMBOL_LEN
+            } else {
+                HEAD_LEN
+            } as usize) as *mut u32,
+            typ,
+        )
     }
 }
 
-unsafe fn vec_push_f32(loc: *mut SlHead, item: f32) {
-    typechk!(Vec FlatF32 ; loc);
-
-    let (len, cap) = (vec_get_len(loc), vec_get_cap(loc));
-
-    if len < cap {
-        ptr::write_unaligned(
-            value_ptr(loc).offset(VEC_SH_LEN as isize + (len as isize * FIXNUM_32_LEN as isize))
-                as *mut f32,
-            item,
-        );
-        vec_set_len(loc, len + 1);
-    } else {
-        panic!("not enough space in vec");
-    }
-}
-
-unsafe fn map_mode(loc: *mut SlHead) -> SlMapMode {
-    typechk!(Map ; loc);
-    mem::transmute::<u8, SlMapMode>(get_cfg_bits(loc))
-}
-
-unsafe fn map_get_size(loc: *mut SlHead) -> u16 {
-    typechk!(Map Assoc ; loc);
-
-    ptr::read_unaligned(value_ptr(loc) as *mut u16)
-}
-
-/// TODO: automatically resize as needed (probably as an option) (need "fill" field in subhead)
-/// TODO: clean up shadowed entries sometime
-unsafe fn map_insert(loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
-    typechk!(Map ; loc);
-
-    let entry = cons_copy(memmgt::which_mem_sector(loc), true, key, val);
-    let pos;
-
-    match map_mode(loc) {
-        SlMapMode::Assoc => {
-            let size = map_get_size(loc);
-            let hash = hash(key) % size as u32;
-            let idx = MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize;
-            pos = value_ptr(loc).offset(idx) as *mut *mut SlHead;
-        }
-        SlMapMode::Alist => {
-            pos = value_ptr(loc) as *mut *mut SlHead;
-        }
-    }
-
-    let next = ptr::read_unaligned(pos);
-
-    if !next.is_null() {
-        set_list_elt(entry, next);
-    }
-
-    ptr::write_unaligned(pos, entry)
-}
-
-/// Looks up a key in a map, returning the key-value pair
-unsafe fn map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
-    typechk!(Map ; loc);
-
-    let mut entry;
-
-    match map_mode(loc) {
-        SlMapMode::Assoc => {
-            let size = map_get_size(loc);
-            let hash = hash(key) % size as u32;
-
-            entry = ptr::read_unaligned(
-                value_ptr(loc).offset(MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize)
-                    as *mut *mut SlHead,
-            );
-        }
-        SlMapMode::Alist => {
-            entry = ptr::read_unaligned(value_ptr(loc) as *mut *mut SlHead);
-        }
-    }
-
-    loop {
-        if entry == ptr::null_mut() {
-            let out = init_err(memmgt::which_mem_sector(loc), false);
-            return out;
-        }
-
-        if eq(ref_get(entry), key) {
-            return entry;
-        }
-
-        entry = next_list_elt(entry);
-    }
-}
-
-unsafe fn proc_mode(loc: *mut SlHead) -> SlProcMode {
-    typechk!(loc == Proc);
-    mem::transmute::<u8, SlProcMode>(get_cfg_bits(loc))
-}
-
-unsafe fn proc_get_argct(loc: *mut SlHead) -> u16 {
-    typechk!(loc == Proc);
-    ptr::read_unaligned(value_ptr(loc) as *mut u16)
-}
-
-unsafe fn proc_set_arg(loc: *mut SlHead, ind: u16, arg: u32) {
-    typechk!(Proc Lambda ; loc);
-
-    ptr::write_unaligned(
-        value_ptr(loc)
-            .offset((PROC_SH_LEN + PTR_LEN) as isize)
-            .offset(ind as isize * SYMBOL_ID_LEN as isize) as *mut u32,
-        arg,
-    );
-}
-
-unsafe fn proc_get_arg(loc: *mut SlHead, ind: u16) -> *mut SlHead {
-    typechk!(Proc Lambda ; loc);
-
-    let id = ptr::read_unaligned(
-        value_ptr(loc)
-            .offset((PROC_SH_LEN + PTR_LEN) as isize)
-            .offset(ind as isize * SYMBOL_ID_LEN as isize) as *mut u32,
-    );
-
-    let sym = init_symbol(memmgt::which_mem_sector(loc), false, SlSymbolMode::ById, 0);
-
-    sym_set_id(sym, id);
-
-    sym
-}
-
-unsafe fn proc_lambda_set(loc: *mut SlHead, body: *mut SlHead) {
-    typechk!(Proc Lambda ; loc);
-    ptr::write_unaligned(
-        value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut *mut SlHead,
-        body,
-    )
-}
-
-unsafe fn proc_lambda_body(loc: *mut SlHead) -> *mut SlHead {
-    typechk!(Proc Lambda ; loc);
-    ptr::read_unaligned(value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut *mut SlHead)
-}
-
-unsafe fn proc_native_set(
+/// TODO: eliminate as much write_unaligned as possible
+fn write_field<T: SizedBase>(
+    reg: *mut memmgt::Region,
+    tbl: *mut SlHead,
+    env: *mut SlHead,
     loc: *mut SlHead,
-    fun: unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead,
+    offset: usize,
+    src: T,
 ) {
-    typechk!(Proc Native ; loc);
-    let ptr = mem::transmute::<unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead, u64>(fun);
-    ptr::write_unaligned(value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut u64, ptr);
-}
-
-unsafe fn proc_native_body(loc: *mut SlHead) -> unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead {
-    typechk!(Proc Native ; loc);
-    let ptr = ptr::read_unaligned(value_ptr(loc).offset(PROC_SH_LEN as isize) as *mut u64);
-    mem::transmute::<u64, unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead>(ptr)
-}
-
-unsafe fn sym_mode(loc: *mut SlHead) -> SlSymbolMode {
-    typechk!(Symbol ; loc);
-    mem::transmute::<u8, SlSymbolMode>(get_cfg_bits(loc))
-}
-
-pub unsafe fn sym_set_id(loc: *mut SlHead, id: u32) {
-    typechk!(Symbol ById ; loc);
-    ptr::write_unaligned(value_ptr(loc) as *mut u32, id)
-}
-
-unsafe fn sym_get_id(loc: *mut SlHead) -> u32 {
-    typechk!(Symbol ById ; loc);
-    ptr::read_unaligned(value_ptr(loc) as *mut u32)
-}
-
-unsafe fn sym_get_len(loc: *mut SlHead) -> u16 {
-    typechk!(Symbol ByStr ; loc);
-    ptr::read_unaligned(value_ptr(loc) as *mut u16)
-}
-
-pub unsafe fn sym_set_str(loc: *mut SlHead, val: &[u8]) {
-    typechk!(Symbol ByStr ; loc);
-
-    let len = sym_get_len(loc);
-    let here = std::slice::from_raw_parts_mut(value_ptr(loc).offset(2) as *mut u8, len as usize);
-
-    here.copy_from_slice(val)
-}
-
-unsafe fn sym_get_str(loc: *mut SlHead) -> &'static str {
-    typechk!(Symbol ByStr ; loc);
-
-    let len = sym_get_len(loc);
-
-    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-        value_ptr(loc).offset(2) as *mut u8,
-        len as usize,
-    ))
-}
-
-unsafe fn key_get_id(loc: *mut SlHead) -> u32 {
-    typechk!( ; Keyword ; loc);
-    ptr::read_unaligned(value_ptr(loc) as *mut u32)
-}
-
-unsafe fn key_set_id(loc: *mut SlHead, id: u32) {
-    typechk!( ; Keyword ; loc);
-    ptr::write_unaligned(value_ptr(loc) as *mut u32, id)
-}
-
-unsafe fn string_get_len(loc: *mut SlHead) -> u16 {
-    ptr::read_unaligned(value_ptr(loc) as *mut u16)
-}
-
-unsafe fn string_set_len(loc: *mut SlHead, len: u16) {
-    ptr::write_unaligned(value_ptr(loc) as *mut u16, len);
-}
-
-unsafe fn string_get_cap(loc: *mut SlHead) -> u16 {
-    ptr::read_unaligned(value_ptr(loc).offset(2) as *mut u16)
-}
-
-unsafe fn string_set(loc: *mut SlHead, val: &str) {
-    let cap = string_get_cap(loc);
-    let len = val.len() as u16;
-
-    if len <= cap {
-        let mut count = 0;
-        for c in val.bytes() {
-            ptr::write_unaligned(
-                value_ptr(loc).offset(STRING_SH_LEN as isize + count as isize),
-                c,
-            );
-            count += 1;
-        }
-        string_set_len(loc, len);
-    } else {
-        panic!("not enough space in string");
+    unsafe {
+        let dst = value_ptr(loc).add(offset) as *mut T;
+        assert!(offset + std::mem::size_of::<T>() <= get_size(reg, tbl, env, loc));
+        ptr::write_unaligned(dst, src)
     }
 }
 
-unsafe fn string_get(loc: *mut SlHead) -> &'static str {
-    let len = string_get_len(loc);
-
-    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-        value_ptr(loc).offset(STRING_SH_LEN as isize) as *mut u8,
-        len as usize,
-    ))
-}
-
-unsafe fn fixint_set(loc: *mut SlHead, val: i64) {
-    ptr::write_unaligned(value_ptr(loc) as *mut i64, val)
-}
-
-unsafe fn fixint_get(loc: *mut SlHead) -> i64 {
-    ptr::read_unaligned(value_ptr(loc) as *mut i64)
-}
-
-unsafe fn fixfloat_set(loc: *mut SlHead, val: f64) {
-    ptr::write_unaligned(value_ptr(loc) as *mut f64, val)
-}
-
-unsafe fn fixfloat_get(loc: *mut SlHead) -> f64 {
-    ptr::read_unaligned(value_ptr(loc) as *mut f64)
-}
-
-/// Set a boolean value
-unsafe fn bool_set(loc: *mut SlHead, val: bool) {
-    if val {
-        ptr::write_unaligned(
-            loc as *mut u8,
-            ptr::read_unaligned(loc as *mut u8) | 0b00000001,
-        )
-    } else {
-        ptr::write_unaligned(
-            loc as *mut u8,
-            ptr::read_unaligned(loc as *mut u8) & 0b11111110,
-        )
+/// TODO: eliminate as much read_unaligned as possible
+fn read_field<T: SizedBase>(
+    reg: *mut memmgt::Region,
+    tbl: *mut SlHead,
+    env: *mut SlHead,
+    loc: *mut SlHead,
+    offset: usize,
+) -> T {
+    unsafe {
+        let src = value_ptr(loc).add(offset) as *mut T;
+        assert!(offset + std::mem::size_of::<T>() <= get_size(reg, tbl, env, loc));
+        ptr::read_unaligned(src)
     }
 }
 
-/// Get a boolean value
-unsafe fn bool_get(loc: *mut SlHead) -> bool {
-    ptr::read_unaligned(loc as *mut u8) & 0b00000001 != 0
-}
-
-unsafe fn copy_val(
-    sector: *mut memmgt::MemSector,
-    src: *mut SlHead,
-    list_elt: bool,
-) -> *mut SlHead {
-    let (typ, siz, cfg) = (get_type(src), get_size(src), get_cfg_bits(src));
-
-    let dst = memmgt::alloc(sector, siz, list_elt, typ);
-    set_cfg_bits(dst, cfg);
-    ptr::copy_nonoverlapping(value_ptr(src), value_ptr(dst), siz);
-
-    dst
-}
-
-unsafe fn cons_copy(
-    sector: *mut memmgt::MemSector,
-    list_elt: bool,
-    car: *mut SlHead,
-    cdr: *mut SlHead,
-) -> *mut SlHead {
-    let new_cdr = copy_val(sector, cdr, false);
-    let new_car = copy_val(sector, car, true);
-    let head = init_ref(sector, list_elt, SlRefMode::List);
-
-    set_list_elt(new_car, new_cdr);
-    ref_set(head, new_car);
-
-    head
-}
-
-/// Returns the first element of the provided list
-pub unsafe fn car(loc: *mut SlHead) -> *mut SlHead {
-    // Code for car that just accesses the value
-    ref_get(loc)
-
-    // Code for car that returns a newly created copy
-    // let car = list_get(loc);
-    // let (typ, siz) = (get_type(car), get_size(car));
-
-    // let ptr = alloc(siz, false, typ);
-    // ptr::copy_nonoverlapping(value_ptr(car), value_ptr(ptr), siz);
-
-    // ptr
-}
-
-/// Returns the list of elements following the first element of the provided list
-unsafe fn cdr(loc: *mut SlHead) -> *mut SlHead {
-    let cadr = next_list_elt(ref_get(loc));
-
-    // if the cdr is nil, just return it
-    // if the cdr is still a list, return it as such
-    // if the cdr is the final item in a malformed list, return it
-    if nil_p(cadr) {
-        cadr
-    } else if list_elt_p(cadr) {
-        let ptr = init_ref(memmgt::which_mem_sector(loc), false, SlRefMode::List);
-        ref_set(ptr, cadr);
-        ptr
-    } else {
-        cadr
-    }
-}
-
-/// An environment is a list of maps: should function as a LIFO stack
-/// TODO: deal somewhere with dynamic bindings, lexical bindings, argument bindings
-pub unsafe fn env_create(sector: *mut memmgt::MemSector) -> *mut SlHead {
-    let head = init_ref(sector, false, SlRefMode::List);
-    let base = init_map(sector, true, SlMapMode::Assoc, 255);
-
-    ref_set(head, base);
-
-    head
-}
-
-unsafe fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> *mut SlHead {
-    typechk!(Ref List ; env);
-    typechk!(Symbol ; sym);
-
-    let result = map_lookup(car(env), sym);
-    if get_type(result) == SlType::Ref {
-        return cdr(result);
-    }
-
-    let next = cdr(env);
-    if nil_p(next) {
-        let out = init_err(memmgt::which_mem_sector(env), false);
-        out
-    } else {
-        env_lookup(next, sym)
-    }
-}
-
-// TODO: use dynamic map mode
-unsafe fn env_new_layer(sector: *mut memmgt::MemSector, min_size: u16) -> *mut SlHead {
-    init_map(sector, true, SlMapMode::Alist, min_size * 2)
-}
-
-pub unsafe fn env_layer_ins_entry(layer: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
-    map_insert(layer, key, val)
-}
-
-/// Uses Alist every time
-/// TODO: many improvements / optimizations possible throughout env system
-unsafe fn env_new_arg_layer(sector: *mut memmgt::MemSector) -> *mut SlHead {
-    init_map(sector, true, SlMapMode::Alist, 0)
-}
-
-unsafe fn env_arg_layer_get(layer: *mut SlHead, idx: u16) -> *mut SlHead {
-    typechk!(Map Alist ; layer);
-
-    let mut left = idx;
-    let mut pos = ptr::read_unaligned(value_ptr(layer) as *mut *mut SlHead);
-    while left > 0 {
-        pos = next_list_elt(pos);
-        left -= 1;
-    }
-    cdr(pos)
-}
-
-unsafe fn env_arg_layer_ins(layer: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
-    typechk!(Map Alist ; layer);
-
-    let entry = cons_copy(memmgt::which_mem_sector(layer), true, key, val);
-    let pos = value_ptr(layer) as *mut *mut SlHead;
-
-    let mut next = ptr::read_unaligned(pos);
-    if next.is_null() {
-        ptr::write_unaligned(pos, entry);
-    } else {
-        while !next_list_elt(next).is_null() {
-            next = next_list_elt(next);
-        }
-
-        set_list_elt(next, entry);
-    }
-}
-
-unsafe fn env_push_layer(env: *mut SlHead, layer: *mut SlHead) {
-    let next = ref_get(env);
-    set_list_elt(layer, next);
-    ref_set(env, layer);
-}
-
-// TODO: MEMORY LEAK
-unsafe fn env_pop_layer(env: *mut SlHead) {
-    let next = next_list_elt(ref_get(env));
-    ref_set(env, next);
-}
-
-/// This should take the form of a bimap, a 1 to 1 association between strings and IDs
-/// Two maps, one for each direction, pointing to the same set of cons cells (id . string)
-/// Must keep track of id to assign (counter) and reclaim unused slots if counter reaches max
-pub unsafe fn sym_tab_create(sector: *mut memmgt::MemSector) -> *mut SlHead {
-    let tbl = init_vec(sector, false, SlVecMode::Default, 3);
-
-    let id_to_str = init_map(sector, false, SlMapMode::Assoc, 255);
-    let str_to_id = init_map(sector, false, SlMapMode::Assoc, 255);
-
-    let id_count = init_symbol(sector, false, SlSymbolMode::ById, 0);
-    sym_set_id(id_count, 0);
-
-    vec_push(tbl, id_to_str);
-    vec_push(tbl, str_to_id);
-    vec_push(tbl, id_count);
-
-    tbl
-}
-
-/// Takes the symbol table and a Symbol ByStr to insert, returning the symbol's unique ID
-pub unsafe fn sym_tab_insert(tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
-    typechk!(Vec ; tbl);
-    typechk!(Symbol ByStr ; sym);
-
-    let sector = memmgt::which_mem_sector(tbl);
-
-    let next_id = vec_idx(tbl, 2);
-    let id_num = sym_get_id(next_id);
-
-    let entry = {
-        let id = copy_val(sector, next_id, true);
-        set_list_elt(id, sym);
-        id
-    };
-
-    let id_to_str = vec_idx(tbl, 0);
-    let str_to_id = vec_idx(tbl, 1);
-
-    let id_size = map_get_size(id_to_str);
-    let str_size = map_get_size(str_to_id);
-
-    let id_hash = id_num % id_size as u32;
-    let str_hash = hash(sym) % str_size as u32;
-
-    let id_idx = MAP_SH_LEN as isize + (id_hash * PTR_LEN as u32) as isize;
-    let str_idx = MAP_SH_LEN as isize + (str_hash * PTR_LEN as u32) as isize;
-
-    let mut id_pos = ptr::read_unaligned(value_ptr(id_to_str).offset(id_idx) as *mut *mut SlHead);
-    let mut str_pos = ptr::read_unaligned(value_ptr(str_to_id).offset(str_idx) as *mut *mut SlHead);
-
-    let id_entry = {
-        let ptr = init_ref(sector, true, SlRefMode::List);
-        ref_set(ptr, entry);
-        ptr
-    };
-
-    let str_entry = {
-        let ptr = init_ref(sector, true, SlRefMode::List);
-        ref_set(ptr, entry);
-        ptr
-    };
-
-    if id_pos == ptr::null_mut() {
-        ptr::write_unaligned(
-            value_ptr(id_to_str).offset(id_idx) as *mut *mut SlHead,
-            id_entry,
-        )
-    } else {
-        while next_list_elt(id_pos) != ptr::null_mut() {
-            id_pos = next_list_elt(id_pos);
-        }
-
-        set_list_elt(id_pos, id_entry)
-    }
-
-    if str_pos == ptr::null_mut() {
-        ptr::write_unaligned(
-            value_ptr(str_to_id).offset(str_idx) as *mut *mut SlHead,
-            str_entry,
-        )
-    } else {
-        while next_list_elt(str_pos) != ptr::null_mut() {
-            str_pos = next_list_elt(str_pos);
-        }
-
-        set_list_elt(str_pos, str_entry)
-    }
-
-    sym_set_id(next_id, id_num + 1);
-
-    id_num
-}
-
-/// Looks up normally, by car, and returns cdr
-unsafe fn sym_tab_lookup_by_id(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
-    typechk!(Vec ; tbl);
-    typechk!(Symbol ById ; qry);
-
-    let map = vec_idx(tbl, 0);
-
-    let size = map_get_size(map);
-    let hash = hash(qry) % size as u32;
-
-    let mut entry = ptr::read_unaligned(
-        value_ptr(map).offset(MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize)
-            as *mut *mut SlHead,
-    );
-
-    loop {
-        if entry == ptr::null_mut() {
-            let out = init_err(memmgt::which_mem_sector(tbl), false);
-            return out;
-        }
-
-        if eq(ref_get(entry), qry) {
-            return next_list_elt(ref_get(entry));
-        }
-
-        entry = next_list_elt(entry);
-    }
-}
-
-/// Must look up by cdr, and return car
-unsafe fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
-    typechk!(Vec ; tbl);
-    typechk!(Symbol ByStr ; qry);
-
-    let map = vec_idx(tbl, 1);
-
-    let size = map_get_size(map);
-    let hash = hash(qry) % size as u32;
-
-    let mut entry = ptr::read_unaligned(
-        value_ptr(map).offset(MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize)
-            as *mut *mut SlHead,
-    );
-
-    loop {
-        if entry == ptr::null_mut() {
-            let out = init_err(memmgt::which_mem_sector(tbl), false);
-            return out;
-        }
-
-        if eq(next_list_elt(ref_get(entry)), qry) {
-            return ref_get(entry);
-        }
-
-        entry = next_list_elt(entry);
-    }
-}
-
-/// Looks up by ID number directly
-unsafe fn sym_tab_lookup_id_num(tbl: *mut SlHead, id: u32) -> *mut SlHead {
-    let map = vec_idx(tbl, 0);
-
-    let size = map_get_size(map);
-    let hash = id % size as u32;
-
-    let mut entry = ptr::read_unaligned(
-        value_ptr(map).offset(MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize)
-            as *mut *mut SlHead,
-    );
-
-    loop {
-        if entry.is_null() {
-            let out = init_err(memmgt::which_mem_sector(tbl), false);
-            return out;
-        }
-
-        if sym_get_id(ref_get(entry)) == id {
-            return next_list_elt(ref_get(entry));
-        }
-
-        entry = next_list_elt(entry);
-    }
-}
-
-/// Returns ID for any symbol string
-/// Inserts symbol into the table if not already present
-pub unsafe fn sym_tab_get_id(tbl: *mut SlHead, sym: &str) -> u32 {
-    let map = vec_idx(tbl, 1);
-    let size = map_get_size(map);
-    let hash = str_hash(sym) % size as u32;
-
-    let mut entry = ptr::read_unaligned(
-        value_ptr(map).offset(MAP_SH_LEN as isize + (hash * PTR_LEN as u32) as isize)
-            as *mut *mut SlHead,
-    );
-
-    while !entry.is_null() {
-        if sym.eq(sym_get_str(next_list_elt(ref_get(entry)))) {
-            return sym_get_id(ref_get(entry));
-        }
-        entry = next_list_elt(entry);
-    }
-
-    let record = init_symbol(
-        memmgt::which_mem_sector(tbl),
-        false,
-        SlSymbolMode::ByStr,
-        sym.len() as u16,
-    );
-    sym_set_str(record, sym.as_bytes());
-
-    sym_tab_insert(tbl, record)
-}
+// unsafe fn ref_qsend_set_target(loc: *mut SlHead, target: *mut memmgt::MemSector) {
+//     ptr::write_unaligned(
+//         value_ptr(loc).offset(PTR_LEN as isize) as *mut *mut memmgt::MemSector,
+//         target,
+//     )
+// }
+
+// unsafe fn ref_qsend_get_target(loc: *mut SlHead) -> *mut memmgt::MemSector {
+//     ptr::read_unaligned(value_ptr(loc).offset(PTR_LEN as isize) as *mut *mut memmgt::MemSector)
+// }
+
+// unsafe fn vec_idx_f32(loc: *mut SlHead, idx: u16) -> f32 {
+//     ptr::read_unaligned(
+//         value_ptr(loc)
+//             .offset(VEC_SH_LEN as isize)
+//             .offset(idx as isize * FIXNUM_32_LEN as isize) as *mut f32,
+//     )
+// }
+
+// unsafe fn vec_push_f32(loc: *mut SlHead, item: f32) {
+//     let (len, cap) = (vec_get_len(loc), vec_get_cap(loc));
+//     if len < cap {
+//         ptr::write_unaligned(
+//             value_ptr(loc).offset(VEC_SH_LEN as isize + (len as isize * FIXNUM_32_LEN as isize))
+//                 as *mut f32,
+//             item,
+//         );
+//         vec_set_len(loc, len + 1);
+//     } else {
+//         panic!("not enough space in vec");
+//     }
+// }
 
 pub union SlSend {
     ptr: *mut SlHead,
@@ -1149,148 +283,106 @@ pub fn context(tbl: *mut SlHead, val: *mut SlHead) -> SlContextVal {
     SlContextVal { tbl, val }
 }
 
-// TODO: Figure out how to manage / dispose of memory
+// TODO: just push characters into a byte vector (string) for display
 impl fmt::Display for SlContextVal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let table = self.tbl;
         let value = self.val;
 
-        unsafe {
-            match get_type(value) {
-                SlType::Ref => match ref_mode(value) {
-                    SlRefMode::List => {
-                        write!(f, "(").unwrap();
-                        let mut elt = ref_get(value);
-                        while elt != ptr::null_mut() {
-                            if !list_elt_p(elt) {
-                                write!(f, ". ").unwrap();
-                                write!(f, "{}", context(table, elt).to_string()).unwrap();
-                                break;
-                            }
+        use CoreType::*;
+        match core_type(value) {
+            Some(t) => match t {
+                Nil => write!(f, "()"),
+                Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
+                I64 => write!(f, "{}", i64_get(value)),
+                F64 => write!(f, "{}", f64_get(value)),
+                Symbol => write!(f, "{}", string_get(sym_tab_lookup_by_id(table, value))),
+                Ref => {
+                    write!(f, "(").unwrap();
+                    let mut elt = ref_get(value);
+                    while !nil_p(elt) {
+                        if !list_elt_p(elt) {
+                            write!(f, ". ").unwrap();
                             write!(f, "{}", context(table, elt).to_string()).unwrap();
-                            elt = next_list_elt(elt);
-                            if elt != ptr::null_mut() {
-                                write!(f, " ").unwrap();
-                            }
+                            break;
                         }
-                        write!(f, ")")
+                        write!(f, "{}", context(table, elt).to_string()).unwrap();
+                        elt = get_next_list_elt(elt);
+                        if !nil_p(elt) {
+                            write!(f, " ").unwrap();
+                        }
                     }
-                    SlRefMode::QReceive => write!(f, "<queue receiver>"),
-                    SlRefMode::QSend => write!(f, "<queue sender>"),
-                    _ => write!(f, "cannot display ref"),
-                },
-                SlType::Vec => {
+                    write!(f, ")")
+                }
+                VecStd => {
                     write!(f, "[").unwrap();
-                    let len = vec_get_len(value);
+                    let len = stdvec_get_len(value);
                     for idx in 0..len {
-                        match vec_mode(value) {
-                            SlVecMode::Default => {
-                                write!(f, "{}", context(table, vec_idx(value, idx)).to_string())
-                                    .unwrap()
-                            }
-                            SlVecMode::FlatF32 => write!(f, "{}", vec_idx_f32(value, idx)).unwrap(),
-                            _ => write!(f, "can't display this vector").unwrap(),
-                        }
-
+                        write!(f, "{}", context(table, stdvec_idx(value, idx)).to_string())
+                            .unwrap();
                         if idx < len - 1 {
                             write!(f, " ").unwrap();
                         }
                     }
                     write!(f, "]")
                 }
-                // TODO: function to access all map pairs somehow
-                SlType::Map => {
+                VecStr => write!(f, "\"{}\"", string_get(value)),
+                VecHash => {
+                    // TODO: function to access all map pairs somehow
                     write!(f, "{{").unwrap();
-                    match map_mode(value) {
-                        SlMapMode::Assoc => {
-                            // visit every position and traverse each entry list as below
-                            let size = map_get_size(value);
-                            let mut fst = true;
-                            for idx in 0..size {
-                                let mut pos = ptr::read_unaligned(
-                                    value_ptr(value).offset(
-                                        MAP_SH_LEN as isize + (PTR_LEN as isize * idx as isize),
-                                    ) as *mut *mut SlHead,
-                                );
-                                while !pos.is_null() {
-                                    if !fst {
-                                        write!(f, " ").unwrap()
-                                    }
-                                    write!(f, "{} ", context(table, car(pos)).to_string()).unwrap();
-                                    write!(f, "{}", context(table, cdr(pos)).to_string()).unwrap();
-                                    pos = next_list_elt(pos);
-                                    fst = false;
-                                }
+                    // visit every position and traverse each entry list as below
+                    let size = hashvec_get_size(value);
+                    let mut fst = true;
+                    for idx in 0..size {
+                        let mut pos =
+                            core_read_field(value, 4 + 4 + (PTR_LEN as usize * idx as usize));
+                        while !nil_p(pos) {
+                            if !fst {
+                                write!(f, " ").unwrap()
                             }
-                        }
-                        SlMapMode::Alist => {
-                            // go down the list, printing key value key value until null
-                            let mut pos = ptr::read_unaligned(value_ptr(value) as *mut *mut SlHead);
-                            let mut fst = true;
-                            while !pos.is_null() {
-                                if !fst {
-                                    write!(f, " ").unwrap()
-                                }
-                                write!(f, "{} ", context(table, car(pos)).to_string()).unwrap();
-                                write!(f, "{}", context(table, cdr(pos)).to_string()).unwrap();
-                                pos = next_list_elt(pos);
-                                fst = false;
-                            }
+                            write!(f, "{} ", context(table, car(pos)).to_string()).unwrap();
+                            write!(
+                                f,
+                                "{}",
+                                context(
+                                    table,
+                                    cdr(unsafe { memmgt::which_mem_region(value) }, pos)
+                                )
+                                .to_string()
+                            )
+                            .unwrap();
+                            pos = get_next_list_elt(pos);
+                            fst = false;
                         }
                     }
                     write!(f, "}}")
                 }
-                SlType::Proc => write!(f, "<procedure>"),
-                SlType::Symbol => write!(
-                    f,
-                    "{}",
-                    match sym_mode(value) {
-                        SlSymbolMode::ById => sym_get_str(sym_tab_lookup_by_id(table, value)),
-                        SlSymbolMode::ByStr => sym_get_str(value),
-                    }
-                ),
-                SlType::Keyword => write!(
-                    f,
-                    ":{}",
-                    sym_get_str(sym_tab_lookup_id_num(table, key_get_id(value)))
-                ),
-                SlType::String => write!(f, "\"{}\"", string_get(value)),
-                SlType::FixInt => write!(f, "{}", fixint_get(value)),
-                SlType::FixFloat => write!(f, "{}", fixfloat_get(value)),
-                SlType::MpInt => write!(f, "mpint"),
-                SlType::MpFloat => write!(f, "mpfloat"),
-                SlType::Rational => write!(f, "rational"),
-                SlType::Complex => write!(f, "complex"),
-                SlType::Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
-                // TODO: consider how to store / handle / display errors
-                SlType::Err => write!(f, "<error>"),
-                SlType::Other => write!(f, "other"),
-            }
+                ProcLambda | ProcNative => write!(f, "<$procedure>"),
+                _ => write!(f, "<@core/$other>"),
+            },
+            None => write!(f, "<$other>"),
         }
     }
 }
-
-// TODO: interpret a file of Sail code such as "example.sl"
 
 /// Accepts an input stream and runs a read - evaluate - print loop perpetually
 pub fn repl(stream_in: std::io::Stdin) {
     // TODO: Consider stack-like environment per function
     // TODO: Start to think about namespaces etc
 
-    let sector = unsafe { memmgt::acquire_mem_sector(1000000) };
+    let region = unsafe { memmgt::acquire_mem_region(1000000) };
 
     // Create persistent environment and symbol table
-    let tbl = unsafe { sym_tab_create(sector) };
-    let env = unsafe { env_create(sector) };
+    let (tbl, env) = prep_environment(region);
 
     // Load standard / base definitions into environment and symbol table
-    environment_setup(tbl, env);
+    environment_setup(region, tbl, env);
 
     loop {
         let mut input = String::new();
         stream_in.read_line(&mut input).expect("Failure");
 
-        let expr = match parser::parse(tbl, &input) {
+        let expr = match parser::parse(region, tbl, &input) {
             Ok(out) => out,
             Err(_) => {
                 println!("Parse Error");
@@ -1298,7 +390,7 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         };
 
-        let result = match unsafe { eval(tbl, env, expr) } {
+        let result = match eval(region, tbl, env, expr) {
             Ok(out) => out,
             Err(_) => {
                 println!("Evaluation Error");
@@ -1317,72 +409,50 @@ pub fn run_file(filename: &str) -> Result<String, SailErr> {
 
 /// Interprets a Sail expression, returning the result
 pub fn interpret(code: &str) -> Result<String, SailErr> {
-    let sector = unsafe { memmgt::acquire_mem_sector(100000) };
+    let region = unsafe { memmgt::acquire_mem_region(100000) };
 
-    let tbl = unsafe { sym_tab_create(sector) };
-    let env = unsafe { env_create(sector) };
+    let (tbl, env) = prep_environment(region);
 
-    environment_setup(tbl, env);
+    environment_setup(region, tbl, env);
 
-    let expr = parser::parse(tbl, code)?;
-    let result = unsafe { eval(tbl, env, expr) }?;
+    let expr = parser::parse(region, tbl, code)?;
+    let result = eval(region, tbl, env, expr)?;
 
     Ok(context(tbl, result).to_string())
 }
 
 /// TODO: fix functions so such insanity isn't required to get them in place
-pub fn environment_setup(tbl: *mut SlHead, env: *mut SlHead) {
-    // Special form symbols
-    insert_special_form(tbl, env, b"def");
-    insert_special_form(tbl, env, b"do");
-    insert_special_form(tbl, env, b"fn");
-    insert_special_form(tbl, env, b"if");
-    insert_special_form(tbl, env, b"quote");
+pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut SlHead) {
+    for s in SYM_ARRAY.iter() {
+        sym_tab_get_id(reg, tbl, s);
+    }
 
     // Native functions
-    insert_native_proc(tbl, env, b"+", add, 2);
-    insert_native_proc(tbl, env, b"-", sub, 2);
-    insert_native_proc(tbl, env, b"mod", modulus, 2);
-    insert_native_proc(tbl, env, b"=", equal, 2);
-    insert_native_proc(tbl, env, b"print", print, 1);
-    insert_native_proc(tbl, env, b"printenv", printenv, 0);
-    insert_native_proc(tbl, env, b"color", color, 4);
-    insert_native_proc(tbl, env, b"qtx", qtx, 2);
-}
-
-fn insert_special_form(tbl: *mut SlHead, env: *mut SlHead, name: &[u8]) {
-    unsafe {
-        let sector = memmgt::which_mem_sector(tbl);
-
-        let form_str = init_symbol(sector, false, SlSymbolMode::ByStr, name.len() as u16);
-        sym_set_str(form_str, name);
-        let form_id = init_symbol(sector, false, SlSymbolMode::ById, 0);
-        sym_set_id(form_id, sym_tab_insert(tbl, form_str));
-
-        env_layer_ins_entry(car(env), form_id, form_str);
-    }
+    insert_native_proc(reg, tbl, env, "+", add, 2);
+    insert_native_proc(reg, tbl, env, "-", sub, 2);
+    insert_native_proc(reg, tbl, env, "mod", modulus, 2);
+    insert_native_proc(reg, tbl, env, "=", equal, 2);
+    insert_native_proc(reg, tbl, env, "print", print, 1);
+    insert_native_proc(reg, tbl, env, "printenv", printenv, 0);
+    // insert_native_proc(reg, tbl, env, "color", color, 4);
+    // insert_native_proc(reg, tbl, env, "qtx", qtx, 2);
 }
 
 /// TODO: intended to be temporary; still relies on some "magic values"
 fn insert_native_proc(
+    reg: *mut memmgt::Region,
     tbl: *mut SlHead,
     env: *mut SlHead,
-    name: &[u8],
-    func: unsafe fn(*mut SlHead, *mut SlHead) -> *mut SlHead,
+    name: &str,
+    func: fn(*mut SlHead, *mut SlHead) -> *mut SlHead,
     argct: u16,
 ) {
-    unsafe {
-        let sector = memmgt::which_mem_sector(tbl);
+    let proc_id = init_symbol(reg);
+    sym_set_id(proc_id, sym_tab_get_id(reg, tbl, name));
 
-        let proc_str = init_symbol(sector, false, SlSymbolMode::ByStr, name.len() as u16);
-        sym_set_str(proc_str, name);
-        let proc_id = init_symbol(sector, false, SlSymbolMode::ById, 0);
-        sym_set_id(proc_id, sym_tab_insert(tbl, proc_str));
-
-        let proc_fn = init_proc(sector, false, SlProcMode::Native, argct);
-        proc_native_set(proc_fn, func);
-        env_layer_ins_entry(car(env), proc_id, proc_fn);
-    }
+    let proc_fn = init_proc_native(reg, argct);
+    proc_native_set_body(proc_fn, func);
+    env_layer_ins_entry(reg, car(env), proc_id, proc_fn);
 }
 
 /// TODO: improve macro to allow adding functions to environment?
@@ -1409,32 +479,32 @@ macro_rules! sail_fn {
 
 // TODO: native functions MUST be fully safe to use
 sail_fn! {
-    sector;
+    reg;
 
     add [fst, snd] {
-        let out = init_fixint(sector, false);
-        let result = fixint_get(fst) + fixint_get(snd);
-        fixint_set(out, result);
+        let out = init_i64(reg);
+        let result = i64_get(fst) + i64_get(snd);
+        i64_set(out, result);
         return out;
     }
 
     sub [fst, snd] {
-        let out = init_fixint(sector, false);
-        let result = fixint_get(fst) - fixint_get(snd);
-        fixint_set(out, result);
+        let out = init_i64(reg);
+        let result = i64_get(fst) - i64_get(snd);
+        i64_set(out, result);
         return out;
     }
 
     modulus [fst, snd] {
-        let out = init_fixint(sector, false);
-        let result = fixint_get(fst) % fixint_get(snd);
-        fixint_set(out, result);
+        let out = init_i64(reg);
+        let result = i64_get(fst) % i64_get(snd);
+        i64_set(out, result);
         return out;
     }
 
     equal [fst, snd] {
-        let out = init_bool(sector, false);
-        let result = fixint_get(fst) == fixint_get(snd);
+        let out = init_bool(reg);
+        let result = i64_get(fst) == i64_get(snd);
         bool_set(out, result);
         return out;
     }
@@ -1495,92 +565,73 @@ fn printenv(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
 
 /// Evaluates a Sail value, returning the result
 /// TODO: **Macros**, closures, continuations
-pub unsafe fn eval(
+pub fn eval(
+    reg: *mut memmgt::Region,
     tbl: *mut SlHead,
     env: *mut SlHead,
     expr: *mut SlHead,
 ) -> Result<*mut SlHead, SailErr> {
-    let sector = memmgt::which_mem_sector(expr);
+    if symbol_p(expr) {
+        return Ok(env_lookup(reg, env, expr));
+    } else if atom_p(expr) {
+        return Ok(expr);
+    } else {
+        assert!(list_p(expr));
+        let lcar = car(expr);
+        let args = cdr(reg, expr);
 
-    match get_type(expr) {
-        SlType::Symbol => return Ok(env_lookup(env, expr)),
-        SlType::Ref => {
-            if ref_empty_p(expr) {
-                return Ok(expr);
-            }
-
-            let operator = eval(tbl, env, car(expr))?;
-            // TODO: replace with next_list_elt(list_get(expr)) to avoid allocation
-            let args = cdr(expr);
-            match get_type(operator) {
-                SlType::Proc => {
-                    return apply(tbl, env, operator, args);
+        if symbol_p(lcar) {
+            // TODO: what other special forms are needed?
+            // TODO: is there a need for special forms? why not just make these native functions?
+            // TODO: these may be good examples for creating / using native functions cleanly
+            // TODO: just like native functions, these special forms should check for type
+            let id = sym_get_id(lcar);
+            if id == SP_DEF.0 {
+                env_layer_ins_entry(
+                    reg,
+                    car(env),
+                    car(args),
+                    eval(reg, tbl, env, car(cdr(reg, args)))?,
+                );
+                return Ok(car(args));
+            } else if id == SP_DO.0 {
+                let mut remain = args;
+                let mut result = nil();
+                while !nil_p(remain) {
+                    result = eval(reg, tbl, env, car(remain))?;
+                    remain = cdr(reg, remain)
                 }
-                SlType::Symbol => {
-                    // TODO: what other special forms are needed?
-                    // TODO: is there a need for special forms? why not just make these native functions?
-                    // TODO: these may be good examples for creating / using native functions cleanly
-                    // TODO: just like native functions, these special forms should check for type
-                    match sym_get_str(operator) {
-                        "def" => {
-                            env_layer_ins_entry(
-                                car(env),
-                                car(args),
-                                eval(tbl, env, car(cdr(args)))?,
-                            );
-                            return Ok(car(args));
-                        }
-                        "do" => {
-                            let mut remain = args;
-                            let mut result = ptr::null_mut();
-                            while !nil_p(remain) {
-                                result = eval(tbl, env, car(remain))?;
-                                remain = cdr(remain)
-                            }
-                            if !result.is_null() {
-                                return Ok(result);
-                            } else {
-                                let out = init_ref(sector, false, SlRefMode::List);
-                                return Ok(out);
-                            }
-                        }
-                        "fn" => {
-                            let argvec = car(args);
-                            let argct = vec_get_len(argvec);
-                            let out = init_proc(sector, false, SlProcMode::Lambda, argct);
-                            for i in 0..argct {
-                                proc_set_arg(out, i, sym_get_id(vec_idx(argvec, i)));
-                            }
-
-                            proc_lambda_set(out, car(cdr(args)));
-                            return Ok(out);
-                        }
-                        "if" => {
-                            let test = car(args);
-                            let fst = car(cdr(args));
-                            let snd = car(cdr(cdr(args)));
-
-                            if bool_get(eval(tbl, env, test)?) {
-                                return eval(tbl, env, fst);
-                            } else {
-                                return eval(tbl, env, snd);
-                            }
-                        }
-                        "quote" => {
-                            return Ok(car(args));
-                        }
-                        _ => {
-                            return Err(SailErr::Error);
-                        }
-                    }
+                return Ok(result);
+            } else if id == SP_FN.0 {
+                let argvec = car(args);
+                let argct = stdvec_get_len(argvec) as u16;
+                let out = init_proc_lambda(reg, argct);
+                for i in 0..argct {
+                    proc_lambda_set_arg(out, i, sym_get_id(stdvec_idx(argvec, i as u32)));
                 }
-                _ => {
-                    eprintln!("error on operator type");
-                    Err(SailErr::Error)
+                proc_lambda_set_body(out, car(cdr(reg, args)));
+                return Ok(out);
+            } else if id == SP_IF.0 {
+                let test = car(args);
+                let fst = car(cdr(reg, args));
+                let snd = car(cdr(reg, cdr(reg, args)));
+                if bool_get(eval(reg, tbl, env, test)?) {
+                    return eval(reg, tbl, env, fst);
+                } else {
+                    return eval(reg, tbl, env, snd);
                 }
+            } else if id == SP_QUOTE.0 {
+                return Ok(car(args));
             }
         }
-        _ => return Ok(expr),
+        let operator = eval(reg, tbl, env, lcar)?;
+        // TODO: replace with next_list_elt(list_get(expr)) to avoid allocation
+        if proc_p(operator) {
+            return apply(reg, tbl, env, operator, args);
+        } else {
+            eprintln!("operator type error");
+            return Err(SailErr::Error);
+        }
     }
 }
 
@@ -1588,52 +639,53 @@ pub unsafe fn eval(
 /// TODO: execute multiple expressions in a lambda sequentially?
 /// TODO: match the argument structure to the number of arguments needed
 /// TODO: tail call optimization
-unsafe fn apply(
+fn apply(
+    reg: *mut memmgt::Region,
     tbl: *mut SlHead,
     env: *mut SlHead,
     proc: *mut SlHead,
     args: *mut SlHead,
 ) -> Result<*mut SlHead, SailErr> {
-    let sector = memmgt::which_mem_sector(proc);
+    let typ = match core_type(proc) {
+        Some(t) if t == CoreType::ProcLambda => true,
+        Some(t) if t == CoreType::ProcNative => false,
+        _ => return Err(SailErr::Error),
+    };
 
     let argct = proc_get_argct(proc);
-    let mode = proc_mode(proc);
-
-    let proc_env = env_new_arg_layer(sector);
+    let proc_env = env_new_arg_layer(reg);
 
     let mut arglist = args;
-
     for i in 0..argct {
-        if nil_p(arglist) || ref_empty_p(arglist) {
+        if nil_p(arglist) {
             return Err(SailErr::Error);
         }
 
-        let curarg = eval(tbl, env, car(arglist))?;
+        let curarg = eval(reg, tbl, env, car(arglist))?;
 
-        match mode {
-            SlProcMode::Lambda => {
-                env_arg_layer_ins(proc_env, proc_get_arg(proc, i), curarg);
-            }
-            SlProcMode::Native => {
-                // special symbols "@0", "@1", "@2", etc for native arguments
-                let mut spec_str = String::from("@");
-                spec_str.push_str(&(i.to_string()));
+        if typ {
+            env_arg_layer_ins(reg, proc_env, proc_lambda_get_arg(reg, proc, i), curarg);
+        } else {
+            // TODO: need better call system for natives and maybe lambdas too
+            // special symbols "%0", "%1", "%2", etc for native arguments
+            let mut spec_str = String::from("%");
+            spec_str.push_str(&(i.to_string()));
 
-                let spec_sym_id = init_symbol(sector, false, SlSymbolMode::ById, 0);
-                sym_set_id(spec_sym_id, sym_tab_get_id(tbl, &spec_str));
+            let spec_sym_id = init_symbol(reg);
+            sym_set_id(spec_sym_id, sym_tab_get_id(reg, tbl, &spec_str));
 
-                env_arg_layer_ins(proc_env, spec_sym_id, curarg);
-            }
+            env_arg_layer_ins(reg, proc_env, spec_sym_id, curarg);
         }
 
-        arglist = cdr(arglist)
+        arglist = cdr(reg, arglist)
     }
 
     env_push_layer(env, proc_env);
 
-    let result = match mode {
-        SlProcMode::Lambda => eval(tbl, env, proc_lambda_body(proc)),
-        SlProcMode::Native => Ok(proc_native_body(proc)(tbl, env)),
+    let result = if typ {
+        eval(reg, tbl, env, proc_lambda_get_body(proc))
+    } else {
+        Ok(proc_native_get_body(proc)(tbl, env))
     };
 
     env_pop_layer(env);
