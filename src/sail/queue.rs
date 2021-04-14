@@ -2,7 +2,6 @@ use super::{memmgt, SailErr, SlHead};
 
 // TODO: probably will need to use atomic operations for these
 // TODO: global identifiers for queues?
-// TODO: queues manage their own memory sector for items in transit
 
 // unsafe fn atomic_ref_set(loc: *mut SlHead, next: *mut SlHead) {}
 

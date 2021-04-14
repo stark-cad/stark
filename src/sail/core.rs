@@ -259,7 +259,7 @@ pub fn nil_p(loc: *mut SlHead) -> bool {
 #[inline(always)]
 pub fn ref_p(loc: *mut SlHead) -> bool {
     match core_type(loc) {
-        Some(t) if t == CoreType::Ref => true,
+        Some(t) if t == CoreType::Ref && !nil_p(ref_get(loc)) => true,
         _ => false,
     }
 }
@@ -457,7 +457,7 @@ pub fn set_next_list_elt(loc: *mut SlHead, next: *mut SlHead) {
     }
 }
 
-/// TODO: check for types and handle errors?
+/// TODO: in future, handle redirects?
 /// Gets the pointer to the next element from a list element
 #[inline(always)]
 pub fn get_next_list_elt(loc: *mut SlHead) -> *mut SlHead {
@@ -912,11 +912,7 @@ fn core_cons_copy(reg: *mut memmgt::Region, car: *mut SlHead, cdr: *mut SlHead) 
 /// TODO: give env and symtab their own predicate types
 /// TODO: the core does not use maps except for env and symtab, so consolidate the code
 fn env_create(reg: *mut memmgt::Region) -> *mut SlHead {
-    // let head = init_ref(reg);
-    let base = init_hash_map(reg, 255);
-    base
-    // ref_set(head, base);
-    // head
+    init_hash_map(reg, 255)
 }
 
 #[inline(always)]

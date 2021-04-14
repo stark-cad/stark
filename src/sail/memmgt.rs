@@ -55,8 +55,8 @@ impl RegionTable {
             alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8) as *mut usize;
         self.zone_array =
             alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8) as *mut *mut Zone;
-        self.region_array =
-            alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8) as *mut *mut Region;
+        self.region_array = alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8)
+            as *mut *mut Region;
         self.cap = cap;
 
         std::intrinsics::atomic_store_rel(lock, false as u8);
@@ -103,7 +103,7 @@ impl RegionTable {
 
 // TODO: *garbage collection*
 // TODO: separate zones for values with static size and those with variable size?
-// TODO: could use a freelist in empty portions of a memory zone
+// TODO: implement the freelist in alloc, realloc, and dealloc
 // TODO: current memory model only sort of works for multiple threads
 // TODO: Probably make this private in the future
 pub unsafe fn alloc(region: *mut Region, size: usize, cfg: u8) -> *mut SlHead {
@@ -199,7 +199,10 @@ const MEM_REGION_HEAD_SIZE: usize = mem::size_of::<Region>();
 const MEM_ZONE_HEAD_SIZE: usize = mem::size_of::<Zone>();
 
 pub unsafe fn acquire_mem_region(zone_size: usize) -> *mut Region {
-    // log::debug!("Creating mem sector / region");
+    if cfg!(feature = "memdbg") {
+        log::debug!("Creating mem region");
+    }
+
     if REGION_TABLE.cap == 0 {
         REGION_TABLE.setup(64);
     }
@@ -245,7 +248,9 @@ unsafe fn which_mem_zone(ptr: *mut SlHead) -> *mut Zone {
 unsafe fn new_mem_zone(region: *mut Region) {
     assert_ne!(region, ptr::null_mut());
 
-    // log::debug!("Creating mem zone / block");
+    if cfg!(feature = "memdbg") {
+        log::debug!("Creating mem zone");
+    }
 
     let region_head = region.as_mut().unwrap();
     let size = region_head.zone_size;
