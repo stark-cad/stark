@@ -36,7 +36,6 @@ impl fmt::Debug for SailErr {
 /// TODO: these items must be added to the symtab and env on every run
 /// TODO: remember to have a bitvec type
 /// TODO: use a script to automatically generate a Rust "env" file
-/// TODO: separate all core types from other types a little bit more
 macro_rules! incl_symbols {
     ( $array:ident : $( $id:literal $name:ident $strng:literal $mode:ident );+ $size:literal ) => {
         $(
@@ -269,7 +268,7 @@ fn set_pred_type(loc: *mut SlHead, typ: u32) {
 //     }
 // }
 
-pub union SlSend {
+union _SlSend {
     ptr: *mut SlHead,
     num: usize,
 }
@@ -302,11 +301,6 @@ impl fmt::Display for SlContextVal {
                     write!(f, "(").unwrap();
                     let mut elt = ref_get(value);
                     while !nil_p(elt) {
-                        // if !list_elt_p(elt) {
-                        //     write!(f, ". ").unwrap();
-                        //     write!(f, "{}", context(table, elt).to_string()).unwrap();
-                        //     break;
-                        // }
                         write!(f, "{}", context(table, elt).to_string()).unwrap();
                         elt = get_next_list_elt(elt);
                         if !nil_p(elt) {
@@ -354,7 +348,7 @@ impl fmt::Display for SlContextVal {
                     }
                     write!(f, "}}")
                 }
-                ProcLambda | ProcNative => write!(f, "<$procedure>"),
+                ProcLambda | ProcNative => write!(f, "<$proc>"),
                 _ => write!(f, "<@core/$other>"),
             },
             None => write!(f, "<$other>"),
@@ -375,6 +369,11 @@ pub fn repl(stream_in: std::io::Stdin) {
     // Load standard / base definitions into environment and symbol table
     environment_setup(region, tbl, env);
 
+    let mut stack = eval::EvalStack::new(10000);
+
+    let mut ret_slot = nil();
+    let ret_addr: *mut *mut SlHead = &mut ret_slot;
+
     loop {
         let mut input = String::new();
         stream_in.read_line(&mut input).expect("Failure");
@@ -387,17 +386,24 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         };
 
-        // let result = match eval(region, tbl, env, expr) {
-        //     Ok(out) => out,
-        //     Err(_) => {
-        //         println!("Evaluation Error");
-        //         continue;
-        //     }
-        // };
+        if ref_p(expr) {
+            stack.push_frame_head(ret_addr, eval::Opcode::Eval, env);
+            stack.push(ref_get(expr));
+        } else {
+            if symbol_p(expr) {
+                ret_slot = env_lookup(env, expr);
+            } else {
+                ret_slot = expr;
+            }
+        }
 
-        let result = eval::eval_expr(region, tbl, env, expr);
+        while nil_p(ret_slot) {
+            stack.iter_once(region, tbl);
+        }
 
-        println!("{}\n", context(tbl, result).to_string())
+        println!("{}\n", context(tbl, ret_slot).to_string());
+
+        ret_slot = nil();
     }
 }
 
@@ -415,13 +421,12 @@ pub fn interpret(code: &str) -> Result<String, SailErr> {
     environment_setup(region, tbl, env);
 
     let expr = parser::parse(region, tbl, code)?;
-    // let result = eval(region, tbl, env, expr)?;
     let result = eval::eval_expr(region, tbl, env, expr);
 
     Ok(context(tbl, result).to_string())
 }
 
-/// TODO: fix functions so such insanity isn't required to get them in place
+/// TODO: make it easier to add native functions to the environment
 pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut SlHead) {
     for s in SYM_ARRAY.iter() {
         sym_tab_get_id(reg, tbl, s);
@@ -457,7 +462,6 @@ fn insert_native_proc(
 
 /// TODO: improve macro to allow adding functions to environment?
 /// TODO: type checks and variable length arglists for native functions
-/// TODO: add memory sector to function signature
 /// TODO: generate these functions somehow else if macros won't cut it
 macro_rules! sail_fn {
     ( $reg:ident; $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
@@ -536,16 +540,13 @@ fn print(
 
 // TODO: sail_fn macro does not work for functions that access higher environment levels
 fn printenv(
-    reg: *mut memmgt::Region,
+    _reg: *mut memmgt::Region,
     tbl: *mut SlHead,
     env: *mut SlHead,
     _args: &[*mut SlHead],
 ) -> *mut SlHead {
     println!("{}", context(tbl, env).to_string());
-    // TODO: from_bool function or similar
-    let out = init_bool(reg);
-    bool_set(out, true);
-    return out;
+    return nil();
 }
 
 /// TODO: replace with Sail-defined function

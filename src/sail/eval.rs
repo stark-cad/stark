@@ -7,7 +7,7 @@ use std::convert::TryInto;
 use std::ptr;
 
 /// Sail evaluation stack
-struct EvalStack {
+pub struct EvalStack {
     /// First (bottom) element of the stack
     stack_start: *mut usize,
     /// Maximum stack element address
@@ -16,10 +16,12 @@ struct EvalStack {
     stack_top: *mut usize,
     /// Start of the stack's top frame
     frame_start: *mut usize,
+    /// Location to write discarded return values
+    null_loc: *mut usize,
 }
 
 impl EvalStack {
-    fn new(size: usize) -> Self {
+    pub fn new(size: usize) -> Self {
         let size_bytes = size * 8;
         unsafe {
             let layout = alloc::Layout::from_size_align_unchecked(size_bytes, 8);
@@ -30,6 +32,7 @@ impl EvalStack {
                 stack_max: stack.add(size_bytes) as *mut usize,
                 stack_top: stack as *mut usize,
                 frame_start: stack as *mut usize,
+                null_loc: Box::into_raw(Box::from(0)),
             }
         }
     }
@@ -78,8 +81,8 @@ impl EvalStack {
     }
 
     #[inline(always)]
-    fn push(&mut self, word: *mut SlHead) {
-        print!("push 1; ");
+    pub fn push(&mut self, word: *mut SlHead) {
+        // print!("push 1; ");
 
         unsafe {
             let current_top = self.stack_top;
@@ -91,29 +94,29 @@ impl EvalStack {
             ptr::write(new_top, word as usize);
         }
 
-        println!(
-            "size: {}",
-            (self.stack_top as usize - self.stack_start as usize) / 8
-        );
+        // println!(
+        //     "size: {}",
+        //     (self.stack_top as usize - self.stack_start as usize) / 8
+        // );
     }
 
     #[inline(always)]
     fn pop(&mut self) {
-        print!("pop 1; ");
+        // print!("pop 1; ");
 
         unsafe {
             self.stack_top = self.stack_top.sub(1);
         }
 
-        println!(
-            "size: {}",
-            (self.stack_top as usize - self.stack_start as usize) / 8
-        );
+        // println!(
+        //     "size: {}",
+        //     (self.stack_top as usize - self.stack_start as usize) / 8
+        // );
     }
 
     #[inline(always)]
-    fn push_frame_head(&mut self, ret: *mut *mut SlHead, opc: Opcode, env: *mut SlHead) {
-        print!("PUSH: {:?}; ", opc);
+    pub fn push_frame_head(&mut self, ret: *mut *mut SlHead, opc: Opcode, env: *mut SlHead) {
+        // print!("PUSH: {:?}; ", opc);
 
         unsafe {
             let current_top = self.stack_top;
@@ -129,15 +132,15 @@ impl EvalStack {
             self.frame_start = current_top.add(1);
         }
 
-        println!(
-            "size: {}",
-            (self.stack_top as usize - self.stack_start as usize) / 8
-        );
+        // println!(
+        //     "size: {}",
+        //     (self.stack_top as usize - self.stack_start as usize) / 8
+        // );
     }
 
     #[inline(always)]
     fn pop_frame(&mut self) {
-        print!("POP: {:?}; ", self.frame_opc());
+        // print!("POP: {:?}; ", self.frame_opc());
 
         unsafe {
             let last_frame = ptr::read(self.frame_start);
@@ -145,29 +148,27 @@ impl EvalStack {
             self.frame_start = last_frame as *mut usize;
         }
 
-        println!(
-            "size: {}",
-            (self.stack_top as usize - self.stack_start as usize) / 8
-        );
+        // println!(
+        //     "size: {}",
+        //     (self.stack_top as usize - self.stack_start as usize) / 8
+        // );
     }
 
     #[inline(always)]
-    fn frame_ret(&mut self) -> *mut *mut SlHead {
-        unsafe { ptr::read(self.frame_start.add(1) as *mut *mut *mut SlHead) }
+    pub fn is_empty(&mut self) -> bool {
+        self.stack_start == self.stack_top
     }
 
     #[inline(always)]
-    fn frame_env(&mut self) -> *mut SlHead {
-        unsafe { (ptr::read(self.frame_start.add(2)) >> 16) as *mut SlHead }
-    }
-
-    #[inline(always)]
-    fn frame_opc(&mut self) -> Opcode {
-        unsafe {
-            ((ptr::read(self.frame_start.add(2)) & 0x000000000000FFFF) as u8)
+    fn frame_top(&mut self) -> (*mut *mut SlHead, *mut SlHead, Opcode) {
+        let env_and_opc = unsafe { ptr::read(self.frame_start.add(2)) };
+        (
+            unsafe { ptr::read(self.frame_start.add(1) as *mut *mut *mut SlHead) },
+            (env_and_opc >> 16) as *mut SlHead,
+            ((env_and_opc & 0x000000000000FFFF) as u8)
                 .try_into()
-                .unwrap()
-        }
+                .unwrap(),
+        )
     }
 
     #[inline(always)]
@@ -175,48 +176,18 @@ impl EvalStack {
         unsafe { ptr::read(self.frame_start.add(3 + offset)) as *mut SlHead }
     }
 
-    // fn iter_once(&mut self) {}
-}
+    pub fn iter_once(&mut self, reg: *mut memmgt::Region, tbl: *mut SlHead) {
+        // ***********************************
+        // * Sail stack-based evaluation logic
+        // ***********************************
 
-pub fn eval_expr(
-    reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    env: *mut SlHead,
-    expr: *mut SlHead,
-) -> *mut SlHead {
-    let mut result = nil();
-    let ret_addr: *mut *mut SlHead = &mut result;
-
-    let mut null = nil();
-    let null_addr: *mut *mut SlHead = &mut null;
-
-    let mut stack = EvalStack::new(10000);
-
-    if ref_p(expr) {
-        stack.push_frame_head(ret_addr, Opcode::Eval, env);
-        stack.push(ref_get(expr));
-    } else {
-        if symbol_p(expr) {
-            result = env_lookup(env, expr);
-        } else {
-            result = expr;
-        }
-    }
-
-    // *********************************************************
-    // * Sail stack-based evaluation logic
-    // * TODO: split out to enable using a single thread stack
-    // *********************************************************
-    while stack.stack_top != stack.stack_start {
-        let ret = stack.frame_ret();
-        let env = stack.frame_env();
-        let opc = stack.frame_opc();
-        println!("ENTER: {:?}", opc);
+        let (ret, env, opc) = self.frame_top();
+        // println!("ENTER: {:?}", opc);
 
         match opc {
             Opcode::Eval => {
-                let list = stack.frame_obj(0);
-                stack.pop_frame();
+                let list = self.frame_obj(0);
+                self.pop_frame();
 
                 let raw_op = list;
                 let raw_args = get_next_list_elt(list);
@@ -225,32 +196,32 @@ pub fn eval_expr(
                     match sym_get_id(raw_op) {
                         id if id == SP_DEF.0 => {
                             // needs: symbol to bind, value to bind to it
-                            stack.push_frame_head(ret, Opcode::Bind, env);
-                            stack.push(raw_args);
+                            self.push_frame_head(ret, Opcode::Bind, env);
+                            self.push(raw_args);
 
                             let value = get_next_list_elt(raw_args);
                             if ref_p(value) {
-                                stack.push(nil());
+                                self.push(nil());
 
                                 let return_to =
-                                    unsafe { stack.frame_start.add(4) } as *mut *mut SlHead;
-                                stack.push_frame_head(return_to, Opcode::Eval, env);
-                                stack.push(ref_get(value));
+                                    unsafe { self.frame_start.add(4) } as *mut *mut SlHead;
+                                self.push_frame_head(return_to, Opcode::Eval, env);
+                                self.push(ref_get(value));
                             } else {
                                 let out = if symbol_p(value) {
                                     env_lookup(env, value)
                                 } else {
                                     value
                                 };
-                                stack.push(out);
+                                self.push(out);
                             }
-                            continue;
+                            return;
                         }
                         id if id == SP_DO.0 => {
                             // needs: current remaining list of expressions
-                            stack.push_frame_head(ret, Opcode::DoSeq, env);
-                            stack.push(raw_args);
-                            continue;
+                            self.push_frame_head(ret, Opcode::DoSeq, env);
+                            self.push(raw_args);
+                            return;
                         }
                         id if id == SP_FN.0 => {
                             // needs: nothing else evaluated
@@ -267,20 +238,20 @@ pub fn eval_expr(
                             }
                             proc_lambda_set_body(out, get_next_list_elt(raw_args));
                             unsafe { ptr::write(ret, out) };
-                            continue;
+                            return;
                         }
                         id if id == SP_IF.0 => {
                             // needs: evaluated test and both branches
-                            stack.push_frame_head(ret, Opcode::Branch, env);
-                            stack.push(nil());
-                            stack.push(get_next_list_elt(raw_args));
-                            stack.push(get_next_list_elt(get_next_list_elt(raw_args)));
+                            self.push_frame_head(ret, Opcode::Branch, env);
+                            self.push(nil());
+                            self.push(get_next_list_elt(raw_args));
+                            self.push(get_next_list_elt(get_next_list_elt(raw_args)));
 
-                            let return_to = unsafe { stack.frame_start.add(3) } as *mut *mut SlHead;
+                            let return_to = unsafe { self.frame_start.add(3) } as *mut *mut SlHead;
 
                             if ref_p(raw_args) {
-                                stack.push_frame_head(return_to, Opcode::Eval, env);
-                                stack.push(ref_get(raw_args));
+                                self.push_frame_head(return_to, Opcode::Eval, env);
+                                self.push(ref_get(raw_args));
                             } else {
                                 let out = if symbol_p(raw_args) {
                                     env_lookup(env, raw_args)
@@ -289,26 +260,26 @@ pub fn eval_expr(
                                 };
                                 unsafe { ptr::write(return_to, out) };
                             }
-                            continue;
+                            return;
                         }
                         id if id == SP_QUOTE.0 => {
                             // needs: nothing else evaluated
                             unsafe { ptr::write(ret, raw_args) };
-                            continue;
+                            return;
                         }
                         _ => {}
                     }
                 }
 
                 if ref_p(raw_op) {
-                    stack.push_frame_head(ret, Opcode::PreApp, env);
-                    stack.push(nil());
-                    stack.push(raw_args);
+                    self.push_frame_head(ret, Opcode::PreApp, env);
+                    self.push(nil());
+                    self.push(raw_args);
 
-                    let return_to = unsafe { stack.frame_start.add(3) } as *mut *mut SlHead;
+                    let return_to = unsafe { self.frame_start.add(3) } as *mut *mut SlHead;
 
-                    stack.push_frame_head(return_to, Opcode::Eval, env);
-                    stack.push(ref_get(raw_op));
+                    self.push_frame_head(return_to, Opcode::Eval, env);
+                    self.push(ref_get(raw_op));
                 } else {
                     let proc = if symbol_p(raw_op) {
                         env_lookup(env, raw_op)
@@ -317,13 +288,13 @@ pub fn eval_expr(
                     };
                     assert!(proc_p(proc));
 
-                    stack.push_frame_head(ret, Opcode::Apply, env);
+                    self.push_frame_head(ret, Opcode::Apply, env);
 
-                    stack.push(proc);
+                    self.push(proc);
                     for _ in 0..proc_get_argct(proc) {
-                        stack.push(nil());
+                        self.push(nil());
                     }
-                    let apply_start = stack.frame_start;
+                    let apply_start = self.frame_start;
                     for i in 0..proc_get_argct(proc) {
                         let mut arg = raw_args;
                         for _ in 0..i {
@@ -332,8 +303,8 @@ pub fn eval_expr(
                         let return_to =
                             unsafe { apply_start.add(4 + i as usize) } as *mut *mut SlHead;
                         if ref_p(arg) {
-                            stack.push_frame_head(return_to, Opcode::Eval, env);
-                            stack.push(ref_get(arg));
+                            self.push_frame_head(return_to, Opcode::Eval, env);
+                            self.push(ref_get(arg));
                         } else {
                             let out = if symbol_p(arg) {
                                 env_lookup(env, arg)
@@ -346,22 +317,22 @@ pub fn eval_expr(
                 }
             }
             Opcode::Bind => {
-                let symbol = stack.frame_obj(0);
+                let symbol = self.frame_obj(0);
                 assert!(symbol_p(symbol));
-                let value = stack.frame_obj(1);
+                let value = self.frame_obj(1);
 
                 env_layer_ins_entry(reg, env, symbol, value);
-                stack.pop_frame();
+                self.pop_frame();
 
                 unsafe { ptr::write(ret, symbol) };
             }
             Opcode::DoSeq => {
-                let remainder = stack.frame_obj(0);
+                let remainder = self.frame_obj(0);
                 if nil_p(get_next_list_elt(remainder)) {
-                    stack.pop_frame();
+                    self.pop_frame();
                     if ref_p(remainder) {
-                        stack.push_frame_head(ret, Opcode::Eval, env);
-                        stack.push(ref_get(remainder));
+                        self.push_frame_head(ret, Opcode::Eval, env);
+                        self.push(ref_get(remainder));
                     } else {
                         let out = if symbol_p(remainder) {
                             env_lookup(env, remainder)
@@ -371,25 +342,25 @@ pub fn eval_expr(
                         unsafe { ptr::write(ret, out) };
                     }
                 } else {
-                    stack.pop();
-                    stack.push(get_next_list_elt(remainder));
+                    self.pop();
+                    self.push(get_next_list_elt(remainder));
                     if ref_p(remainder) {
-                        stack.push_frame_head(null_addr, Opcode::Eval, env);
-                        stack.push(ref_get(remainder));
+                        self.push_frame_head(self.null_loc as *mut *mut SlHead, Opcode::Eval, env);
+                        self.push(ref_get(remainder));
                     }
                 }
             }
             Opcode::Branch => {
-                let pred_res = stack.frame_obj(0);
+                let pred_res = self.frame_obj(0);
                 coretypck!(pred_res ; Bool);
-                let true_body = stack.frame_obj(1);
-                let false_body = stack.frame_obj(2);
-                stack.pop_frame();
+                let true_body = self.frame_obj(1);
+                let false_body = self.frame_obj(2);
+                self.pop_frame();
 
                 if bool_get(pred_res) {
                     if ref_p(true_body) {
-                        stack.push_frame_head(ret, Opcode::Eval, env);
-                        stack.push(ref_get(true_body));
+                        self.push_frame_head(ret, Opcode::Eval, env);
+                        self.push(ref_get(true_body));
                     } else {
                         let out = if symbol_p(true_body) {
                             env_lookup(env, true_body)
@@ -400,8 +371,8 @@ pub fn eval_expr(
                     }
                 } else {
                     if ref_p(false_body) {
-                        stack.push_frame_head(ret, Opcode::Eval, env);
-                        stack.push(ref_get(false_body));
+                        self.push_frame_head(ret, Opcode::Eval, env);
+                        self.push(ref_get(false_body));
                     } else {
                         let out = if symbol_p(false_body) {
                             env_lookup(env, false_body)
@@ -413,18 +384,18 @@ pub fn eval_expr(
                 }
             }
             Opcode::PreApp => {
-                let proc = stack.frame_obj(0);
+                let proc = self.frame_obj(0);
                 assert!(proc_p(proc));
-                let raw_args = stack.frame_obj(1);
-                stack.pop_frame();
+                let raw_args = self.frame_obj(1);
+                self.pop_frame();
 
-                stack.push_frame_head(ret, Opcode::Apply, env);
+                self.push_frame_head(ret, Opcode::Apply, env);
 
-                stack.push(proc);
+                self.push(proc);
                 for _ in 0..proc_get_argct(proc) {
-                    stack.push(nil());
+                    self.push(nil());
                 }
-                let apply_start = stack.frame_start;
+                let apply_start = self.frame_start;
                 for i in 0..proc_get_argct(proc) {
                     let mut arg = raw_args;
                     for _ in 0..i {
@@ -432,8 +403,8 @@ pub fn eval_expr(
                     }
                     let return_to = unsafe { apply_start.add(4 + i as usize) } as *mut *mut SlHead;
                     if ref_p(arg) {
-                        stack.push_frame_head(return_to, Opcode::Eval, env);
-                        stack.push(ref_get(arg));
+                        self.push_frame_head(return_to, Opcode::Eval, env);
+                        self.push(ref_get(arg));
                     } else {
                         let out = if symbol_p(arg) {
                             env_lookup(env, arg)
@@ -445,7 +416,7 @@ pub fn eval_expr(
                 }
             }
             Opcode::Apply => {
-                let proc = stack.frame_obj(0);
+                let proc = self.frame_obj(0);
                 let typ = match core_type(proc) {
                     Some(t) if t == CoreType::ProcLambda => true,
                     Some(t) if t == CoreType::ProcNative => false,
@@ -463,18 +434,18 @@ pub fn eval_expr(
                             reg,
                             proc_env,
                             proc_lambda_get_arg(reg, proc, i),
-                            stack.frame_obj(i as usize + 1),
+                            self.frame_obj(i as usize + 1),
                         );
                     }
 
-                    stack.pop_frame();
+                    self.pop_frame();
 
-                    stack.push_frame_head(ret, Opcode::DoSeq, proc_env);
-                    stack.push(proc_lambda_get_body(proc));
+                    self.push_frame_head(ret, Opcode::DoSeq, proc_env);
+                    self.push(proc_lambda_get_body(proc));
                 } else {
                     let args: &[*mut SlHead] = unsafe {
                         std::slice::from_raw_parts(
-                            stack.frame_start.add(4) as *mut *mut SlHead,
+                            self.frame_start.add(4) as *mut *mut SlHead,
                             argct as usize,
                         )
                     };
@@ -482,10 +453,37 @@ pub fn eval_expr(
                     let fn_rslt = proc_native_get_body(proc)(reg, tbl, env, args);
 
                     unsafe { ptr::write(ret, fn_rslt) };
-                    stack.pop_frame();
+                    self.pop_frame();
                 }
             }
         }
+    }
+}
+
+pub fn eval_expr(
+    reg: *mut memmgt::Region,
+    tbl: *mut SlHead,
+    env: *mut SlHead,
+    expr: *mut SlHead,
+) -> *mut SlHead {
+    let mut result = nil();
+    let ret_addr: *mut *mut SlHead = &mut result;
+
+    let mut stack = EvalStack::new(10000);
+
+    if ref_p(expr) {
+        stack.push_frame_head(ret_addr, Opcode::Eval, env);
+        stack.push(ref_get(expr));
+    } else {
+        if symbol_p(expr) {
+            result = env_lookup(env, expr);
+        } else {
+            result = expr;
+        }
+    }
+
+    while nil_p(result) {
+        stack.iter_once(reg, tbl);
     }
 
     result
@@ -495,7 +493,7 @@ enum_and_tryfrom! {
     /// Operation code for the frame; stored as a tag at the frame start
     #[derive(Debug, PartialEq, Eq)]
     #[repr(u8)]
-    enum Opcode {
+    pub enum Opcode {
         /// List to be evaluated
         Eval,
 
@@ -522,139 +520,9 @@ struct _Frame {
     env_and_opcode: usize,
 }
 
-// endeavor to have all value slots filled by the time the frame arrives at the top
-// return function arguments straight to the environment?
-// how to call lambda functions using a stack?
-
-// /// Evaluates a Sail value, returning the result
-// /// TODO: **Macros**, closures, continuations
-// pub fn eval(
-//     reg: *mut memmgt::Region,
-//     tbl: *mut SlHead,
-//     env: *mut SlHead,
-//     expr: *mut SlHead,
-// ) -> Result<*mut SlHead, SailErr> {
-//     // TODO: some kind of flag to indicate whether to assume listiness or assume atomicity?
-//     if nil_p(cdr(expr)) {
-//         if symbol_p(expr) {
-//             return Ok(env_lookup(reg, env, expr));
-//         } else {
-//             return Ok(expr);
-//         }
-//     } else {
-//         let lcar = car(expr);
-//         let args = cdr(expr);
-
-//         if symbol_p(lcar) {
-//             // TODO: what other special forms are needed?
-//             // TODO: is there a need for special forms? why not just make these native functions?
-//             // TODO: these may be good examples for creating / using native functions cleanly
-//             // TODO: just like native functions, these special forms should check for type
-//             // TODO: split out into native functions to facilitate new evaluator architecture
-//             let id = sym_get_id(lcar);
-//             if id == SP_DEF.0 {
-//                 env_layer_ins_entry(
-//                     reg,
-//                     car(env),
-//                     car(args),
-//                     eval(reg, tbl, env, car(cdr(args)))?,
-//                 );
-//                 return Ok(car(args));
-//             } else if id == SP_DO.0 {
-//                 let mut remain = args;
-//                 let mut result = nil();
-//                 while !nil_p(remain) {
-//                     result = eval(reg, tbl, env, car(remain))?;
-//                     remain = cdr(remain)
-//                 }
-//                 return Ok(result);
-//             } else if id == SP_FN.0 {
-//                 let argvec = car(args);
-//                 let argct = stdvec_get_len(argvec) as u16;
-//                 let out = init_proc_lambda(reg, argct);
-//                 for i in 0..argct {
-//                     proc_lambda_set_arg(out, i, sym_get_id(stdvec_idx(argvec, i as u32)));
-//                 }
-//                 proc_lambda_set_body(out, car(cdr(args)));
-//                 return Ok(out);
-//             } else if id == SP_IF.0 {
-//                 let test = car(args);
-//                 let fst = car(cdr(args));
-//                 let snd = car(cdr(cdr(args)));
-//                 if bool_get(eval(reg, tbl, env, test)?) {
-//                     return eval(reg, tbl, env, fst);
-//                 } else {
-//                     return eval(reg, tbl, env, snd);
-//                 }
-//             } else if id == SP_QUOTE.0 {
-//                 return Ok(car(args));
-//             }
-//         }
-//         let operator = eval(reg, tbl, env, lcar)?;
-//         // TODO: replace with next_list_elt(list_get(expr)) to avoid allocation
-//         if proc_p(operator) {
-//             return apply(reg, tbl, env, operator, args);
-//         } else {
-//             eprintln!("operator type error");
-//             return Err(SailErr::Error);
-//         }
-//     }
-// }
-
-// /// Applies a Sail procedure to its arguments, returning the result
-// /// TODO: execute multiple expressions in a lambda sequentially?
-// /// TODO: match the argument structure to the number of arguments needed
-// /// TODO: tail call optimization
-// fn apply(
-//     reg: *mut memmgt::Region,
-//     tbl: *mut SlHead,
-//     env: *mut SlHead,
-//     proc: *mut SlHead,
-//     args: *mut SlHead,
-// ) -> Result<*mut SlHead, SailErr> {
-//     let typ = match core_type(proc) {
-//         Some(t) if t == CoreType::ProcLambda => true,
-//         Some(t) if t == CoreType::ProcNative => false,
-//         _ => return Err(SailErr::Error),
-//     };
-
-//     let argct = proc_get_argct(proc);
-//     let proc_env = env_new_arg_layer(reg);
-
-//     let mut arglist = args;
-//     for i in 0..argct {
-//         if nil_p(arglist) {
-//             return Err(SailErr::Error);
-//         }
-
-//         let curarg = eval(reg, tbl, env, car(arglist))?;
-
-//         if typ {
-//             env_arg_layer_ins(reg, proc_env, proc_lambda_get_arg(reg, proc, i), curarg);
-//         } else {
-//             // TODO: need better call system for natives and maybe lambdas too
-//             // special symbols "%0", "%1", "%2", etc for native arguments
-//             let mut spec_str = String::from("%");
-//             spec_str.push_str(&(i.to_string()));
-
-//             let spec_sym_id = init_symbol(reg);
-//             sym_set_id(spec_sym_id, sym_tab_get_id(reg, tbl, &spec_str));
-
-//             env_arg_layer_ins(reg, proc_env, spec_sym_id, curarg);
-//         }
-
-//         arglist = cdr(arglist)
-//     }
-
-//     env_push_layer(env, proc_env);
-
-//     let result = if typ {
-//         eval(reg, tbl, env, proc_lambda_get_body(proc))
-//     } else {
-//         Ok(proc_native_get_body(proc)(tbl, env))
-//     };
-
-//     env_pop_layer(env);
-
-//     result
-// }
+// TODO: call lambda functions using the stack?
+// TODO: **Macros**, closures, continuations
+// TODO: special forms may be examples for creating / using native functions cleanly
+// TODO: just like native functions, special forms should check for type
+// TODO: match the argument structure to the number of arguments needed
+// TODO: tail call optimization
