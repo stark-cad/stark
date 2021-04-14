@@ -69,7 +69,7 @@ const _MIN_HEAD: u16 = 0b1110001011111111;
 
 /// Pointer to the next element of a linked list;
 /// is tagged with the SlHead (upper 2 unused bytes)
-struct SlListPtr {
+struct _SlListPtr {
     ptr: *mut SlHead,
 }
 
@@ -224,6 +224,9 @@ impl TryFrom<Cfg> for CoreType {
     }
 }
 
+pub type NativeFn =
+    fn(*mut memmgt::Region, *mut SlHead, *mut SlHead, &[*mut SlHead]) -> *mut SlHead;
+
 // a malformed list (single cons cell included) can simply be a list that ends in a value that is not a list element!
 // two element list: List -> value (list elt) -> value (list elt) -> [null]
 // cons cell: List -> value (list elt) -> value (NOT list elt)
@@ -245,16 +248,16 @@ pub fn nil_p(loc: *mut SlHead) -> bool {
     loc.is_null()
 }
 
-#[inline(always)]
-pub fn atom_p(loc: *mut SlHead) -> bool {
-    match core_type(loc) {
-        Some(t) if t != CoreType::Ref => true,
-        _ => false,
-    }
-}
+// #[inline(always)]
+// pub fn atom_p(loc: *mut SlHead) -> bool {
+//     match core_type(loc) {
+//         Some(t) if t != CoreType::Ref => true,
+//         _ => false,
+//     }
+// }
 
 #[inline(always)]
-pub fn list_p(loc: *mut SlHead) -> bool {
+pub fn ref_p(loc: *mut SlHead) -> bool {
     match core_type(loc) {
         Some(t) if t == CoreType::Ref => true,
         _ => false,
@@ -277,11 +280,11 @@ pub fn proc_p(loc: *mut SlHead) -> bool {
     }
 }
 
-/// Checks a valid Sail value to determine whether it is a list element
-#[inline(always)]
-pub fn list_elt_p(loc: *mut SlHead) -> bool {
-    (get_cfg_all(loc) & 0b00000010) != 0
-}
+// /// Checks a valid Sail value to determine whether it is a list element
+// #[inline(always)]
+// pub fn list_elt_p(loc: *mut SlHead) -> bool {
+//     (get_cfg_all(loc) & 0b00000010) != 0
+// }
 
 /// Checks whether a valid Sail value has a type specifier with a predicate
 #[inline(always)]
@@ -426,24 +429,24 @@ unsafe fn read_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usize) ->
     ptr::read_unaligned(src)
 }
 
-/// Set a Sail value's list element bit to true or false
-#[inline(always)]
-fn set_list_elt_bit(loc: *mut SlHead, elt: bool) {
-    let old = get_cfg_all(loc);
-    let new = if elt {
-        old | 0b00000010
-    } else {
-        old & 0b11111101
-    };
-    unsafe { ptr::write_unaligned(loc as *mut u8, new) }
-}
+// /// Set a Sail value's list element bit to true or false
+// #[inline(always)]
+// fn set_list_elt_bit(loc: *mut SlHead, elt: bool) {
+//     let old = get_cfg_all(loc);
+//     let new = if elt {
+//         old | 0b00000010
+//     } else {
+//         old & 0b11111101
+//     };
+//     unsafe { ptr::write_unaligned(loc as *mut u8, new) }
+// }
 
 /// Set the pointer to a list element's next element
 #[inline(always)]
 pub fn set_next_list_elt(loc: *mut SlHead, next: *mut SlHead) {
-    if !list_elt_p(loc) {
-        set_list_elt_bit(loc, true);
-    }
+    // if !list_elt_p(loc) {
+    //     set_list_elt_bit(loc, true);
+    // }
     unsafe {
         let head = ptr::read_unaligned(loc as *mut u16);
         ptr::write_unaligned(
@@ -831,17 +834,17 @@ pub fn proc_lambda_get_body(loc: *mut SlHead) -> *mut SlHead {
 }
 
 #[inline(always)]
-pub fn proc_native_set_body(loc: *mut SlHead, fun: fn(*mut SlHead, *mut SlHead) -> *mut SlHead) {
+pub fn proc_native_set_body(loc: *mut SlHead, fun: NativeFn) {
     coretypck!(loc ; ProcNative);
-    let ptr = unsafe { mem::transmute::<fn(*mut SlHead, *mut SlHead) -> *mut SlHead, u64>(fun) };
+    let ptr = unsafe { mem::transmute::<NativeFn, u64>(fun) };
     core_write_field(loc, NUM_16_LEN as usize, ptr)
 }
 
 #[inline(always)]
-pub fn proc_native_get_body(loc: *mut SlHead) -> fn(*mut SlHead, *mut SlHead) -> *mut SlHead {
+pub fn proc_native_get_body(loc: *mut SlHead) -> NativeFn {
     coretypck!(loc ; ProcNative);
     let ptr = core_read_field(loc, NUM_16_LEN as usize);
-    unsafe { mem::transmute::<u64, fn(*mut SlHead, *mut SlHead) -> *mut SlHead>(ptr) }
+    unsafe { mem::transmute::<u64, NativeFn>(ptr) }
 }
 
 #[inline(always)]
@@ -867,95 +870,89 @@ fn core_cons_copy(reg: *mut memmgt::Region, car: *mut SlHead, cdr: *mut SlHead) 
     head
 }
 
-/// Returns the first element of the provided list
-#[inline(always)]
-pub fn car(loc: *mut SlHead) -> *mut SlHead {
-    // Code for car that just accesses the value
-    if nil_p(loc) {
-        nil()
-    } else if coretypp!(loc ; Ref) {
-        ref_get(loc)
-    } else {
-        loc
-    }
-    // Returning a newly created copy would involve copy_val
-}
+// **********************************************************
+// * `car` and `cdr` CANNOT be provided in the Sail internals
+// * they do not fit well with the implementation details
+// * use `ref_get` and `get_next_list_elt` instead of these
+// **********************************************************
 
-/// Returns the list of elements following the first element of the provided list
-#[inline(always)]
-pub fn cdr(reg: *mut memmgt::Region, loc: *mut SlHead) -> *mut SlHead {
-    if coretypp!(loc ; Ref) {
-        let cadr = get_next_list_elt(ref_get(loc));
-        // if the cdr is nil, just return it
-        // if the cdr is still a list, return it as such
-        // if the cdr is the final item in a malformed list, return it
-        if nil_p(cadr) {
-            cadr
-        } else /*if list_elt_p(cadr)*/ {
-            // TODO: can we avoid allocating new list heads?
-            let ptr = init_ref(reg);
-            ref_set(ptr, cadr);
-            ptr
-        } //else {
-            // cadr
-        // }
-    } else {
-        get_next_list_elt(loc)
-    }
-}
+// /// Returns the first element of the provided list
+// #[inline(always)]
+// pub fn car(loc: *mut SlHead) -> *mut SlHead {
+//     if nil_p(loc) {
+//         nil()
+//     } else if coretypp!(loc ; Ref) {
+//         ref_get(loc)
+//     } else {
+//         loc
+//     }
+// }
+
+// /// Returns the list of elements following the first element of the provided list
+// #[inline(always)]
+// pub fn cdr(loc: *mut SlHead) -> *mut SlHead {
+//     if coretypp!(loc ; Ref) {
+//         get_next_list_elt(ref_get(loc))
+//         // if nil_p(cadr) {
+//         //     cadr
+//         // } else /*if list_elt_p(cadr)*/ {
+//         //     let ptr = init_ref(reg);
+//         //     ref_set(ptr, cadr);
+//         //     ptr
+//         // } //else {
+//         //     // cadr
+//         // // }
+//     } else {
+//         get_next_list_elt(loc)
+//     }
+// }
 
 /// An environment is a list of maps: should function as a LIFO stack
 /// TODO: deal somewhere with dynamic bindings, lexical bindings, argument bindings
 /// TODO: give env and symtab their own predicate types
 /// TODO: the core does not use maps except for env and symtab, so consolidate the code
 fn env_create(reg: *mut memmgt::Region) -> *mut SlHead {
-    let head = init_ref(reg);
+    // let head = init_ref(reg);
     let base = init_hash_map(reg, 255);
-
-    ref_set(head, base);
-
-    head
+    base
+    // ref_set(head, base);
+    // head
 }
 
 #[inline(always)]
-pub fn env_lookup(reg: *mut memmgt::Region, env: *mut SlHead, sym: *mut SlHead) -> *mut SlHead {
-    env_lookup_by_id(reg, env, sym_get_id(sym))
+pub fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> *mut SlHead {
+    env_lookup_by_id(env, sym_get_id(sym))
 }
 
-pub fn env_lookup_by_id(reg: *mut memmgt::Region, env: *mut SlHead, sym_id: u32) -> *mut SlHead {
-    let map = car(env);
-    // A layer can be a hash table or an alist
-    let entry = if coretypp!(map ; VecHash) {
-        let size = hashvec_get_size(map);
-        let hash = sym_id % size;
-        core_read_field(map, 4 + 4 + (hash as usize * PTR_LEN as usize))
-    } else if coretypp!(map ; Ref) {
-        core_read_field(map, 0)
-    } else {
-        println!("{:?}", core_type(map).unwrap());
-        panic!("incorrect layer in env")
-    };
+pub fn env_lookup_by_id(mut env: *mut SlHead, sym_id: u32) -> *mut SlHead {
+    while !nil_p(env) {
+        // A layer can be a hash table or an alist
+        let entry = if coretypp!(env ; VecHash) {
+            let size = hashvec_get_size(env);
+            let hash = sym_id % size;
+            core_read_field(env, 4 + 4 + (hash as usize * PTR_LEN as usize))
+        } else if coretypp!(env ; Ref) {
+            core_read_field(env, 0)
+        } else {
+            println!("{:?}", core_type(env).unwrap());
+            panic!("incorrect layer in env")
+        };
 
-    let mut pos = entry;
-    loop {
-        if nil_p(pos) {
-            break;
+        let mut pos = entry;
+        loop {
+            if nil_p(pos) {
+                break;
+            }
+            if sym_get_id(ref_get(pos)) == sym_id {
+                return get_next_list_elt(ref_get(pos));
+            }
+            pos = get_next_list_elt(pos);
         }
-        if sym_get_id(ref_get(pos)) == sym_id {
-            return get_next_list_elt(ref_get(pos));
-        }
-        pos = get_next_list_elt(pos);
+
+        env = get_next_list_elt(env);
     }
 
-    // let next = cdr(reg, env);
-    let next_head = init_ref(reg);
-    let next = get_next_list_elt(map);
-    ref_set(next_head, next);
-    if nil_p(next) {
-        nil()
-    } else {
-        env_lookup_by_id(reg, next, sym_id)
-    }
+    nil()
 }
 
 // TODO: use dynamic map mode
@@ -985,7 +982,7 @@ pub fn env_new_arg_layer(reg: *mut memmgt::Region) -> *mut SlHead {
 }
 
 /// TODO: this should be a vector or something else more sensible, especially for natives
-pub fn env_arg_layer_get(reg: *mut memmgt::Region, layer: *mut SlHead, idx: u16) -> *mut SlHead {
+pub fn env_arg_layer_get(layer: *mut SlHead, idx: u16) -> *mut SlHead {
     let mut left = idx;
     let mut pos = core_read_field(layer, 0);
     while left > 0 {

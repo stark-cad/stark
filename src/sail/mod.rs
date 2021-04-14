@@ -10,6 +10,7 @@ use std::ptr;
 mod core;
 pub use self::core::*;
 
+pub mod eval;
 pub mod memmgt;
 pub mod parser;
 pub mod queue;
@@ -37,7 +38,7 @@ impl fmt::Debug for SailErr {
 /// TODO: use a script to automatically generate a Rust "env" file
 /// TODO: separate all core types from other types a little bit more
 macro_rules! incl_symbols {
-    ( $array:ident : $( $id:literal $name:ident $strng:literal $mode:ident; )+ ; $size:literal ) => {
+    ( $array:ident : $( $id:literal $name:ident $strng:literal $mode:ident );+ $size:literal ) => {
         $(
             const $name: (u32, &str) = (modeize_sym($id, SymbolMode::$mode), $strng);
         )+
@@ -80,7 +81,7 @@ incl_symbols! {
     30 SP_DO         "do"      Basic;
     31 SP_FN         "fn"      Basic;
     32 SP_IF         "if"      Basic;
-    33 SP_QUOTE      "quote"   Basic;;
+    33 SP_QUOTE      "quote"   Basic
     34
 }
 
@@ -152,38 +153,38 @@ fn get_pred_type(loc: *mut SlHead) -> u32 {
     }
 }
 
-/// Returns the size of a valid Sail value
-fn get_size(
-    reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    env: *mut SlHead,
-    loc: *mut SlHead,
-) -> usize {
-    use BaseSize::*;
-    match get_base_size(loc) {
-        B0 => 0,
-        B1 => 1,
-        B2 => 2,
-        B4 => 4,
-        B8 => 8,
-        B16 => 16,
-        _ => match core_type(loc) {
-            Some(_) => core_size(loc),
-            None => {
-                let entry = env_lookup_by_id(reg, env, get_self_type(loc));
-                let entry_type = get_self_type(entry);
+// /// Returns the size of a valid Sail value
+// fn get_size(
+//     reg: *mut memmgt::Region,
+//     tbl: *mut SlHead,
+//     env: *mut SlHead,
+//     loc: *mut SlHead,
+// ) -> usize {
+//     use BaseSize::*;
+//     match get_base_size(loc) {
+//         B0 => 0,
+//         B1 => 1,
+//         B2 => 2,
+//         B4 => 4,
+//         B8 => 8,
+//         B16 => 16,
+//         _ => match core_type(loc) {
+//             Some(_) => core_size(loc),
+//             None => {
+//                 let entry = env_lookup_by_id(reg, env, get_self_type(loc));
+//                 let entry_type = get_self_type(entry);
 
-                if entry_type == T_U64.0 {
-                    return u64_get(entry) as usize;
-                } else if entry_type == T_PROC_LAMBDA.0 || entry_type == T_PROC_NATIVE.0 {
-                    u64_get(apply(reg, tbl, env, entry, loc).unwrap()) as usize
-                } else {
-                    panic!("wrong type in type entry")
-                }
-            }
-        },
-    }
-}
+//                 if entry_type == T_U64.0 {
+//                     return u64_get(entry) as usize;
+//                 } else if entry_type == T_PROC_LAMBDA.0 || entry_type == T_PROC_NATIVE.0 {
+//                     u64_get(apply(reg, tbl, env, entry, loc).unwrap()) as usize
+//                 } else {
+//                     panic!("wrong type in type entry")
+//                 }
+//             }
+//         },
+//     }
+// }
 
 fn set_self_type(loc: *mut SlHead, typ: u32) {
     assert!(self_type_p(loc));
@@ -204,36 +205,36 @@ fn set_pred_type(loc: *mut SlHead, typ: u32) {
     }
 }
 
-/// TODO: eliminate as much write_unaligned as possible
-fn write_field<T: SizedBase>(
-    reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    env: *mut SlHead,
-    loc: *mut SlHead,
-    offset: usize,
-    src: T,
-) {
-    unsafe {
-        let dst = value_ptr(loc).add(offset) as *mut T;
-        assert!(offset + std::mem::size_of::<T>() <= get_size(reg, tbl, env, loc));
-        ptr::write_unaligned(dst, src)
-    }
-}
+// /// TODO: eliminate as much write_unaligned as possible
+// fn write_field<T: SizedBase>(
+//     reg: *mut memmgt::Region,
+//     tbl: *mut SlHead,
+//     env: *mut SlHead,
+//     loc: *mut SlHead,
+//     offset: usize,
+//     src: T,
+// ) {
+//     unsafe {
+//         let dst = value_ptr(loc).add(offset) as *mut T;
+//         assert!(offset + std::mem::size_of::<T>() <= get_size(reg, tbl, env, loc));
+//         ptr::write_unaligned(dst, src)
+//     }
+// }
 
-/// TODO: eliminate as much read_unaligned as possible
-fn read_field<T: SizedBase>(
-    reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    env: *mut SlHead,
-    loc: *mut SlHead,
-    offset: usize,
-) -> T {
-    unsafe {
-        let src = value_ptr(loc).add(offset) as *mut T;
-        assert!(offset + std::mem::size_of::<T>() <= get_size(reg, tbl, env, loc));
-        ptr::read_unaligned(src)
-    }
-}
+// /// TODO: eliminate as much read_unaligned as possible
+// fn read_field<T: SizedBase>(
+//     reg: *mut memmgt::Region,
+//     tbl: *mut SlHead,
+//     env: *mut SlHead,
+//     loc: *mut SlHead,
+//     offset: usize,
+// ) -> T {
+//     unsafe {
+//         let src = value_ptr(loc).add(offset) as *mut T;
+//         assert!(offset + std::mem::size_of::<T>() <= get_size(reg, tbl, env, loc));
+//         ptr::read_unaligned(src)
+//     }
+// }
 
 // unsafe fn ref_qsend_set_target(loc: *mut SlHead, target: *mut memmgt::MemSector) {
 //     ptr::write_unaligned(
@@ -301,11 +302,11 @@ impl fmt::Display for SlContextVal {
                     write!(f, "(").unwrap();
                     let mut elt = ref_get(value);
                     while !nil_p(elt) {
-                        if !list_elt_p(elt) {
-                            write!(f, ". ").unwrap();
-                            write!(f, "{}", context(table, elt).to_string()).unwrap();
-                            break;
-                        }
+                        // if !list_elt_p(elt) {
+                        //     write!(f, ". ").unwrap();
+                        //     write!(f, "{}", context(table, elt).to_string()).unwrap();
+                        //     break;
+                        // }
                         write!(f, "{}", context(table, elt).to_string()).unwrap();
                         elt = get_next_list_elt(elt);
                         if !nil_p(elt) {
@@ -340,15 +341,11 @@ impl fmt::Display for SlContextVal {
                             if !fst {
                                 write!(f, " ").unwrap()
                             }
-                            write!(f, "{} ", context(table, car(pos)).to_string()).unwrap();
+                            write!(f, "{} ", context(table, ref_get(pos)).to_string()).unwrap();
                             write!(
                                 f,
                                 "{}",
-                                context(
-                                    table,
-                                    cdr(unsafe { memmgt::which_mem_region(value) }, pos)
-                                )
-                                .to_string()
+                                context(table, get_next_list_elt(ref_get(pos))).to_string()
                             )
                             .unwrap();
                             pos = get_next_list_elt(pos);
@@ -390,13 +387,15 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         };
 
-        let result = match eval(region, tbl, env, expr) {
-            Ok(out) => out,
-            Err(_) => {
-                println!("Evaluation Error");
-                continue;
-            }
-        };
+        // let result = match eval(region, tbl, env, expr) {
+        //     Ok(out) => out,
+        //     Err(_) => {
+        //         println!("Evaluation Error");
+        //         continue;
+        //     }
+        // };
+
+        let result = eval::eval_expr(region, tbl, env, expr);
 
         println!("{}\n", context(tbl, result).to_string())
     }
@@ -416,7 +415,8 @@ pub fn interpret(code: &str) -> Result<String, SailErr> {
     environment_setup(region, tbl, env);
 
     let expr = parser::parse(region, tbl, code)?;
-    let result = eval(region, tbl, env, expr)?;
+    // let result = eval(region, tbl, env, expr)?;
+    let result = eval::eval_expr(region, tbl, env, expr);
 
     Ok(context(tbl, result).to_string())
 }
@@ -444,7 +444,7 @@ fn insert_native_proc(
     tbl: *mut SlHead,
     env: *mut SlHead,
     name: &str,
-    func: fn(*mut SlHead, *mut SlHead) -> *mut SlHead,
+    func: NativeFn,
     argct: u16,
 ) {
     let proc_id = init_symbol(reg);
@@ -452,7 +452,7 @@ fn insert_native_proc(
 
     let proc_fn = init_proc_native(reg, argct);
     proc_native_set_body(proc_fn, func);
-    env_layer_ins_entry(reg, car(env), proc_id, proc_fn);
+    env_layer_ins_entry(reg, env, proc_id, proc_fn);
 }
 
 /// TODO: improve macro to allow adding functions to environment?
@@ -462,12 +462,17 @@ fn insert_native_proc(
 macro_rules! sail_fn {
     ( $reg:ident; $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
         $(
-            fn $fn_name (_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
-                let $reg = unsafe { memmgt::which_mem_region(_tbl) };
+            fn $fn_name (
+                reg: *mut memmgt::Region,
+                _tbl: *mut SlHead,
+                _env: *mut SlHead,
+                args: &[*mut SlHead]
+            ) -> *mut SlHead {
+                let $reg = reg;
 
                 let mut _ind = 0;
                 $(
-                    let $args = env_arg_layer_get($reg, car(env), _ind);
+                    let $args = args[_ind];
                     _ind += 1;
                 )*
 
@@ -518,17 +523,25 @@ sail_fn! {
     // }
 }
 
-fn print(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
-    let reg = unsafe { memmgt::which_mem_region(_tbl) };
-    let arg = env_arg_layer_get(reg, car(env), 0);
-    println!("{}", context(_tbl, arg).to_string());
+fn print(
+    _reg: *mut memmgt::Region,
+    tbl: *mut SlHead,
+    _env: *mut SlHead,
+    args: &[*mut SlHead],
+) -> *mut SlHead {
+    let arg = args[0];
+    println!("{}", context(tbl, arg).to_string());
     return nil();
 }
 
 // TODO: sail_fn macro does not work for functions that access higher environment levels
-fn printenv(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
-    let reg = unsafe { memmgt::which_mem_region(_tbl) };
-    println!("{}", context(_tbl, env).to_string());
+fn printenv(
+    reg: *mut memmgt::Region,
+    tbl: *mut SlHead,
+    env: *mut SlHead,
+    _args: &[*mut SlHead],
+) -> *mut SlHead {
+    println!("{}", context(tbl, env).to_string());
     // TODO: from_bool function or similar
     let out = init_bool(reg);
     bool_set(out, true);
@@ -562,136 +575,6 @@ fn printenv(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
 //     bool_set(out, true);
 //     return out;
 // }
-
-/// Evaluates a Sail value, returning the result
-/// TODO: **Macros**, closures, continuations
-pub fn eval(
-    reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    env: *mut SlHead,
-    expr: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
-    if symbol_p(expr) {
-        return Ok(env_lookup(reg, env, expr));
-    } else if atom_p(expr) {
-        return Ok(expr);
-    } else {
-        assert!(list_p(expr));
-        let lcar = car(expr);
-        let args = cdr(reg, expr);
-
-        if symbol_p(lcar) {
-            // TODO: what other special forms are needed?
-            // TODO: is there a need for special forms? why not just make these native functions?
-            // TODO: these may be good examples for creating / using native functions cleanly
-            // TODO: just like native functions, these special forms should check for type
-            let id = sym_get_id(lcar);
-            if id == SP_DEF.0 {
-                env_layer_ins_entry(
-                    reg,
-                    car(env),
-                    car(args),
-                    eval(reg, tbl, env, car(cdr(reg, args)))?,
-                );
-                return Ok(car(args));
-            } else if id == SP_DO.0 {
-                let mut remain = args;
-                let mut result = nil();
-                while !nil_p(remain) {
-                    result = eval(reg, tbl, env, car(remain))?;
-                    remain = cdr(reg, remain)
-                }
-                return Ok(result);
-            } else if id == SP_FN.0 {
-                let argvec = car(args);
-                let argct = stdvec_get_len(argvec) as u16;
-                let out = init_proc_lambda(reg, argct);
-                for i in 0..argct {
-                    proc_lambda_set_arg(out, i, sym_get_id(stdvec_idx(argvec, i as u32)));
-                }
-                proc_lambda_set_body(out, car(cdr(reg, args)));
-                return Ok(out);
-            } else if id == SP_IF.0 {
-                let test = car(args);
-                let fst = car(cdr(reg, args));
-                let snd = car(cdr(reg, cdr(reg, args)));
-                if bool_get(eval(reg, tbl, env, test)?) {
-                    return eval(reg, tbl, env, fst);
-                } else {
-                    return eval(reg, tbl, env, snd);
-                }
-            } else if id == SP_QUOTE.0 {
-                return Ok(car(args));
-            }
-        }
-        let operator = eval(reg, tbl, env, lcar)?;
-        // TODO: replace with next_list_elt(list_get(expr)) to avoid allocation
-        if proc_p(operator) {
-            return apply(reg, tbl, env, operator, args);
-        } else {
-            eprintln!("operator type error");
-            return Err(SailErr::Error);
-        }
-    }
-}
-
-/// Applies a Sail procedure to its arguments, returning the result
-/// TODO: execute multiple expressions in a lambda sequentially?
-/// TODO: match the argument structure to the number of arguments needed
-/// TODO: tail call optimization
-fn apply(
-    reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    env: *mut SlHead,
-    proc: *mut SlHead,
-    args: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
-    let typ = match core_type(proc) {
-        Some(t) if t == CoreType::ProcLambda => true,
-        Some(t) if t == CoreType::ProcNative => false,
-        _ => return Err(SailErr::Error),
-    };
-
-    let argct = proc_get_argct(proc);
-    let proc_env = env_new_arg_layer(reg);
-
-    let mut arglist = args;
-    for i in 0..argct {
-        if nil_p(arglist) {
-            return Err(SailErr::Error);
-        }
-
-        let curarg = eval(reg, tbl, env, car(arglist))?;
-
-        if typ {
-            env_arg_layer_ins(reg, proc_env, proc_lambda_get_arg(reg, proc, i), curarg);
-        } else {
-            // TODO: need better call system for natives and maybe lambdas too
-            // special symbols "%0", "%1", "%2", etc for native arguments
-            let mut spec_str = String::from("%");
-            spec_str.push_str(&(i.to_string()));
-
-            let spec_sym_id = init_symbol(reg);
-            sym_set_id(spec_sym_id, sym_tab_get_id(reg, tbl, &spec_str));
-
-            env_arg_layer_ins(reg, proc_env, spec_sym_id, curarg);
-        }
-
-        arglist = cdr(reg, arglist)
-    }
-
-    env_push_layer(env, proc_env);
-
-    let result = if typ {
-        eval(reg, tbl, env, proc_lambda_get_body(proc))
-    } else {
-        Ok(proc_native_get_body(proc)(tbl, env))
-    };
-
-    env_pop_layer(env);
-
-    result
-}
 
 #[cfg(test)]
 mod tests {

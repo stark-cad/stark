@@ -21,6 +21,7 @@ struct RegionTable {
 }
 
 impl RegionTable {
+    /// TODO: switch to intrinsics::const_alloc
     const fn new() -> Self {
         Self {
             low_array: ptr::null_mut(),
@@ -49,13 +50,13 @@ impl RegionTable {
 
         let current_layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
         self.low_array =
-            alloc::realloc(self.low_array as *mut u8, current_layout, cap) as *mut usize;
+            alloc::realloc(self.low_array as *mut u8, current_layout, cap * 8) as *mut usize;
         self.high_array =
-            alloc::realloc(self.high_array as *mut u8, current_layout, cap) as *mut usize;
+            alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8) as *mut usize;
         self.zone_array =
-            alloc::realloc(self.zone_array as *mut u8, current_layout, cap) as *mut *mut Zone;
+            alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8) as *mut *mut Zone;
         self.region_array =
-            alloc::realloc(self.region_array as *mut u8, current_layout, cap) as *mut *mut Region;
+            alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8) as *mut *mut Region;
         self.cap = cap;
 
         std::intrinsics::atomic_store_rel(lock, false as u8);
