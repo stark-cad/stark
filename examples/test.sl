@@ -5,6 +5,7 @@
                       (do (if (= (mod cur 3) 0)
                               (def acc (+ acc cur))
                               (if (= (mod cur 5) 0) (def acc (+ acc cur)) ()))
+                      (print cur)
                       (mult max acc (+ cur 1))))))
 (mult 1000 0 1)
 )
