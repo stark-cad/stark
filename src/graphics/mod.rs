@@ -9,6 +9,7 @@ use gfx_hal::{
     device::Device,
     format::{ChannelType, Format},
     image::{Extent, Layout},
+    memory::Segment,
     pass::{Attachment, AttachmentLoadOp, AttachmentOps, AttachmentStoreOp, Subpass, SubpassDesc},
     pool::CommandPool,
     pso::{
@@ -48,14 +49,26 @@ pub fn render_loop(
     let draw_rx = draw_rx as *mut sail::SlHead;
     let context_rx = context_rx as *mut sail::SlHead;
 
-    let mut state: GraphicsState<backend::Backend> =
-        GraphicsState::new(window, name, size[0], size[1]);
+    let mut engine: Engine<backend::Backend> =
+        Engine::new(GraphicsState::new(window, name, size[0], size[1]));
     let mut should_configure_swapchain = true;
+
+    engine.setup();
+    engine.set_clear([1.0, 1.0, 1.0, 1.0]);
+    // engine.add_line([-0.5, -0.5, 0.5, 0.5]);
+    // engine.add_line([-0.5, 0.5, 0.5, -0.5]);
+    engine.add_line([-0.5, -0.5, -0.5, 0.5]);
+    engine.add_line([-0.5, -0.5, 0.5, -0.5]);
+    engine.add_line([0.5, 0.5, 0.5, -0.5]);
+    engine.add_line([0.5, 0.5, -0.5, 0.5]);
 
     loop {
         if should_configure_swapchain {
-            state.config_swapchain();
+            engine.state.config_swapchain();
+            engine.draw_frame();
             should_configure_swapchain = false;
+        } else {
+            std::hint::spin_loop();
         }
 
         // unsafe {
@@ -81,11 +94,234 @@ pub fn render_loop(
 
         //     match sail::queue::queue_rx_result(context_rx) {
         //         Ok(next) => {
-                    
+
         //         }
         //         Err(_) => std::hint::spin_loop(),
         //     }
         // }
+    }
+}
+
+pub struct Engine<B: gfx_hal::Backend> {
+    clear: [f32; 4],
+    lines: Vec<f32>,
+    buflen: u64,
+    state: GraphicsState<B>,
+}
+
+impl<B: gfx_hal::Backend> Engine<B> {
+    fn new(state: GraphicsState<B>) -> Self {
+        Self {
+            clear: [0.0, 0.0, 0.0, 1.0],
+            lines: vec![],
+            buflen: 256,
+            state,
+        }
+    }
+    fn set_clear(&mut self, clear: [f32; 4]) {
+        self.clear = clear;
+    }
+    fn add_line(&mut self, points: [f32; 4]) {
+        for f in points.iter() {
+            self.lines.push(*f);
+        }
+        self.buffer_size_check();
+    }
+    fn empty_lines(&mut self) {
+        self.lines.clear();
+    }
+    fn state_pipeline_setup(&mut self) {
+        let pipeline_layout = unsafe {
+            self.state
+                .device
+                .create_pipeline_layout(iter::empty(), iter::empty())
+                .unwrap()
+        };
+
+        let vertex_shader = include_str!("shaders/test.vert");
+        let fragment_shader = include_str!("shaders/test.frag");
+
+        let pipeline = unsafe {
+            self.state.make_pipeline(
+                &pipeline_layout,
+                vertex_shader,
+                fragment_shader,
+                Primitive::LineList,
+            )
+        };
+
+        self.state.pipeline_layouts.push(pipeline_layout);
+        self.state.pipelines.push(pipeline);
+    }
+    fn state_buffer_setup(&mut self) {
+        unsafe {
+            for mem in self.state.vertex_memory.drain(..) {
+                self.state.device.free_memory(mem);
+            }
+            for buf in self.state.vertex_buffers.drain(..) {
+                self.state.device.destroy_buffer(buf);
+            }
+        }
+
+        let (memory, buffer) = unsafe {
+            self.state.make_buffer(
+                self.buflen,
+                gfx_hal::buffer::Usage::VERTEX,
+                gfx_hal::memory::Properties::CPU_VISIBLE,
+            )
+        };
+
+        self.state.vertex_memory.push(memory);
+        self.state.vertex_buffers.push(buffer);
+    }
+    fn buffer_size_check(&mut self) {
+        let line_vec_size = size_of::<f32>() * self.lines.len();
+
+        if line_vec_size as u64 >= self.buflen {
+            self.buflen = 2 * self.buflen;
+            self.state_buffer_setup();
+        }
+    }
+    fn setup(&mut self) {
+        self.state_buffer_setup();
+        self.state_pipeline_setup();
+    }
+    fn draw_frame(&mut self) {
+        let timeout_ns = 1_000_000_000;
+
+        unsafe {
+            self.state
+                .device
+                .wait_for_fence(
+                    self.state.submission_complete_fence.as_ref().unwrap(),
+                    timeout_ns,
+                )
+                .unwrap();
+            self.state
+                .device
+                .reset_fence(self.state.submission_complete_fence.as_mut().unwrap())
+                .unwrap();
+
+            self.state.command_pool.as_mut().unwrap().reset(false);
+        }
+
+        let surface_image = unsafe {
+            self.state
+                .surface
+                .as_mut()
+                .unwrap()
+                .acquire_image(timeout_ns)
+                .unwrap()
+                .0
+        };
+
+        let line_vec_size = size_of::<f32>() * self.lines.len();
+
+        if line_vec_size > 0 {
+            unsafe {
+                let mapped_memory = self
+                    .state
+                    .device
+                    .map_memory(
+                        &mut self.state.vertex_memory[0],
+                        Segment {
+                            offset: 0,
+                            size: Some(line_vec_size as u64),
+                        },
+                    )
+                    .unwrap();
+
+                std::ptr::copy_nonoverlapping(
+                    self.lines.as_ptr() as *const u8,
+                    mapped_memory,
+                    line_vec_size,
+                );
+
+                self.state
+                    .device
+                    .flush_mapped_memory_ranges(iter::once((
+                        &self.state.vertex_memory[0],
+                        Segment {
+                            offset: 0,
+                            size: Some(line_vec_size as u64),
+                        },
+                    )))
+                    .unwrap();
+
+                self.state
+                    .device
+                    .unmap_memory(&mut self.state.vertex_memory[0]);
+            }
+        }
+
+        unsafe {
+            let buffer = &mut self.state.command_buffers[0];
+
+            let viewport = Viewport {
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: self.state.surface_extent.width as i16,
+                    h: self.state.surface_extent.height as i16,
+                },
+                depth: 0.0..1.0,
+            };
+
+            buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
+
+            buffer.set_viewports(0, iter::once(viewport.clone()));
+            buffer.set_scissors(0, iter::once(viewport.rect));
+
+            buffer.begin_render_pass(
+                &self.state.render_passes[0],
+                &self.state.framebuffer.as_ref().unwrap(),
+                viewport.rect,
+                iter::once(RenderAttachmentInfo {
+                    image_view: surface_image.borrow(),
+                    clear_value: ClearValue {
+                        color: ClearColor {
+                            float32: self.clear,
+                        },
+                    },
+                }),
+                SubpassContents::Inline,
+            );
+
+            buffer.bind_graphics_pipeline(&self.state.pipelines[0]);
+
+            buffer.bind_vertex_buffers(
+                0,
+                iter::once((
+                    &self.state.vertex_buffers[0],
+                    gfx_hal::buffer::SubRange {
+                        offset: 0,
+                        size: Some(line_vec_size as u64),
+                    },
+                )),
+            );
+
+            buffer.draw(0..(self.lines.len() as u32), 0..1);
+
+            buffer.end_render_pass();
+            buffer.finish();
+        }
+
+        unsafe {
+            self.state.queue_group.queues[0].submit(
+                iter::once(&self.state.command_buffers[0]),
+                iter::empty(),
+                iter::once(self.state.rendering_complete_semaphore.as_ref().unwrap()),
+                self.state.submission_complete_fence.as_mut(),
+            );
+
+            self.state.queue_group.queues[0]
+                .present(
+                    self.state.surface.as_mut().unwrap(),
+                    surface_image,
+                    self.state.rendering_complete_semaphore.as_mut(),
+                )
+                .unwrap();
+        }
     }
 }
 
