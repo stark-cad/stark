@@ -1,66 +1,80 @@
-use super::{memmgt, SailErr, SlHead};
+use super::{memmgt, SlHead};
 
 // TODO: probably will need to use atomic operations for these
 // TODO: global identifiers for queues?
 
 // unsafe fn atomic_ref_set(loc: *mut SlHead, next: *mut SlHead) {}
 
-// pub unsafe fn queue_create(
-//     tx_sector: *mut memmgt::MemSector,
-//     rx_sector: *mut memmgt::MemSector,
-// ) -> (*mut SlHead, *mut SlHead) {
-//     let sender = super::init_ref(tx_sector, false, super::SlRefMode::QSend);
-//     let receiver = super::init_ref(rx_sector, false, super::SlRefMode::QReceive);
+pub fn queue_create(
+    tx_sector: *mut memmgt::Region,
+    rx_sector: *mut memmgt::Region,
+) -> (*mut SlHead, *mut SlHead) {
+    unsafe {
+        let sender = memmgt::alloc(tx_sector, 16, super::Cfg::B16Other as u8);
+        let receiver = memmgt::alloc(rx_sector, 8, super::Cfg::B8Other as u8);
 
-//     super::ref_qsend_set_target(sender, rx_sector);
+        super::set_self_type(sender, super::T_QUEUE_TX.0);
+        super::set_self_type(receiver, super::T_QUEUE_RX.0);
 
-//     super::ref_set(sender, receiver);
-//     super::ref_set(receiver, sender);
+        super::write_field_unchecked(sender, 8, rx_sector as u64);
 
-//     (sender, receiver)
-// }
+        super::write_field_unchecked(sender, 0, receiver);
+        super::write_field_unchecked(receiver, 0, sender);
 
-// pub unsafe fn queue_tx(loc: *mut SlHead, item: *mut SlHead) {
-//     typechk!(Ref QSend ; loc);
+        (sender, receiver)
+    }
+}
 
-//     // create new list element containing the item
-//     let elt = super::copy_val(super::ref_qsend_get_target(loc), item, true);
-//     // point the element at the sender
-//     super::set_list_elt(elt, loc);
-//     // point the current queue head at the element
-//     let head = super::ref_get(loc);
-//     if typep!(head : Ref QReceive) {
-//         super::ref_set(head, elt);
-//     } else {
-//         super::set_list_elt(head, elt);
-//     }
-//     // point the sender at the element
-//     super::ref_set(loc, elt);
-// }
+pub fn queue_tx(loc: *mut SlHead, item: *mut SlHead) {
+    assert_eq!(super::get_self_type(loc), super::T_QUEUE_TX.0);
+    assert_eq!(super::get_base_size(loc), super::BaseSize::B16);
 
-// pub unsafe fn queue_rx(loc: *mut SlHead) -> *mut SlHead {
-//     typechk!(Ref QReceive ; loc);
+    unsafe {
+        // create new list element containing the item
+        // TODO: must change to permit copying arbitrary values
+        let elt = super::core_copy_val(
+            super::read_field_unchecked::<u64>(loc, 8) as *mut memmgt::Region,
+            item,
+        );
+        // point the element at the sender
+        super::set_next_list_elt(elt, loc);
+        // point the current queue head at the element
+        let head = super::read_field_unchecked(loc, 0);
+        if super::get_self_type(head) == super::T_QUEUE_RX.0 {
+            super::write_field_unchecked(head, 0, elt);
+        } else {
+            super::set_next_list_elt(head, elt);
+        }
+        // point the sender at the element
+        super::write_field_unchecked(loc, 0, elt);
+    }
+}
 
-//     // get the item pointed to by the receiver
-//     let item = super::ref_get(loc);
+pub fn queue_rx(loc: *mut SlHead) -> *mut SlHead {
+    assert_eq!(super::get_self_type(loc), super::T_QUEUE_RX.0);
+    assert_eq!(super::get_base_size(loc), super::BaseSize::B8);
 
-//     if typep!(Ref QSend ; item) {
-//         let out = super::init_err(memmgt::which_mem_sector(loc), false);
-//         out
-//     } else {
-//         let next = super::next_list_elt(item);
+    // get the item pointed to by the receiver
+    let item = unsafe { super::read_field_unchecked(loc, 0) };
 
-//         // point the receiver at the item pointed to
-//         super::ref_set(loc, next);
+    if super::get_self_type(item) == super::T_QUEUE_TX.0 {
+        super::nil()
+    } else {
+        let next = super::get_next_list_elt(item);
 
-//         if typep!(Ref QSend ; next) {
-//             super::ref_set(next, loc);
-//         }
+        // point the receiver at the item pointed to
+        unsafe {
+            super::write_field_unchecked(loc, 0, next);
+        }
 
-//         // return the received item
-//         item
-//     }
-// }
+        if super::get_self_type(next) == super::T_QUEUE_TX.0 {
+            super::ref_set(next, loc);
+        }
+
+        // return the received item
+        item
+    }
+}
 
 // pub unsafe fn queue_rx_result(loc: *mut SlHead) -> Result<*mut SlHead, SailErr> {
 //     typechk!(Ref QReceive ; loc);

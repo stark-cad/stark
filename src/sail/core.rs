@@ -50,7 +50,7 @@ pub const NUM_64_LEN: u8 = 8;
 pub const NUM_128_LEN: u8 = 16;
 
 /// Header for all Sail values in memory (optimizations later)
-/// **Handle ONLY using methods such as sail::alloc and etc**
+/// **Handle ONLY using methods that operate on pointers to SlHead**
 /// Should only store information that every referenced Sail value needs
 /// TODO: Think about references, memory management, and associative table support
 #[repr(C)]
@@ -127,9 +127,16 @@ enum_and_tryfrom! {
         VecStr = 0b11000100,
         VecHash = 0b11001000,
         VecAny = 0b11001100,
+        // VecB1 = 0b11000000,
+        // VecB2 = 0b11000100,
+        // VecB4 = 0b11001000,
+        // VecB8 = 0b11001100,
+        // VecB16 = 0b11010000,
         VecOther = 0b11011100,
         ProcLambda = 0b11100000,
         ProcNative = 0b11100100,
+        // ProcLbdaCk = 0b11101000,
+        // ProcNatvCk = 0b11101100,
         Other = 0b11111100,
     }
 }
@@ -142,11 +149,11 @@ enum_and_tryfrom! {
         B0 = 0,
         B1 = 1,
         B2 = 2,
-        B4 = 3,
-        B8 = 4,
-        B16 = 5,
-        Vec = 6,
-        Other = 7,
+        B4 = 4,
+        B8 = 8,
+        B16 = 16,
+        Vec = 42,
+        Other = 255,
     }
 }
 
@@ -189,6 +196,7 @@ pub enum CoreType {
     VecStd,
     VecStr,
     VecHash,
+    VecAny,
     ProcLambda,
     ProcNative,
 }
@@ -217,6 +225,7 @@ impl TryFrom<Cfg> for CoreType {
             Cfg::VecStd => Ok(Self::VecStd),
             Cfg::VecStr => Ok(Self::VecStr),
             Cfg::VecHash => Ok(Self::VecHash),
+            Cfg::VecAny => Ok(Self::VecAny),
             Cfg::ProcLambda => Ok(Self::ProcLambda),
             Cfg::ProcNative => Ok(Self::ProcNative),
             _ => Err(()),
@@ -224,17 +233,17 @@ impl TryFrom<Cfg> for CoreType {
     }
 }
 
+/// Signature for Sail functions implemented in Rust
+///
+/// Arguments:
+/// - Memory region in which to place return value
+/// - Symbol table
+/// - Current environment
+/// - Slice containing all Sail arguments
 pub type NativeFn =
     fn(*mut memmgt::Region, *mut SlHead, *mut SlHead, &[*mut SlHead]) -> *mut SlHead;
 
-// a malformed list (single cons cell included) can simply be a list that ends in a value that is not a list element!
-// two element list: List -> value (list elt) -> value (list elt) -> [null]
-// cons cell: List -> value (list elt) -> value (NOT list elt)
-
-// What can follow a list head value:
-// - A sequence of list elements ending in a list element (list)
-// - A sequence of list elements ending in a non element (malformed list or cons cell)
-// - A single non element (???)
+// TODO / NOTE: There is currently one spare, unused bit in the Sail head: the second lowest bit
 
 /// Creates a nil Sail value
 #[inline(always)]
@@ -256,22 +265,37 @@ pub fn nil_p(loc: *mut SlHead) -> bool {
 //     }
 // }
 
+/// Checks whether a Sail value is a reference to another non-nil value
 #[inline(always)]
-pub fn ref_p(loc: *mut SlHead) -> bool {
+pub fn nnil_ref_p(loc: *mut SlHead) -> bool {
     match core_type(loc) {
-        Some(t) if t == CoreType::Ref && !nil_p(ref_get(loc)) => true,
+        Some(t) if t == CoreType::Ref => {
+            if !ref_empty_p(loc) {
+                true
+            } else {
+                false
+            }
+        }
         _ => false,
     }
 }
 
+/// Checks whether a Sail value is a symbol (may need checks for keywords etc)
 #[inline(always)]
-pub fn symbol_p(loc: *mut SlHead) -> bool {
+pub fn basic_sym_p(loc: *mut SlHead) -> bool {
     match core_type(loc) {
-        Some(t) if t == CoreType::Symbol => true,
+        Some(t) if t == CoreType::Symbol => {
+            if super::mode_of_sym(sym_get_id(loc)) == SymbolMode::Basic {
+                true
+            } else {
+                false
+            }
+        }
         _ => false,
     }
 }
 
+/// Checks whether a Sail value is an executable procedure
 #[inline(always)]
 pub fn proc_p(loc: *mut SlHead) -> bool {
     match core_type(loc) {
@@ -280,7 +304,7 @@ pub fn proc_p(loc: *mut SlHead) -> bool {
     }
 }
 
-// /// Checks a valid Sail value to determine whether it is a list element
+// no longer relevant
 // #[inline(always)]
 // pub fn list_elt_p(loc: *mut SlHead) -> bool {
 //     (get_cfg_all(loc) & 0b00000010) != 0
@@ -372,28 +396,58 @@ pub fn core_size(loc: *mut SlHead) -> usize {
         U32 | I32 | F32 | Symbol => 4,
         U64 | I64 | F64 | Ref => 8,
         U128 | I128 => 16,
-        VecStd => vec_size(4, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }
+        VecStd => vec_size(8, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }
             as usize),
-        VecStr => vec_size(4, 1, unsafe { read_field_unchecked::<u32>(loc, 0) }
+        VecStr => vec_size(8, 1, unsafe { read_field_unchecked::<u32>(loc, 0) }
             as usize),
-        VecHash => vec_size(4, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }
+        VecHash => vec_size(8, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }
             as usize),
+        VecAny => vec_size(
+            12,
+            temp_get_size(unsafe { read_field_unchecked::<u32>(loc, 0) }),
+            unsafe { read_field_unchecked::<u32>(loc, 1) } as usize,
+        ),
         ProcLambda => proc_lambda_size(unsafe { read_field_unchecked::<u16>(loc, 0) }),
         ProcNative => proc_native_size(),
+    }
+}
+
+// a VecAny has head of type, capacity, size
+
+/// Gives the size of a limited range of types by type ID
+fn temp_get_size(typ: u32) -> usize {
+    match typ {
+        t if t == super::T_U8.0 => 1,
+        t if t == super::T_I8.0 => 1,
+        t if t == super::T_U16.0 => 2,
+        t if t == super::T_I16.0 => 2,
+        t if t == super::T_U32.0 => 4,
+        t if t == super::T_I32.0 => 4,
+        t if t == super::T_U64.0 => 8,
+        t if t == super::T_I64.0 => 8,
+        t if t == super::T_U128.0 => 16,
+        t if t == super::T_I128.0 => 16,
+        t if t == super::T_F32.0 => 4,
+        t if t == super::T_F64.0 => 8,
+        t if t == super::T_SYMBOL.0 => 4,
+        t if t == super::T_REF.0 => 8,
+        _ => panic!("type not allowed"),
     }
 }
 
 /// Gives the overall size of a Vec with certain parameters
 #[inline(always)]
 fn vec_size(head_size: usize, elt_size: usize, capacity: usize) -> usize {
-    head_size + head_size + (elt_size * capacity)
+    head_size + (elt_size * capacity)
 }
 
+/// Gives the overall size of a lambda procedure by argument count
 #[inline(always)]
 fn proc_lambda_size(argct: u16) -> usize {
     (NUM_16_LEN + PTR_LEN) as usize + (SYMBOL_LEN as usize * argct as usize)
 }
 
+/// Gives the overall size of a native procedure
 #[inline(always)]
 fn proc_native_size() -> usize {
     (NUM_16_LEN + PTR_LEN) as usize
@@ -401,7 +455,7 @@ fn proc_native_size() -> usize {
 
 /// Write to a field of a core type
 #[inline(always)]
-fn core_write_field<T: SizedBase>(loc: *mut SlHead, offset: usize, src: T) {
+pub fn core_write_field<T: SizedBase>(loc: *mut SlHead, offset: usize, src: T) {
     unsafe {
         let dst = value_ptr(loc).add(offset) as *mut T;
         assert!(offset + mem::size_of::<T>() <= core_size(loc));
@@ -409,7 +463,9 @@ fn core_write_field<T: SizedBase>(loc: *mut SlHead, offset: usize, src: T) {
     }
 }
 
-unsafe fn write_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usize, src: T) {
+/// Write to a field of a Sail object without any checks
+#[inline(always)]
+pub unsafe fn write_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usize, src: T) {
     let dst = value_ptr(loc).add(offset) as *mut T;
     ptr::write_unaligned(dst, src)
 }
@@ -424,12 +480,14 @@ pub fn core_read_field<T: SizedBase>(loc: *mut SlHead, offset: usize) -> T {
     }
 }
 
-unsafe fn read_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usize) -> T {
+/// Read from a field of a Sail object without any checks
+#[inline(always)]
+pub unsafe fn read_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usize) -> T {
     let src = value_ptr(loc).add(offset) as *mut T;
     ptr::read_unaligned(src)
 }
 
-// /// Set a Sail value's list element bit to true or false
+// irrelevant
 // #[inline(always)]
 // fn set_list_elt_bit(loc: *mut SlHead, elt: bool) {
 //     let old = get_cfg_all(loc);
@@ -444,9 +502,6 @@ unsafe fn read_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usize) ->
 /// Set the pointer to a list element's next element
 #[inline(always)]
 pub fn set_next_list_elt(loc: *mut SlHead, next: *mut SlHead) {
-    // if !list_elt_p(loc) {
-    //     set_list_elt_bit(loc, true);
-    // }
     unsafe {
         let head = ptr::read_unaligned(loc as *mut u16);
         ptr::write_unaligned(
@@ -481,7 +536,7 @@ pub fn init_symbol(reg: *mut memmgt::Region) -> *mut SlHead {
 #[inline(always)]
 pub fn init_stdvec(reg: *mut memmgt::Region, cap: u32) -> *mut SlHead {
     // cap, len, (pointer * cap)
-    let size = vec_size(NUM_32_LEN as usize, PTR_LEN as usize, cap as usize);
+    let size = vec_size(NUM_32_LEN as usize * 2, PTR_LEN as usize, cap as usize);
     let ptr = unsafe { memmgt::alloc(reg, size, Cfg::VecStd as u8) };
 
     core_write_field::<u32>(ptr, 0, cap);
@@ -493,7 +548,7 @@ pub fn init_stdvec(reg: *mut memmgt::Region, cap: u32) -> *mut SlHead {
 #[inline(always)]
 pub fn init_string(reg: *mut memmgt::Region, cap: u32) -> *mut SlHead {
     // cap, len, (byte * cap)
-    let size = vec_size(NUM_32_LEN as usize, NUM_8_LEN as usize, cap as usize);
+    let size = vec_size(NUM_32_LEN as usize * 2, NUM_8_LEN as usize, cap as usize);
     let ptr = unsafe { memmgt::alloc(reg, size, Cfg::VecStr as u8) };
 
     core_write_field::<u32>(ptr, 0, cap);
@@ -505,7 +560,7 @@ pub fn init_string(reg: *mut memmgt::Region, cap: u32) -> *mut SlHead {
 #[inline(always)]
 pub fn init_hash_map(reg: *mut memmgt::Region, size: u32) -> *mut SlHead {
     // size, fill, (pointer * size)
-    let top_size = vec_size(NUM_32_LEN as usize, PTR_LEN as usize, size as usize);
+    let top_size = vec_size(NUM_32_LEN as usize * 2, PTR_LEN as usize, size as usize);
     let ptr = unsafe { memmgt::alloc(reg, top_size, Cfg::VecHash as u8) };
 
     core_write_field::<u32>(ptr, 0, size); // size
@@ -515,13 +570,6 @@ pub fn init_hash_map(reg: *mut memmgt::Region, size: u32) -> *mut SlHead {
         core_write_field(ptr, 4 + 4 + (i * 8), ptr::null_mut());
     }
 
-    ptr
-}
-
-#[inline(always)]
-fn init_alist_map(reg: *mut memmgt::Region) -> *mut SlHead {
-    let ptr = unsafe { memmgt::alloc(reg, PTR_LEN as usize, Cfg::B8Ptr as u8) };
-    core_write_field(ptr, 0, ptr::null_mut());
     ptr
 }
 
@@ -689,10 +737,9 @@ fn id(fst: *mut SlHead, lst: *mut SlHead) -> bool {
 fn core_eq(fst: *mut SlHead, lst: *mut SlHead) -> bool {
     if id(fst, lst) {
         true
-    } else if core_type(fst).unwrap() != core_type(lst).unwrap() {
-        false
     } else {
         match core_type(fst).unwrap() {
+            typ if typ != core_type(lst).unwrap() => false,
             CoreType::Symbol => sym_get_id(fst) == sym_get_id(lst),
             CoreType::VecStr => string_get(fst).eq(string_get(lst)),
             _ => false,
@@ -721,7 +768,6 @@ fn str_hash(slice: &str) -> u32 {
 
 /// TODO: automatically resize as needed (probably as an option) (need "fill" field in subhead)
 /// TODO: clean up shadowed entries sometime
-/// TODO: option to provide region if known?
 pub fn hash_map_insert(
     reg: *mut memmgt::Region,
     loc: *mut SlHead,
@@ -759,32 +805,32 @@ fn alist_map_insert(
     core_write_field(loc, 0, entry)
 }
 
-/// Looks up a key in a map, returning the key-value pair
-fn hash_map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
-    let size = hashvec_get_size(loc);
-    let hash = core_hash(key) % size;
-    let entry = core_read_field(loc, 4 + 4 + (hash as usize * PTR_LEN as usize));
-    alist_search(entry, key)
-}
+// /// Looks up a key in a map, returning the key-value pair
+// fn hash_map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
+//     let size = hashvec_get_size(loc);
+//     let hash = core_hash(key) % size;
+//     let entry = core_read_field(loc, 4 + 4 + (hash as usize * PTR_LEN as usize));
+//     alist_search(entry, key)
+// }
 
-fn alist_map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
-    let entry = core_read_field(loc, 0);
-    alist_search(entry, key)
-}
+// fn alist_map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
+//     let entry = core_read_field(loc, 0);
+//     alist_search(entry, key)
+// }
 
-fn alist_search(head: *mut SlHead, target: *mut SlHead) -> *mut SlHead {
-    let mut pos = head;
+// fn alist_search(head: *mut SlHead, target: *mut SlHead) -> *mut SlHead {
+//     let mut pos = head;
 
-    loop {
-        if nil_p(pos) {
-            return nil();
-        }
-        if core_eq(ref_get(pos), target) {
-            return pos;
-        }
-        pos = get_next_list_elt(pos);
-    }
-}
+//     loop {
+//         if nil_p(pos) {
+//             return nil();
+//         }
+//         if core_eq(ref_get(pos), target) {
+//             return pos;
+//         }
+//         pos = get_next_list_elt(pos);
+//     }
+// }
 
 #[inline(always)]
 pub fn proc_get_argct(loc: *mut SlHead) -> u16 {
@@ -848,7 +894,7 @@ pub fn proc_native_get_body(loc: *mut SlHead) -> NativeFn {
 }
 
 #[inline(always)]
-fn core_copy_val(reg: *mut memmgt::Region, src: *mut SlHead) -> *mut SlHead {
+pub fn core_copy_val(reg: *mut memmgt::Region, src: *mut SlHead) -> *mut SlHead {
     let (siz, cfg) = (core_size(src), get_cfg_all(src));
 
     unsafe {
@@ -893,15 +939,6 @@ fn core_cons_copy(reg: *mut memmgt::Region, car: *mut SlHead, cdr: *mut SlHead) 
 // pub fn cdr(loc: *mut SlHead) -> *mut SlHead {
 //     if coretypp!(loc ; Ref) {
 //         get_next_list_elt(ref_get(loc))
-//         // if nil_p(cadr) {
-//         //     cadr
-//         // } else /*if list_elt_p(cadr)*/ {
-//         //     let ptr = init_ref(reg);
-//         //     ref_set(ptr, cadr);
-//         //     ptr
-//         // } //else {
-//         //     // cadr
-//         // // }
 //     } else {
 //         get_next_list_elt(loc)
 //     }
@@ -911,8 +948,9 @@ fn core_cons_copy(reg: *mut memmgt::Region, car: *mut SlHead, cdr: *mut SlHead) 
 /// TODO: deal somewhere with dynamic bindings, lexical bindings, argument bindings
 /// TODO: give env and symtab their own predicate types
 /// TODO: the core does not use maps except for env and symtab, so consolidate the code
-fn env_create(reg: *mut memmgt::Region) -> *mut SlHead {
-    init_hash_map(reg, 255)
+#[inline(always)]
+fn env_create(reg: *mut memmgt::Region, size: u32) -> *mut SlHead {
+    init_hash_map(reg, size)
 }
 
 #[inline(always)]
@@ -974,7 +1012,7 @@ pub fn env_layer_ins_entry(
 /// Uses Alist every time
 /// TODO: many improvements / optimizations possible throughout env system
 pub fn env_new_arg_layer(reg: *mut memmgt::Region) -> *mut SlHead {
-    init_alist_map(reg)
+    init_ref(reg)
 }
 
 /// TODO: this should be a vector or something else more sensible, especially for natives
@@ -1008,26 +1046,25 @@ pub fn env_arg_layer_ins(
     }
 }
 
-pub fn env_push_layer(env: *mut SlHead, layer: *mut SlHead) {
-    let next = ref_get(env);
-    set_next_list_elt(layer, next);
-    ref_set(env, layer);
-}
+// pub fn env_push_layer(env: *mut SlHead, layer: *mut SlHead) {
+//     let next = ref_get(env);
+//     set_next_list_elt(layer, next);
+//     ref_set(env, layer);
+// }
 
-// TODO: MEMORY LEAK
-pub fn env_pop_layer(env: *mut SlHead) {
-    let next = get_next_list_elt(ref_get(env));
-    ref_set(env, next);
-}
+// pub fn env_pop_layer(env: *mut SlHead) {
+//     let next = get_next_list_elt(ref_get(env));
+//     ref_set(env, next);
+// }
 
 /// This should take the form of a bimap, a 1 to 1 association between strings and IDs
 /// Two maps, one for each direction, pointing to the same set of cons cells (id . string)
 /// Must keep track of id to assign (counter) and reclaim unused slots if counter reaches max
-fn sym_tab_create(reg: *mut memmgt::Region) -> *mut SlHead {
+fn sym_tab_create(reg: *mut memmgt::Region, size: u32) -> *mut SlHead {
     let tbl = init_stdvec(reg, 3);
 
-    let id_to_str = init_hash_map(reg, 255);
-    let str_to_id = init_hash_map(reg, 255);
+    let id_to_str = init_hash_map(reg, size);
+    let str_to_id = init_hash_map(reg, size);
 
     let id_count = init_symbol(reg);
     sym_set_id(id_count, 0);
@@ -1145,7 +1182,7 @@ fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
 }
 
 /// Looks up by ID number directly
-fn sym_tab_lookup_id_num(tbl: *mut SlHead, id: u32) -> *mut SlHead {
+pub fn sym_tab_lookup_id_num(tbl: *mut SlHead, id: u32) -> *mut SlHead {
     let map = stdvec_idx(tbl, 0);
     let size = hashvec_get_size(map);
     let hash = id % size as u32;
@@ -1192,7 +1229,7 @@ pub fn sym_tab_get_id(reg: *mut memmgt::Region, tbl: *mut SlHead, sym: &str) -> 
 /// TODO: should regions know about their Sail environment?
 /// TODO: insert all the core type symbols
 pub fn prep_environment(reg: *mut memmgt::Region) -> (*mut SlHead, *mut SlHead) {
-    (sym_tab_create(reg), env_create(reg))
+    (sym_tab_create(reg, 255), env_create(reg, 255))
 }
 
 #[inline(always)]

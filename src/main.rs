@@ -31,19 +31,15 @@ fn main() {
 
     let (window, event_loop) = context::init_context(NAME, ICON, SIZE[0], SIZE[1]);
 
-    // let context = Context::new(NAME, ICON, SIZE[0], SIZE[1]);
     let input_status = Arc::new(Mutex::new(InputStatus::new()));
-    // this channel transmits a message to the manager on event loop destruction
-    // let (tx, rx) = mpsc::channel::<ContextMsg>();
-
     let inputs = Arc::clone(&input_status);
 
     let (mut w, mut h) = (SIZE[0], SIZE[1]);
     let (mut x, mut y) = (0, 0);
 
-    // let main_sector = unsafe { sail::memmgt::acquire_mem_sector(1000000) };
-    // let render_sector = unsafe { sail::memmgt::acquire_mem_sector(1000000) };
-    // let context_sector = unsafe { sail::memmgt::acquire_mem_sector(100000) };
+    let main_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
+    let rndr_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
+    let ctxt_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
 
     // let (sl_tbl, sl_env) = unsafe {
     //     let tbl = sail::sym_tab_create(main_sector);
@@ -114,22 +110,6 @@ fn main() {
                 // println!("Cursor Pos: x= {}, y= {}", pos.x, pos.y);
                 x = pos.x;
                 y = pos.y;
-                // graphics
-                //     .draw_triangle_frame(stark::graphics::Triangle {
-                //         points: [
-                //             [-0.5, 0.5],
-                //             [-0.5, -0.5],
-                //             [
-                //                 ((x as f32 / w as f32) * 2.0) - 1.0,
-                //                 ((y as f32 / h as f32) * 2.0) - 1.0,
-                //             ],
-                //         ],
-                //     })
-                //     .unwrap();
-
-                // graphics
-                //     .draw_clear_frame([0.0, x as f32 / w as f32, y as f32 / h as f32, 0.0])
-                //     .unwrap();
             }
             if let Some(scroll) = curr_stat.check_scroll() {
                 // println!("Scroll Delta: x= {}, y= {}", scroll.xdel, scroll.ydel);
@@ -181,20 +161,6 @@ fn main() {
             //     }
             //     Ok(ContextMsg::Redraw) => {
             //         info!("Received redraw message");
-            //         // graphics.draw_clear_frame([0.2, 0.1, 0.7, 1.0]).unwrap();
-
-            //         // graphics
-            //         //     .draw_triangle_frame(stark::graphics::Triangle {
-            //         //         points: [
-            //         //             [-0.5, 0.5],
-            //         //             [-0.5, -0.5],
-            //         //             [
-            //         //                 ((x as f32 / w as f32) * 2.0) - 1.0,
-            //         //                 ((y as f32 / h as f32) * 2.0) - 1.0,
-            //         //             ],
-            //         //         ],
-            //         //     })
-            //         //     .unwrap();
             //     }
             //     _ => {}
             // }

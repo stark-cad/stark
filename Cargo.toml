@@ -13,8 +13,6 @@ memdbg = []
 winit = { path = "../winit" }
 gfx-hal = { path = "../gfx/src/hal" }
 
-rug = "1.11.0"
-
 shaderc = "0.6.3"
 
 # arrayvec = "0.5.2"

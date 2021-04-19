@@ -68,11 +68,11 @@ fn read_value(
             chars.next();
             value = read_map(chars, acc, reg, tbl)?;
         }
-        // b':' => {
-        //     chars.next();
-        //     value = read_keyword(chars, acc, reg, tbl, elt)?;
-        //     acc.clear();
-        // }
+        b':' => {
+            chars.next();
+            value = read_keyword(chars, acc, reg, tbl)?;
+            acc.clear();
+        }
         b'"' => {
             chars.next();
             value = read_string(chars, acc, reg, tbl)?;
@@ -283,43 +283,45 @@ fn read_symbol(
 }
 
 // TODO: make keywords work properly again
-// fn read_keyword(
-//     chars: &mut iter::Peekable<str::Bytes>,
-//     acc: &mut Vec<u8>,
-//     reg: *mut memmgt::Region,
-//     tbl: *mut SlHead,
-//     elt: bool,
-// ) -> Result<*mut SlHead, SailErr> {
-//     let key = unsafe { super::init_keyword(memmgt::which_mem_sector(tbl), elt) };
-//     while {
-//         let peek = chars.peek().unwrap();
-//         match peek {
-//             b')' | b']' | b'}' => false,
-//             _ if peek.is_ascii_whitespace() => false,
-//             _ => true,
-//         }
-//     } {
-//         let next = chars.next().unwrap();
-//         match next {
-//             b'_' => acc.push(next),
-//             _ if next.is_ascii_alphanumeric() => acc.push(next),
-//             _ => return Err(SailErr::Error),
-//         }
-//     }
+fn read_keyword(
+    chars: &mut iter::Peekable<str::Bytes>,
+    acc: &mut Vec<u8>,
+    reg: *mut memmgt::Region,
+    tbl: *mut SlHead,
+) -> Result<*mut SlHead, SailErr> {
+    let key = super::init_symbol(reg);
+    while {
+        let peek = chars.peek().unwrap();
+        match peek {
+            b')' | b']' | b'}' => false,
+            _ if peek.is_ascii_whitespace() => false,
+            _ => true,
+        }
+    } {
+        let next = chars.next().unwrap();
+        match next {
+            b'_' => acc.push(next),
+            _ if next.is_ascii_alphanumeric() => acc.push(next),
+            _ => return Err(SailErr::Error),
+        }
+    }
 
-//     if acc.len() == 0 {
-//         return Err(SailErr::Error);
-//     }
+    if acc.len() == 0 {
+        return Err(SailErr::Error);
+    }
 
-//     unsafe {
-//         super::key_set_id(
-//             key,
-//             super::sym_tab_get_id(tbl, str::from_utf8_unchecked(acc.as_slice())),
-//         )
-//     }
+    unsafe {
+        super::sym_set_id(
+            key,
+            super::modeize_sym(
+                super::sym_tab_get_id(reg, tbl, str::from_utf8_unchecked(acc.as_slice())),
+                super::SymbolMode::Keyword,
+            ),
+        )
+    }
 
-//     Ok(key)
-// }
+    Ok(key)
+}
 
 fn read_string(
     chars: &mut iter::Peekable<str::Bytes>,

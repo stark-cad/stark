@@ -76,12 +76,14 @@ incl_symbols! {
     26 T_PROC_LAMBDA "sail-fn" Type;
     27 T_PROC_NATIVE "rust-fn" Type;
     28 T_ERR         "err"     Type;
-    29 SP_DEF        "def"     Basic;
-    30 SP_DO         "do"      Basic;
-    31 SP_FN         "fn"      Basic;
-    32 SP_IF         "if"      Basic;
-    33 SP_QUOTE      "quote"   Basic
-    34
+    29 T_QUEUE_TX    "q-tx"    Type;
+    30 T_QUEUE_RX    "q-rx"    Type;
+    31 SP_DEF        "def"     Basic;
+    32 SP_DO         "do"      Basic;
+    33 SP_FN         "fn"      Basic;
+    34 SP_IF         "if"      Basic;
+    35 SP_QUOTE      "quote"   Basic
+    36
 }
 
 /// Set a symbol to one of the four symbol modes
@@ -296,7 +298,35 @@ impl fmt::Display for SlContextVal {
                 Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
                 I64 => write!(f, "{}", i64_get(value)),
                 F64 => write!(f, "{}", f64_get(value)),
-                Symbol => write!(f, "{}", string_get(sym_tab_lookup_by_id(table, value))),
+                Symbol => {
+                    let full_id = sym_get_id(value);
+                    match mode_of_sym(full_id) {
+                        SymbolMode::Basic => {
+                            write!(f, "{}", string_get(sym_tab_lookup_id_num(table, full_id)))
+                        }
+                        SymbolMode::Keyword => {
+                            write!(
+                                f,
+                                ":{}",
+                                string_get(sym_tab_lookup_id_num(table, demodes_sym(full_id)))
+                            )
+                        }
+                        SymbolMode::Module => {
+                            write!(
+                                f,
+                                "@{}",
+                                string_get(sym_tab_lookup_id_num(table, demodes_sym(full_id)))
+                            )
+                        }
+                        SymbolMode::Type => {
+                            write!(
+                                f,
+                                "${}",
+                                string_get(sym_tab_lookup_id_num(table, demodes_sym(full_id)))
+                            )
+                        }
+                    }
+                }
                 Ref => {
                     write!(f, "(").unwrap();
                     let mut elt = ref_get(value);
@@ -361,7 +391,7 @@ pub fn repl(stream_in: std::io::Stdin) {
     // TODO: Consider stack-like environment per function
     // TODO: Start to think about namespaces etc
 
-    let region = unsafe { memmgt::acquire_mem_region(1000000) };
+    let region = unsafe { memmgt::acquire_mem_region(100000) };
 
     // Create persistent environment and symbol table
     let (tbl, env) = prep_environment(region);
@@ -386,11 +416,11 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         };
 
-        if ref_p(expr) {
+        if nnil_ref_p(expr) {
             stack.push_frame_head(ret_addr, eval::Opcode::Eval, env);
             stack.push(ref_get(expr));
         } else {
-            if symbol_p(expr) {
+            if basic_sym_p(expr) {
                 ret_slot = env_lookup(env, expr);
             } else {
                 ret_slot = expr;
@@ -414,7 +444,7 @@ pub fn run_file(filename: &str) -> Result<String, SailErr> {
 
 /// Interprets a Sail expression, returning the result
 pub fn interpret(code: &str) -> Result<String, SailErr> {
-    let region = unsafe { memmgt::acquire_mem_region(100000) };
+    let region = unsafe { memmgt::acquire_mem_region(1000000) };
 
     let (tbl, env) = prep_environment(region);
 
