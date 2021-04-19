@@ -401,7 +401,9 @@ pub fn repl(stream_in: std::io::Stdin) {
 
     let mut stack = eval::EvalStack::new(10000);
 
-    let mut ret_slot = nil();
+    let sigil = 1 as *mut SlHead;
+
+    let mut ret_slot = sigil;
     let ret_addr: *mut *mut SlHead = &mut ret_slot;
 
     loop {
@@ -427,13 +429,13 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         }
 
-        while nil_p(ret_slot) {
+        while ret_slot == sigil {
             stack.iter_once(region, tbl);
         }
 
         println!("{}\n", context(tbl, ret_slot).to_string());
 
-        ret_slot = nil();
+        ret_slot = sigil;
     }
 }
 
@@ -565,6 +567,11 @@ fn print(
 ) -> *mut SlHead {
     let arg = args[0];
     println!("{}", context(tbl, arg).to_string());
+
+    // let out = init_bool(_reg);
+    // bool_set(out, true);
+    // return out;
+
     return nil();
 }
 
@@ -576,6 +583,11 @@ fn printenv(
     _args: &[*mut SlHead],
 ) -> *mut SlHead {
     println!("{}", context(tbl, env).to_string());
+
+    // let out = init_bool(_reg);
+    // bool_set(out, true);
+    // return out;
+
     return nil();
 }
 

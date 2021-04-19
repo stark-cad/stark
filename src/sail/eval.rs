@@ -45,6 +45,7 @@ impl EvalStack {
         if top_offset > size_bytes {
             return;
         }
+
         let old_max = self.stack_max as usize;
         let frame_offset = self.frame_start as usize - old_start;
 
@@ -63,12 +64,14 @@ impl EvalStack {
             // iterate over the stack, updating those pointers that
             // point elsewhere within the stack to conform with the
             // new memory location
-            for p in 0..(top_offset / 8) {
+            for p in 0..=(top_offset / 8) {
                 unsafe {
                     let address = new_start.add(p);
-                    if *address >= old_start && *address <= old_top {
-                        let addr_offset = *address - old_start;
-                        *address = new_start as usize + addr_offset;
+                    let pointer = ptr::read(address);
+
+                    if pointer >= old_start && pointer <= old_top {
+                        let addr_offset = pointer - old_start;
+                        ptr::write(address, new_start as usize + addr_offset);
                     }
                 }
             }
@@ -82,11 +85,12 @@ impl EvalStack {
 
     #[inline(always)]
     pub fn push(&mut self, word: *mut SlHead) {
-        // print!("push 1; ");
+        if cfg!(feature = "stkdbg") {
+            print!("push 1; ");
+        }
 
         unsafe {
-            let current_top = self.stack_top;
-            if current_top as usize + 8 >= self.stack_max as usize {
+            if self.stack_top as usize + 8 >= self.stack_max as usize {
                 self.resize((self.stack_max as usize - self.stack_start as usize) / 4)
             }
             let new_top = self.stack_top.add(1);
@@ -94,53 +98,67 @@ impl EvalStack {
             ptr::write(new_top, word as usize);
         }
 
-        // println!(
-        //     "size: {}",
-        //     (self.stack_top as usize - self.stack_start as usize) / 8
-        // );
+        if cfg!(feature = "stkdbg") {
+            println!(
+                "size: {}",
+                (self.stack_top as usize - self.stack_start as usize) / 8
+            );
+        }
     }
 
     #[inline(always)]
     fn pop(&mut self) {
-        // print!("pop 1; ");
+        if cfg!(feature = "stkdbg") {
+            print!("pop 1; ");
+        }
 
         unsafe {
             self.stack_top = self.stack_top.sub(1);
         }
 
-        // println!(
-        //     "size: {}",
-        //     (self.stack_top as usize - self.stack_start as usize) / 8
-        // );
+        if cfg!(feature = "stkdbg") {
+            println!(
+                "size: {}",
+                (self.stack_top as usize - self.stack_start as usize) / 8
+            );
+        }
     }
 
     #[inline(always)]
-    pub fn push_frame_head(&mut self, ret: *mut *mut SlHead, opc: Opcode, env: *mut SlHead) {
-        // print!("PUSH: {:?}; ", opc);
-
-        unsafe {
-            let current_top = self.stack_top;
-            if current_top as usize + 24 >= self.stack_max as usize {
-                self.resize((self.stack_max as usize - self.stack_start as usize) / 4)
-            }
-            self.stack_top = current_top.add(3);
-
-            ptr::write(current_top.add(1), self.frame_start as usize);
-            ptr::write(current_top.add(2), ret as usize);
-            ptr::write(current_top.add(3), ((env as usize) << 16) + opc as usize);
-
-            self.frame_start = current_top.add(1);
+    pub fn push_frame_head(&mut self, mut ret: *mut *mut SlHead, opc: Opcode, env: *mut SlHead) {
+        if cfg!(feature = "stkdbg") {
+            print!("PUSH: {:?}; ", opc);
         }
 
-        // println!(
-        //     "size: {}",
-        //     (self.stack_top as usize - self.stack_start as usize) / 8
-        // );
+        unsafe {
+            if self.stack_top as usize + 24 >= self.stack_max as usize {
+                let old_top = self.stack_top as usize;
+                self.resize((self.stack_max as usize - self.stack_start as usize) / 4);
+                ret = ((ret as usize - old_top) + self.stack_top as usize) as *mut *mut SlHead;
+            }
+            let prev_top = self.stack_top;
+            self.stack_top = prev_top.add(3);
+
+            ptr::write(prev_top.add(1), self.frame_start as usize);
+            ptr::write(prev_top.add(2), ret as usize);
+            ptr::write(prev_top.add(3), ((env as usize) << 16) + opc as usize);
+
+            self.frame_start = prev_top.add(1);
+        }
+
+        if cfg!(feature = "stkdbg") {
+            println!(
+                "size: {}",
+                (self.stack_top as usize - self.stack_start as usize) / 8
+            );
+        }
     }
 
     #[inline(always)]
     fn pop_frame(&mut self) {
-        // print!("POP: {:?}; ", self.frame_opc());
+        if cfg!(feature = "stkdbg") {
+            print!("POP: {:?}; ", self.frame_opc());
+        }
 
         unsafe {
             let last_frame = ptr::read(self.frame_start);
@@ -148,15 +166,26 @@ impl EvalStack {
             self.frame_start = last_frame as *mut usize;
         }
 
-        // println!(
-        //     "size: {}",
-        //     (self.stack_top as usize - self.stack_start as usize) / 8
-        // );
+        if cfg!(feature = "stkdbg") {
+            println!(
+                "size: {}",
+                (self.stack_top as usize - self.stack_start as usize) / 8
+            );
+        }
     }
 
     #[inline(always)]
     pub fn is_empty(&mut self) -> bool {
         self.stack_start == self.stack_top
+    }
+
+    #[inline(always)]
+    fn frame_opc(&mut self) -> Opcode {
+        unsafe {
+            ((ptr::read(self.frame_start.add(2)) & 0x000000000000FFFF) as u8)
+                .try_into()
+                .unwrap()
+        }
     }
 
     #[inline(always)]
@@ -181,8 +210,15 @@ impl EvalStack {
         // * Sail stack-based evaluation logic
         // ***********************************
 
+        if self.stack_start == self.stack_top {
+            return
+        }
+
         let (ret, env, opc) = self.frame_top();
-        // println!("ENTER: {:?}", opc);
+
+        if cfg!(feature = "stkdbg") {
+            println!("ENTER: {:?}", opc);
+        }
 
         match opc {
             Opcode::Eval => {
@@ -192,7 +228,7 @@ impl EvalStack {
                 let raw_op = list;
                 let raw_args = get_next_list_elt(list);
 
-                if symbol_p(raw_op) {
+                if basic_sym_p(raw_op) {
                     match sym_get_id(raw_op) {
                         id if id == SP_DEF.0 => {
                             // needs: symbol to bind, value to bind to it
@@ -200,7 +236,7 @@ impl EvalStack {
                             self.push(raw_args);
 
                             let value = get_next_list_elt(raw_args);
-                            if ref_p(value) {
+                            if nnil_ref_p(value) {
                                 self.push(nil());
 
                                 let return_to =
@@ -208,7 +244,7 @@ impl EvalStack {
                                 self.push_frame_head(return_to, Opcode::Eval, env);
                                 self.push(ref_get(value));
                             } else {
-                                let out = if symbol_p(value) {
+                                let out = if basic_sym_p(value) {
                                     env_lookup(env, value)
                                 } else {
                                     value
@@ -249,11 +285,11 @@ impl EvalStack {
 
                             let return_to = unsafe { self.frame_start.add(3) } as *mut *mut SlHead;
 
-                            if ref_p(raw_args) {
+                            if nnil_ref_p(raw_args) {
                                 self.push_frame_head(return_to, Opcode::Eval, env);
                                 self.push(ref_get(raw_args));
                             } else {
-                                let out = if symbol_p(raw_args) {
+                                let out = if basic_sym_p(raw_args) {
                                     env_lookup(env, raw_args)
                                 } else {
                                     raw_args
@@ -271,7 +307,7 @@ impl EvalStack {
                     }
                 }
 
-                if ref_p(raw_op) {
+                if nnil_ref_p(raw_op) {
                     self.push_frame_head(ret, Opcode::PreApp, env);
                     self.push(nil());
                     self.push(raw_args);
@@ -281,7 +317,7 @@ impl EvalStack {
                     self.push_frame_head(return_to, Opcode::Eval, env);
                     self.push(ref_get(raw_op));
                 } else {
-                    let proc = if symbol_p(raw_op) {
+                    let proc = if basic_sym_p(raw_op) {
                         env_lookup(env, raw_op)
                     } else {
                         raw_op
@@ -302,11 +338,11 @@ impl EvalStack {
                         }
                         let return_to =
                             unsafe { apply_start.add(4 + i as usize) } as *mut *mut SlHead;
-                        if ref_p(arg) {
+                        if nnil_ref_p(arg) {
                             self.push_frame_head(return_to, Opcode::Eval, env);
                             self.push(ref_get(arg));
                         } else {
-                            let out = if symbol_p(arg) {
+                            let out = if basic_sym_p(arg) {
                                 env_lookup(env, arg)
                             } else {
                                 arg
@@ -318,7 +354,7 @@ impl EvalStack {
             }
             Opcode::Bind => {
                 let symbol = self.frame_obj(0);
-                assert!(symbol_p(symbol));
+                assert!(basic_sym_p(symbol));
                 let value = self.frame_obj(1);
 
                 env_layer_ins_entry(reg, env, symbol, value);
@@ -330,11 +366,11 @@ impl EvalStack {
                 let remainder = self.frame_obj(0);
                 if nil_p(get_next_list_elt(remainder)) {
                     self.pop_frame();
-                    if ref_p(remainder) {
+                    if nnil_ref_p(remainder) {
                         self.push_frame_head(ret, Opcode::Eval, env);
                         self.push(ref_get(remainder));
                     } else {
-                        let out = if symbol_p(remainder) {
+                        let out = if basic_sym_p(remainder) {
                             env_lookup(env, remainder)
                         } else {
                             remainder
@@ -344,7 +380,7 @@ impl EvalStack {
                 } else {
                     self.pop();
                     self.push(get_next_list_elt(remainder));
-                    if ref_p(remainder) {
+                    if nnil_ref_p(remainder) {
                         self.push_frame_head(self.null_loc as *mut *mut SlHead, Opcode::Eval, env);
                         self.push(ref_get(remainder));
                     }
@@ -358,11 +394,11 @@ impl EvalStack {
                 self.pop_frame();
 
                 if bool_get(pred_res) {
-                    if ref_p(true_body) {
+                    if nnil_ref_p(true_body) {
                         self.push_frame_head(ret, Opcode::Eval, env);
                         self.push(ref_get(true_body));
                     } else {
-                        let out = if symbol_p(true_body) {
+                        let out = if basic_sym_p(true_body) {
                             env_lookup(env, true_body)
                         } else {
                             true_body
@@ -370,11 +406,11 @@ impl EvalStack {
                         unsafe { ptr::write(ret, out) };
                     }
                 } else {
-                    if ref_p(false_body) {
+                    if nnil_ref_p(false_body) {
                         self.push_frame_head(ret, Opcode::Eval, env);
                         self.push(ref_get(false_body));
                     } else {
-                        let out = if symbol_p(false_body) {
+                        let out = if basic_sym_p(false_body) {
                             env_lookup(env, false_body)
                         } else {
                             false_body
@@ -402,11 +438,11 @@ impl EvalStack {
                         arg = get_next_list_elt(arg);
                     }
                     let return_to = unsafe { apply_start.add(4 + i as usize) } as *mut *mut SlHead;
-                    if ref_p(arg) {
+                    if nnil_ref_p(arg) {
                         self.push_frame_head(return_to, Opcode::Eval, env);
                         self.push(ref_get(arg));
                     } else {
-                        let out = if symbol_p(arg) {
+                        let out = if basic_sym_p(arg) {
                             env_lookup(env, arg)
                         } else {
                             arg
@@ -466,23 +502,25 @@ pub fn eval_expr(
     env: *mut SlHead,
     expr: *mut SlHead,
 ) -> *mut SlHead {
-    let mut result = nil();
+    let sigil = 1 as *mut SlHead;
+
+    let mut result = sigil;
     let ret_addr: *mut *mut SlHead = &mut result;
 
     let mut stack = EvalStack::new(10000);
 
-    if ref_p(expr) {
+    if nnil_ref_p(expr) {
         stack.push_frame_head(ret_addr, Opcode::Eval, env);
         stack.push(ref_get(expr));
     } else {
-        if symbol_p(expr) {
+        if basic_sym_p(expr) {
             result = env_lookup(env, expr);
         } else {
             result = expr;
         }
     }
 
-    while nil_p(result) {
+    while result == sigil {
         stack.iter_once(reg, tbl);
     }
 
