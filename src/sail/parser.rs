@@ -149,29 +149,6 @@ fn read_list(
     while c != b')' {
         match c {
             b';' => while chars.next().unwrap() != b'\n' {},
-            // b'.' => {
-            //     // may only appear immediately before the final element
-            //     if count < 1 {
-            //         return Err(SailErr::Error);
-            //     }
-
-            //     // finish the malformed list
-            //     chars.next().unwrap();
-            //     let last = read_value(chars, acc, reg, tbl)?;
-            //     super::set_next_list_elt(tail, last);
-
-            //     // make sure no illegal elements appear afterwards
-            //     loop {
-            //         let nc = chars.next().unwrap();
-            //         match nc {
-            //             b')' => break,
-            //             _ if nc.is_ascii_whitespace() => (),
-            //             _ => return Err(SailErr::Error),
-            //         }
-            //     }
-
-            //     return Ok(head);
-            // }
             _ if c.is_ascii_whitespace() => {
                 chars.next();
             }

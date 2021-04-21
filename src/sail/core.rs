@@ -173,7 +173,7 @@ enum_and_tryfrom! {
 /// They can be represented in the value head, without an additional type specifier
 /// Null pointers "point to" Nil values; the concept is like interning
 /// The next 15 types have statically known size, and correspond to Rust types
-/// The last 5 types have variable size, and must be inspected to get a size
+/// The last 6 types have variable size, and must be inspected to get a size
 #[derive(Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CoreType {
@@ -516,7 +516,7 @@ pub fn set_next_list_elt(loc: *mut SlHead, next: *mut SlHead) {
 /// Gets the pointer to the next element from a list element
 #[inline(always)]
 pub fn get_next_list_elt(loc: *mut SlHead) -> *mut SlHead {
-    // assert!(list_elt_p(loc));
+    assert!(!nil_p(loc));
     unsafe { (ptr::read_unaligned(loc as *mut usize) >> 16) as *mut SlHead }
 }
 
@@ -789,21 +789,21 @@ pub fn hash_map_insert(
     core_write_field(loc, idx, entry)
 }
 
-fn alist_map_insert(
-    reg: *mut memmgt::Region,
-    loc: *mut SlHead,
-    key: *mut SlHead,
-    val: *mut SlHead,
-) {
-    let entry = core_cons_copy(reg, key, val);
-    let next = core_read_field(loc, 0);
+// fn alist_map_insert(
+//     reg: *mut memmgt::Region,
+//     loc: *mut SlHead,
+//     key: *mut SlHead,
+//     val: *mut SlHead,
+// ) {
+//     let entry = core_cons_copy(reg, key, val);
+//     let next = core_read_field(loc, 0);
 
-    if !nil_p(next) {
-        set_next_list_elt(entry, next);
-    }
+//     if !nil_p(next) {
+//         set_next_list_elt(entry, next);
+//     }
 
-    core_write_field(loc, 0, entry)
-}
+//     core_write_field(loc, 0, entry)
+// }
 
 // /// Looks up a key in a map, returning the key-value pair
 // fn hash_map_lookup(loc: *mut SlHead, key: *mut SlHead) -> *mut SlHead {
@@ -948,8 +948,9 @@ fn core_cons_copy(reg: *mut memmgt::Region, car: *mut SlHead, cdr: *mut SlHead) 
 /// TODO: deal somewhere with dynamic bindings, lexical bindings, argument bindings
 /// TODO: give env and symtab their own predicate types
 /// TODO: the core does not use maps except for env and symtab, so consolidate the code
+/// TODO: improve the env data structure (this is where most evaluation time is spent)
 #[inline(always)]
-fn env_create(reg: *mut memmgt::Region, size: u32) -> *mut SlHead {
+pub fn env_create(reg: *mut memmgt::Region, size: u32) -> *mut SlHead {
     init_hash_map(reg, size)
 }
 
@@ -958,7 +959,17 @@ pub fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> *mut SlHead {
     env_lookup_by_id(env, sym_get_id(sym))
 }
 
-pub fn env_lookup_by_id(mut env: *mut SlHead, sym_id: u32) -> *mut SlHead {
+#[inline(always)]
+pub fn env_lookup_by_id(env: *mut SlHead, sym_id: u32) -> *mut SlHead {
+    let entry = env_lookup_entry(env, sym_id);
+    if nil_p(entry) {
+        entry
+    } else {
+        get_next_list_elt(entry)
+    }
+}
+
+fn env_lookup_entry(mut env: *mut SlHead, sym_id: u32) -> *mut SlHead {
     while !nil_p(env) {
         // A layer can be a hash table or an alist
         let entry = if coretypp!(env ; VecHash) {
@@ -978,7 +989,7 @@ pub fn env_lookup_by_id(mut env: *mut SlHead, sym_id: u32) -> *mut SlHead {
                 break;
             }
             if sym_get_id(ref_get(pos)) == sym_id {
-                return get_next_list_elt(ref_get(pos));
+                return ref_get(pos);
             }
             pos = get_next_list_elt(pos);
         }
@@ -997,15 +1008,56 @@ fn env_new_layer(reg: *mut memmgt::Region, min_size: u32) -> *mut SlHead {
 pub fn env_layer_ins_entry(
     reg: *mut memmgt::Region,
     layer: *mut SlHead,
-    key: *mut SlHead,
+    sym: *mut SlHead,
     val: *mut SlHead,
 ) {
-    if coretypp!(layer ; VecHash) {
-        hash_map_insert(reg, layer, key, val)
+    env_layer_ins_by_id(reg, layer, sym_get_id(sym), val)
+}
+
+pub fn env_layer_ins_by_id(
+    reg: *mut memmgt::Region,
+    layer: *mut SlHead,
+    sym_id: u32,
+    val: *mut SlHead,
+) {
+    let entry = {
+        let head = init_ref(reg);
+        let sym = init_symbol(reg);
+
+        sym_set_id(sym, sym_id);
+        set_next_list_elt(sym, val);
+        ref_set(head, sym);
+
+        head
+    };
+
+    let (offset, next): (_, *mut SlHead) = if coretypp!(layer ; VecHash) {
+        let idx = 8 + ((sym_id % hashvec_get_size(layer)) as usize * PTR_LEN as usize);
+        (idx, core_read_field(layer, idx))
     } else if coretypp!(layer ; Ref) {
-        alist_map_insert(reg, layer, key, val)
+        (0, core_read_field(layer, 0))
     } else {
         panic!("incorrect layer in env")
+    };
+
+    if !nil_p(next) {
+        set_next_list_elt(entry, next);
+    }
+
+    core_write_field(layer, offset, entry)
+}
+
+pub fn env_layer_mut_entry(env: *mut SlHead, sym: *mut SlHead, val: *mut SlHead) -> bool {
+    env_layer_mut_by_id(env, sym_get_id(sym), val)
+}
+
+fn env_layer_mut_by_id(env: *mut SlHead, sym_id: u32, val: *mut SlHead) -> bool {
+    let entry = env_lookup_entry(env, sym_id);
+    if nil_p(entry) {
+        false
+    } else {
+        set_next_list_elt(entry, val);
+        true
     }
 }
 

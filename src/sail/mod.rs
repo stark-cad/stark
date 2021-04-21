@@ -418,16 +418,7 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         };
 
-        if nnil_ref_p(expr) {
-            stack.push_frame_head(ret_addr, eval::Opcode::Eval, env);
-            stack.push(ref_get(expr));
-        } else {
-            if basic_sym_p(expr) {
-                ret_slot = env_lookup(env, expr);
-            } else {
-                ret_slot = expr;
-            }
-        }
+        stack.start(ret_addr, env, expr);
 
         while ret_slot == sigil {
             stack.iter_once(region, tbl);
@@ -469,6 +460,7 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut S
     insert_native_proc(reg, tbl, env, "-", sub, 2);
     insert_native_proc(reg, tbl, env, "mod", modulus, 2);
     insert_native_proc(reg, tbl, env, "=", equal, 2);
+    insert_native_proc(reg, tbl, env, "not", not, 1);
     insert_native_proc(reg, tbl, env, "print", print, 1);
     insert_native_proc(reg, tbl, env, "printenv", printenv, 0);
     // insert_native_proc(reg, tbl, env, "color", color, 4);
@@ -550,13 +542,16 @@ sail_fn! {
         return out;
     }
 
-    // qtx [sender, item] {
-    //     queue::queue_tx(sender, item);
+    not [val] {
+        let out = init_bool(reg);
+        if bool_get(val) {
+            bool_set(out, false)
+        } else {
+            bool_set(out, true)
+        }
+        return out;
+    }
 
-    //     let out = init_bool(reg);
-    //     bool_set(out, true);
-    //     return out;
-    // }
 }
 
 fn print(

@@ -1,6 +1,6 @@
 use super::core::*;
 use super::memmgt;
-use super::{SP_DEF, SP_DO, SP_FN, SP_IF, SP_QUOTE};
+use super::{SP_DEF, SP_DO, SP_FN, SP_IF, SP_QUOTE, SP_SET, SP_WHILE};
 
 use std::alloc;
 use std::convert::TryInto;
@@ -125,7 +125,7 @@ impl EvalStack {
     }
 
     #[inline(always)]
-    pub fn push_frame_head(&mut self, mut ret: *mut *mut SlHead, opc: Opcode, env: *mut SlHead) {
+    fn push_frame_head(&mut self, mut ret: *mut *mut SlHead, opc: Opcode, env: *mut SlHead) {
         if cfg!(feature = "stkdbg") {
             print!("PUSH: {:?}; ", opc);
         }
@@ -136,14 +136,20 @@ impl EvalStack {
                 self.resize((self.stack_max as usize - self.stack_start as usize) / 4);
                 ret = ((ret as usize - old_top) + self.stack_top as usize) as *mut *mut SlHead;
             }
-            let prev_top = self.stack_top;
-            self.stack_top = prev_top.add(3);
+            let new_start = self.stack_top.add(1);
+            self.stack_top = new_start.add(2);
 
-            ptr::write(prev_top.add(1), self.frame_start as usize);
-            ptr::write(prev_top.add(2), ret as usize);
-            ptr::write(prev_top.add(3), ((env as usize) << 16) + opc as usize);
+            ptr::write(
+                new_start.add(FrameOffset::LastTop as usize),
+                self.frame_start as usize,
+            );
+            ptr::write(new_start.add(FrameOffset::Return as usize), ret as usize);
+            ptr::write(
+                new_start.add(FrameOffset::EnvOpc as usize),
+                ((env as usize) << 16) + opc as usize,
+            );
 
-            self.frame_start = prev_top.add(1);
+            self.frame_start = new_start;
         }
 
         if cfg!(feature = "stkdbg") {
@@ -174,15 +180,76 @@ impl EvalStack {
         }
     }
 
+    /// Starts evaluating a Sail expression with an external return location
+    /// Returns false and does nothing if the stack is already in use
+    pub fn start(&mut self, ret: *mut *mut SlHead, env: *mut SlHead, expr: *mut SlHead) -> bool {
+        if !self.is_empty() {
+            false
+        } else {
+            if nnil_ref_p(expr) {
+                self.push_frame_head(ret, Opcode::Eval, env);
+                self.push(ref_get(expr));
+            } else {
+                unsafe {
+                    ptr::write(
+                        ret,
+                        if basic_sym_p(expr) {
+                            env_lookup(env, expr)
+                        } else {
+                            expr
+                        },
+                    );
+                }
+            }
+
+            true
+        }
+    }
+
+    /// Starts evaluating a Sail expression that will not return outside the stack
+    /// Works even when other expressions are evaluating on the stack
+    ///
+    /// **Warning**:
+    /// - Takes over the stack until the expression is finished
+    /// - An error in this expression destroys the entire stack
+    /// - This function is temporary and using it is a bad idea
+    pub fn start_no_ret(&mut self, env: *mut SlHead, expr: *mut SlHead) {
+        if nnil_ref_p(expr) {
+            self.push_frame_head(self.null_loc as *mut *mut SlHead, Opcode::Eval, env);
+            self.push(ref_get(expr));
+        }
+    }
+
+    // TODO: use more of a condition system than an exception system eventually
+    fn unwind(&mut self, error: *mut SlHead) {
+        // destroy stack frames until reaching an error catch or the bottom
+
+        while self.frame_start > self.stack_start {
+            self.pop_frame();
+        }
+
+        unsafe {
+            ptr::write(self.frame_ret(), error);
+        }
+    }
+
     #[inline(always)]
     pub fn is_empty(&mut self) -> bool {
         self.stack_start == self.stack_top
     }
 
     #[inline(always)]
+    fn frame_ret(&mut self) -> *mut *mut SlHead {
+        unsafe {
+            ptr::read(self.frame_start.add(FrameOffset::Return as usize) as *mut *mut *mut SlHead)
+        }
+    }
+
+    #[inline(always)]
     fn frame_opc(&mut self) -> Opcode {
         unsafe {
-            ((ptr::read(self.frame_start.add(2)) & 0x000000000000FFFF) as u8)
+            ((ptr::read(self.frame_start.add(FrameOffset::EnvOpc as usize)) & 0x000000000000FFFF)
+                as u8)
                 .try_into()
                 .unwrap()
         }
@@ -190,9 +257,9 @@ impl EvalStack {
 
     #[inline(always)]
     fn frame_top(&mut self) -> (*mut *mut SlHead, *mut SlHead, Opcode) {
-        let env_and_opc = unsafe { ptr::read(self.frame_start.add(2)) };
+        let env_and_opc = unsafe { ptr::read(self.frame_start.add(FrameOffset::EnvOpc as usize)) };
         (
-            unsafe { ptr::read(self.frame_start.add(1) as *mut *mut *mut SlHead) },
+            self.frame_ret(),
             (env_and_opc >> 16) as *mut SlHead,
             ((env_and_opc & 0x000000000000FFFF) as u8)
                 .try_into()
@@ -202,7 +269,9 @@ impl EvalStack {
 
     #[inline(always)]
     fn frame_obj(&mut self, offset: usize) -> *mut SlHead {
-        unsafe { ptr::read(self.frame_start.add(3 + offset)) as *mut SlHead }
+        unsafe {
+            ptr::read(self.frame_start.add(FrameOffset::ArgZero as usize + offset)) as *mut SlHead
+        }
     }
 
     pub fn iter_once(&mut self, reg: *mut memmgt::Region, tbl: *mut SlHead) {
@@ -210,8 +279,8 @@ impl EvalStack {
         // * Sail stack-based evaluation logic
         // ***********************************
 
-        if self.stack_start == self.stack_top {
-            return
+        if self.is_empty() {
+            return;
         }
 
         let (ret, env, opc) = self.frame_top();
@@ -239,8 +308,10 @@ impl EvalStack {
                             if nnil_ref_p(value) {
                                 self.push(nil());
 
-                                let return_to =
-                                    unsafe { self.frame_start.add(4) } as *mut *mut SlHead;
+                                let return_to = unsafe {
+                                    self.frame_start.add(FrameOffset::ArgZero as usize + 1)
+                                }
+                                    as *mut *mut SlHead;
                                 self.push_frame_head(return_to, Opcode::Eval, env);
                                 self.push(ref_get(value));
                             } else {
@@ -283,7 +354,9 @@ impl EvalStack {
                             self.push(get_next_list_elt(raw_args));
                             self.push(get_next_list_elt(get_next_list_elt(raw_args)));
 
-                            let return_to = unsafe { self.frame_start.add(3) } as *mut *mut SlHead;
+                            let return_to =
+                                unsafe { self.frame_start.add(FrameOffset::ArgZero as usize) }
+                                    as *mut *mut SlHead;
 
                             if nnil_ref_p(raw_args) {
                                 self.push_frame_head(return_to, Opcode::Eval, env);
@@ -303,6 +376,54 @@ impl EvalStack {
                             unsafe { ptr::write(ret, raw_args) };
                             return;
                         }
+                        id if id == SP_SET.0 => {
+                            // needs: symbol to bind, value to bind to it
+                            self.push_frame_head(ret, Opcode::Mutate, env);
+                            self.push(raw_args);
+
+                            let value = get_next_list_elt(raw_args);
+                            if nnil_ref_p(value) {
+                                self.push(nil());
+
+                                let return_to = unsafe {
+                                    self.frame_start.add(FrameOffset::ArgZero as usize + 1)
+                                }
+                                    as *mut *mut SlHead;
+                                self.push_frame_head(return_to, Opcode::Eval, env);
+                                self.push(ref_get(value));
+                            } else {
+                                let out = if basic_sym_p(value) {
+                                    env_lookup(env, value)
+                                } else {
+                                    value
+                                };
+                                self.push(out);
+                            }
+                            return;
+                        }
+                        id if id == SP_WHILE.0 => {
+                            self.push_frame_head(ret, Opcode::While, env);
+                            self.push(raw_args);
+                            self.push(nil());
+                            self.push(get_next_list_elt(raw_args));
+
+                            let return_to =
+                                unsafe { self.frame_start.add(FrameOffset::ArgZero as usize + 1) }
+                                    as *mut *mut SlHead;
+
+                            if nnil_ref_p(raw_args) {
+                                self.push_frame_head(return_to, Opcode::Eval, env);
+                                self.push(ref_get(raw_args));
+                            } else {
+                                let out = if basic_sym_p(raw_args) {
+                                    env_lookup(env, raw_args)
+                                } else {
+                                    raw_args
+                                };
+                                unsafe { ptr::write(return_to, out) };
+                            }
+                            return;
+                        }
                         _ => {}
                     }
                 }
@@ -312,7 +433,8 @@ impl EvalStack {
                     self.push(nil());
                     self.push(raw_args);
 
-                    let return_to = unsafe { self.frame_start.add(3) } as *mut *mut SlHead;
+                    let return_to = unsafe { self.frame_start.add(FrameOffset::ArgZero as usize) }
+                        as *mut *mut SlHead;
 
                     self.push_frame_head(return_to, Opcode::Eval, env);
                     self.push(ref_get(raw_op));
@@ -336,8 +458,9 @@ impl EvalStack {
                         for _ in 0..i {
                             arg = get_next_list_elt(arg);
                         }
-                        let return_to =
-                            unsafe { apply_start.add(4 + i as usize) } as *mut *mut SlHead;
+                        let return_to = unsafe {
+                            apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize)
+                        } as *mut *mut SlHead;
                         if nnil_ref_p(arg) {
                             self.push_frame_head(return_to, Opcode::Eval, env);
                             self.push(ref_get(arg));
@@ -358,6 +481,19 @@ impl EvalStack {
                 let value = self.frame_obj(1);
 
                 env_layer_ins_entry(reg, env, symbol, value);
+                self.pop_frame();
+
+                unsafe { ptr::write(ret, symbol) };
+            }
+            Opcode::Mutate => {
+                let symbol = self.frame_obj(0);
+                assert!(basic_sym_p(symbol));
+                let value = self.frame_obj(1);
+
+                if !env_layer_mut_entry(env, symbol, value) {
+                    panic!("symbol didn't exist")
+                }
+
                 self.pop_frame();
 
                 unsafe { ptr::write(ret, symbol) };
@@ -384,6 +520,36 @@ impl EvalStack {
                         self.push_frame_head(self.null_loc as *mut *mut SlHead, Opcode::Eval, env);
                         self.push(ref_get(remainder));
                     }
+                }
+            }
+            Opcode::While => {
+                let pred = self.frame_obj(0);
+                let result = self.frame_obj(1);
+                coretypck!(result ; Bool);
+                let body = self.frame_obj(2);
+
+                if bool_get(result) {
+                    let return_to =
+                        unsafe { self.frame_start.add(FrameOffset::ArgZero as usize + 1) }
+                            as *mut *mut SlHead;
+
+                    if nnil_ref_p(pred) {
+                        self.push_frame_head(return_to, Opcode::Eval, env);
+                        self.push(ref_get(pred));
+                    } else {
+                        let out = if basic_sym_p(pred) {
+                            env_lookup(env, pred)
+                        } else {
+                            pred
+                        };
+                        unsafe { ptr::write(return_to, out) };
+                    }
+
+                    self.push_frame_head(self.null_loc as *mut *mut SlHead, Opcode::DoSeq, env);
+                    self.push(body);
+                } else {
+                    self.pop_frame();
+                    unsafe { ptr::write(ret, nil()) };
                 }
             }
             Opcode::Branch => {
@@ -437,7 +603,9 @@ impl EvalStack {
                     for _ in 0..i {
                         arg = get_next_list_elt(arg);
                     }
-                    let return_to = unsafe { apply_start.add(4 + i as usize) } as *mut *mut SlHead;
+                    let return_to =
+                        unsafe { apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize) }
+                            as *mut *mut SlHead;
                     if nnil_ref_p(arg) {
                         self.push_frame_head(return_to, Opcode::Eval, env);
                         self.push(ref_get(arg));
@@ -481,7 +649,8 @@ impl EvalStack {
                 } else {
                     let args: &[*mut SlHead] = unsafe {
                         std::slice::from_raw_parts(
-                            self.frame_start.add(4) as *mut *mut SlHead,
+                            self.frame_start.add(FrameOffset::ArgZero as usize + 1)
+                                as *mut *mut SlHead,
                             argct as usize,
                         )
                     };
@@ -509,16 +678,7 @@ pub fn eval_expr(
 
     let mut stack = EvalStack::new(10000);
 
-    if nnil_ref_p(expr) {
-        stack.push_frame_head(ret_addr, Opcode::Eval, env);
-        stack.push(ref_get(expr));
-    } else {
-        if basic_sym_p(expr) {
-            result = env_lookup(env, expr);
-        } else {
-            result = expr;
-        }
-    }
+    stack.start(ret_addr, env, expr);
 
     while result == sigil {
         stack.iter_once(reg, tbl);
@@ -538,10 +698,16 @@ enum_and_tryfrom! {
         /// Symbol, value
         Bind,
 
+        /// Symbol, value
+        Mutate,
+
         /// Remainder of list to do
         DoSeq,
 
-        /// Predicate, true path, false path
+        /// Predicate, result, loop body
+        While,
+
+        /// Predicate result, true path, false path
         Branch,
 
         /// Procedure, argument list
@@ -549,13 +715,33 @@ enum_and_tryfrom! {
 
         /// Procedure, all arguments
         Apply,
+
+        // /// Function to run with error
+        // Catch,
+
+        // /// Function to run, error caught
+        // Caught,
     }
 }
 
+/// Contents of a frame head in this Sail evaluation stack
 struct _Frame {
-    last_frame: usize,
+    /// Pointer to the frame immediately before this one on the stack
+    last_top_frame: usize,
+
+    /// Address to which to return the value this frame produces
     return_address: usize,
+
+    /// Sail environment and opcode for this frame (tagged pointer)
     env_and_opcode: usize,
+}
+
+#[repr(u8)]
+enum FrameOffset {
+    LastTop = 0,
+    Return = 1,
+    EnvOpc = 2,
+    ArgZero = 3,
 }
 
 // TODO: call lambda functions using the stack?
