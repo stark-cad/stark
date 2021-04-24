@@ -454,6 +454,13 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut S
     // insert_native_proc(reg, tbl, env, "color", color, 4);
     insert_native_proc(reg, tbl, env, "qtx", qtx, 2);
     insert_native_proc(reg, tbl, env, "qrx", qrx, 1);
+
+    insert_native_proc(reg, tbl, env, "vec-f32-make", vec_f32_make, 0);
+    insert_native_proc(reg, tbl, env, "vec-f32-push", vec_f32_push, 2);
+    insert_native_proc(reg, tbl, env, "vec-f32-get", vec_f32_get, 2);
+    insert_native_proc(reg, tbl, env, "vec-f32-set", vec_f32_set, 3);
+
+    insert_native_proc(reg, tbl, env, "as-f32", as_f32, 1);
 }
 
 /// TODO: intended to be temporary; still relies on some "magic values"
@@ -576,10 +583,73 @@ sail_fn! {
     qrx [receiver] {
         return queue::queue_rx(receiver);
     }
+
+    vec_f32_make [] {
+        let vec = unsafe { memmgt::alloc(reg, vec_size(12, 4, 8), Cfg::VecAny as u8) };
+        unsafe {
+            write_field_unchecked(vec, 0, T_F32.0);
+            write_field_unchecked(vec, 4, 8 as u32);
         }
-        return out;
+        core_write_field(vec, 8, 0 as u32);
+        return vec;
     }
 
+    vec_f32_push [target, value] {
+        coretypck!(target ; VecAny);
+        coretypck!(value ; F32);
+        assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
+
+        let cap = core_read_field::<u32>(target, 4);
+        let len = core_read_field::<u32>(target, 8);
+
+        if len < cap {
+            core_write_field(target, 8, len + 1);
+            core_write_field(target, (4 * len as usize) + 12, f32_get(value));
+        }
+
+        return target;
+    }
+
+    vec_f32_get [target, idx] {
+        coretypck!(target ; VecAny);
+        coretypck!(idx ; I64);
+        assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
+
+        let len = core_read_field::<u32>(target, 8);
+        let idx = i64_get(idx) as u32;
+
+        if idx < len {
+            let out = init_f32(reg);
+            f32_set(out, core_read_field::<f32>(target, (4 * idx as usize) + 12));
+            return out;
+        } else {
+            panic!("invalid index")
+        }
+    }
+
+    vec_f32_set [target, idx, val] {
+        coretypck!(target ; VecAny);
+        coretypck!(idx ; I64);
+        coretypck!(val; F32);
+        assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
+
+        let len = core_read_field::<u32>(target, 8);
+        let idx = i64_get(idx) as u32;
+
+        if idx < len {
+            core_write_field::<f32>(target, (4 * idx as usize) + 12, f32_get(val));
+        } else {
+            panic!("invalid index")
+        }
+
+        return target;
+    }
+
+    as_f32 [val] {
+        let out = init_f32(reg);
+        f32_set(out, f64_get(val) as f32);
+        return out;
+    }
 }
 
 fn print(
