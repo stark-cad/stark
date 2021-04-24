@@ -58,6 +58,80 @@ pub fn render_loop(
     unsafe { sail::write_field_unchecked(eng_obj, 0, (&mut engine as *mut _) as u64) };
     sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_ENGINE.0, eng_obj);
 
+    fn redraw(
+        _reg: *mut sail::memmgt::Region,
+        _tbl: *mut SlHead,
+        _env: *mut SlHead,
+        _args: &[*mut SlHead],
+    ) -> *mut SlHead {
+        println!("render redraw");
+
+        let eng_ptr = _args[0];
+        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+        let engine = unsafe {
+            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+        };
+
+        engine.draw_frame();
+
+        return sail::nil();
+    }
+
+    fn frame_size(
+        _reg: *mut sail::memmgt::Region,
+        _tbl: *mut SlHead,
+        _env: *mut SlHead,
+        _args: &[*mut SlHead],
+    ) -> *mut SlHead {
+        println!("render frame_size");
+
+        let eng_ptr = _args[0];
+        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+        let engine = unsafe {
+            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+        };
+
+        let w = sail::u32_get(_args[1]);
+        let h = sail::u32_get(_args[2]);
+
+        engine.state.set_extent(w, h);
+        engine.should_configure_swapchain = true;
+
+        return sail::nil();
+    }
+
+    fn new_line(
+        _reg: *mut sail::memmgt::Region,
+        _tbl: *mut SlHead,
+        _env: *mut SlHead,
+        _args: &[*mut SlHead],
+    ) -> *mut SlHead {
+        println!("render new_line");
+
+        let eng_ptr = _args[0];
+        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+        let engine = unsafe {
+            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+        };
+
+        let points = _args[1];
+        assert_eq!(sail::core_type(points), Some(sail::CoreType::VecAny));
+        assert_eq!(sail::core_read_field::<u32>(points, 0), sail::T_F32.0);
+
+        for idx in 0..4 {
+            let pt = sail::core_read_field::<f32>(points, (4 * idx as usize) + 12);
+            engine.lines.push(pt);
+        }
+
+        engine.buffer_size_check();
+
+        return sail::nil();
+    }
+
+    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "redraw", redraw, 1);
+    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "frame-size", frame_size, 3);
+    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "new-line", new_line, 2);
+
     engine.setup();
     engine.set_clear([1.0, 1.0, 1.0, 1.0]);
     // engine.add_line([-0.5, -0.5, 0.5, 0.5]);
