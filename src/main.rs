@@ -118,6 +118,9 @@ fn main() {
             let sl_reg = main_region as *mut sail::memmgt::Region;
             // let (mr_send, cm_recv) = (mr_send as *mut sail::SlHead, cm_recv as *mut sail::SlHead);
 
+            // let prog_txt = include_str!("../scripts/main.sl");
+            let prog_txt = &std::fs::read_to_string("scripts/main.sl").unwrap();
+            let prog_expr = sail::parser::parse(sl_reg, sl_tbl, prog_txt).unwrap();
 
             let mut stack = sail::eval::EvalStack::new(10000);
 
@@ -134,6 +137,10 @@ fn main() {
 
             // ret_slot = sigil;
 
+            let main = sail::env_lookup_by_id(sl_env, sail::S_MAIN.0);
+
+            stack.push_frame_head(ret_addr, sail::eval::Opcode::Apply, sl_env);
+            stack.push(main);
 
             loop {
                 stack.iter_once(sl_reg, sl_tbl);

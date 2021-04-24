@@ -55,8 +55,21 @@ pub fn run_loop<Ij: 'static>(
     let sl_tbl = sl_tbl as *mut sail::SlHead;
     let sl_env = sl_env as *mut sail::SlHead;
 
+    // let prog_txt = include_str!("../scripts/ctxt.sl");
+    let prog_txt = &std::fs::read_to_string("scripts/ctxt.sl").unwrap();
+    let prog_expr = sail::parser::parse(sl_reg, sl_tbl, prog_txt).unwrap();
+
     let mut stack = sail::eval::EvalStack::new(10000);
 
+    stack.start_no_ret(sl_env, prog_expr);
+
+    while !stack.is_empty() {
+        stack.iter_once(sl_reg, sl_tbl);
+    }
+
+    let ctx_dst = sail::env_lookup_by_id(sl_env, sail::S_CTX_DST.0);
+    let ctx_rsz = sail::env_lookup_by_id(sl_env, sail::S_CTX_RSZ.0);
+    let ctx_clk = sail::env_lookup_by_id(sl_env, sail::S_CTX_CLK.0);
 
     let mut window_dims: [u32; 2] = [0, 0];
     let mut vk_cursor_pos: [f32; 2] = [0.0, 0.0];
@@ -66,23 +79,50 @@ pub fn run_loop<Ij: 'static>(
 
         match event {
             Event::LoopDestroyed => {
-                // TODO: send messages using Sail queues
+                stack.push_frame_head(
+                    stack.null_loc as *mut *mut SlHead,
+                    sail::eval::Opcode::Apply,
+                    sl_env,
+                );
+                stack.push(ctx_dst);
 
-                // tx.send(ContextMsg::Destroy).unwrap();
+                while !stack.is_empty() {
+                    stack.iter_once(sl_reg, sl_tbl);
+                }
+
                 joins.take().unwrap().for_each(|x| x.join().unwrap());
             }
 
-            Event::RedrawRequested(..) => {
-                // tx.send(ContextMsg::Redraw).unwrap();
-            }
+            // Event::RedrawRequested(..) => {}
 
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
                     *control_flow = ControlFlow::Exit;
+
+                    stack.push_frame_head(
+                        stack.null_loc as *mut *mut SlHead,
+                        sail::eval::Opcode::Apply,
+                        sl_env,
+                    );
+                    stack.push(ctx_dst);
                 }
                 WindowEvent::Resized(dims) => {
                     *control_flow = ControlFlow::Poll;
                     window_dims = [dims.width, dims.height];
+
+                    let w = sail::init_u32(sl_reg);
+                    let h = sail::init_u32(sl_reg);
+                    sail::u32_set(w, dims.width);
+                    sail::u32_set(h, dims.height);
+
+                    stack.push_frame_head(
+                        stack.null_loc as *mut *mut SlHead,
+                        sail::eval::Opcode::Apply,
+                        sl_env,
+                    );
+                    stack.push(ctx_rsz);
+                    stack.push(w);
+                    stack.push(h);
                 }
                 WindowEvent::ScaleFactorChanged {
                     new_inner_size: dims,
@@ -90,11 +130,39 @@ pub fn run_loop<Ij: 'static>(
                 } => {
                     *control_flow = ControlFlow::Poll;
                     window_dims = [dims.width, dims.height];
+
+                    let w = sail::init_u32(sl_reg);
+                    let h = sail::init_u32(sl_reg);
+                    sail::u32_set(w, dims.width);
+                    sail::u32_set(h, dims.width);
+
+                    stack.push_frame_head(
+                        stack.null_loc as *mut *mut SlHead,
+                        sail::eval::Opcode::Apply,
+                        sl_env,
+                    );
+                    stack.push(ctx_rsz);
+                    stack.push(w);
+                    stack.push(h);
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     if state == event::ElementState::Pressed {
                         *control_flow = ControlFlow::Poll;
 
+                        let x = sail::init_f32(sl_reg);
+                        let y = sail::init_f32(sl_reg);
+                        sail::f32_set(x, vk_cursor_pos[0]);
+                        sail::f32_set(y, vk_cursor_pos[1]);
+
+                        stack.push_frame_head(
+                            stack.null_loc as *mut *mut SlHead,
+                            sail::eval::Opcode::Apply,
+                            sl_env,
+                        );
+                        stack.push(ctx_clk);
+                        stack.push(x);
+                        stack.push(y);
+                    }
                 }
                 WindowEvent::CursorMoved {
                     position: dpi::PhysicalPosition { x, y },

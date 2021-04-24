@@ -141,6 +141,10 @@ pub fn render_loop(
     // engine.add_line([0.5, 0.5, 0.5, -0.5]);
     // engine.add_line([0.5, 0.5, -0.5, 0.5]);
 
+    // let prog_txt = include_str!("../../scripts/rndr.sl");
+    let prog_txt = &std::fs::read_to_string("scripts/rndr.sl").unwrap();
+    let prog_expr = sail::parser::parse(sl_reg, sl_tbl, prog_txt).unwrap();
+
     let mut stack = sail::eval::EvalStack::new(10000);
 
     let sigil = 1 as *mut SlHead;
@@ -155,6 +159,12 @@ pub fn render_loop(
     }
 
     // ret_slot = sigil;
+
+    let rndr = sail::env_lookup_by_id(sl_env, sail::S_RNDR.0);
+
+    stack.push_frame_head(ret_addr, sail::eval::Opcode::Apply, sl_env);
+    stack.push(rndr);
+
     loop {
         if engine.should_configure_swapchain {
             engine.state.config_swapchain();
