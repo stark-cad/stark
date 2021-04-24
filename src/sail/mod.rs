@@ -39,7 +39,7 @@ impl fmt::Debug for SailErr {
 macro_rules! incl_symbols {
     ( $array:ident : $( $id:literal $name:ident $strng:literal $mode:ident );+ $size:literal ) => {
         $(
-            const $name: (u32, &str) = (modeize_sym($id, SymbolMode::$mode), $strng);
+            pub const $name: (u32, &str) = (modeize_sym($id, SymbolMode::$mode), $strng);
         )+
             const $array: [&str; $size] = [$($strng),+];
     };
@@ -82,8 +82,23 @@ incl_symbols! {
     32 SP_DO         "do"      Basic;
     33 SP_FN         "fn"      Basic;
     34 SP_IF         "if"      Basic;
-    35 SP_QUOTE      "quote"   Basic
-    36
+    35 SP_QUOTE      "quote"   Basic;
+    36 SP_SET        "set"     Basic;
+    37 SP_WHILE      "while"   Basic;
+    38 S_MR_SEND     "mr-send" Basic;
+    39 S_MR_RECV     "mr-recv" Basic;
+    40 S_CM_SEND     "cm-send" Basic;
+    41 S_CM_RECV     "cm-recv" Basic;
+    42 S_CR_SEND     "cr-send" Basic;
+    43 S_CR_RECV     "cr-recv" Basic;
+    44 S_MAIN        "main"    Basic;
+    45 S_RNDR        "rndr"    Basic;
+    46 S_CTX_DST     "ctx-dst" Basic;
+    47 S_CTX_RSZ     "ctx-rsz" Basic;
+    48 S_CTX_CLK     "ctx-clk" Basic;
+    49 S_ENGINE      "engine"  Basic;
+    50 S_T_INTERN    "--true"  Basic
+    51
 }
 
 /// Set a symbol to one of the four symbol modes
@@ -189,14 +204,14 @@ fn get_pred_type(loc: *mut SlHead) -> u32 {
 
 fn set_self_type(loc: *mut SlHead, typ: u32) {
     assert!(self_type_p(loc));
-    unsafe { ptr::write_unaligned(loc.add(HEAD_LEN as usize) as *mut u32, typ) }
+    unsafe { ptr::write_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *mut u32, typ) }
 }
 
 fn set_pred_type(loc: *mut SlHead, typ: u32) {
     assert!(pred_type_p(loc));
     unsafe {
         ptr::write_unaligned(
-            loc.add(if self_type_p(loc) {
+            (loc as *mut u8).add(if self_type_p(loc) {
                 HEAD_LEN + SYMBOL_LEN
             } else {
                 HEAD_LEN
@@ -237,39 +252,6 @@ fn set_pred_type(loc: *mut SlHead, typ: u32) {
 //     }
 // }
 
-// unsafe fn ref_qsend_set_target(loc: *mut SlHead, target: *mut memmgt::MemSector) {
-//     ptr::write_unaligned(
-//         value_ptr(loc).offset(PTR_LEN as isize) as *mut *mut memmgt::MemSector,
-//         target,
-//     )
-// }
-
-// unsafe fn ref_qsend_get_target(loc: *mut SlHead) -> *mut memmgt::MemSector {
-//     ptr::read_unaligned(value_ptr(loc).offset(PTR_LEN as isize) as *mut *mut memmgt::MemSector)
-// }
-
-// unsafe fn vec_idx_f32(loc: *mut SlHead, idx: u16) -> f32 {
-//     ptr::read_unaligned(
-//         value_ptr(loc)
-//             .offset(VEC_SH_LEN as isize)
-//             .offset(idx as isize * FIXNUM_32_LEN as isize) as *mut f32,
-//     )
-// }
-
-// unsafe fn vec_push_f32(loc: *mut SlHead, item: f32) {
-//     let (len, cap) = (vec_get_len(loc), vec_get_cap(loc));
-//     if len < cap {
-//         ptr::write_unaligned(
-//             value_ptr(loc).offset(VEC_SH_LEN as isize + (len as isize * FIXNUM_32_LEN as isize))
-//                 as *mut f32,
-//             item,
-//         );
-//         vec_set_len(loc, len + 1);
-//     } else {
-//         panic!("not enough space in vec");
-//     }
-// }
-
 union _SlSend {
     ptr: *mut SlHead,
     num: usize,
@@ -298,6 +280,7 @@ impl fmt::Display for SlContextVal {
                 Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
                 I64 => write!(f, "{}", i64_get(value)),
                 F64 => write!(f, "{}", f64_get(value)),
+                F32 => write!(f, "{}", f32_get(value)),
                 Symbol => {
                     let full_id = sym_get_id(value);
                     match mode_of_sym(full_id) {
@@ -455,20 +438,26 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut S
         sym_tab_get_id(reg, tbl, s);
     }
 
+    let true_intern = init_bool(reg);
+    bool_set(true_intern, true);
+    env_layer_ins_by_id(reg, env, S_T_INTERN.0, true_intern);
+
     // Native functions
     insert_native_proc(reg, tbl, env, "+", add, 2);
     insert_native_proc(reg, tbl, env, "-", sub, 2);
     insert_native_proc(reg, tbl, env, "mod", modulus, 2);
-    insert_native_proc(reg, tbl, env, "=", equal, 2);
+    insert_native_proc(reg, tbl, env, "=", num_eq, 2);
+    insert_native_proc(reg, tbl, env, "eq", sym_eq, 2);
     insert_native_proc(reg, tbl, env, "not", not, 1);
     insert_native_proc(reg, tbl, env, "print", print, 1);
     insert_native_proc(reg, tbl, env, "printenv", printenv, 0);
     // insert_native_proc(reg, tbl, env, "color", color, 4);
-    // insert_native_proc(reg, tbl, env, "qtx", qtx, 2);
+    insert_native_proc(reg, tbl, env, "qtx", qtx, 2);
+    insert_native_proc(reg, tbl, env, "qrx", qrx, 1);
 }
 
 /// TODO: intended to be temporary; still relies on some "magic values"
-fn insert_native_proc(
+pub fn insert_native_proc(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
     env: *mut SlHead,
@@ -488,19 +477,20 @@ fn insert_native_proc(
 /// TODO: type checks and variable length arglists for native functions
 /// TODO: generate these functions somehow else if macros won't cut it
 macro_rules! sail_fn {
-    ( $reg:ident; $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
+    ( $reg:ident $env:ident ; $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
         $(
             fn $fn_name (
-                reg: *mut memmgt::Region,
+                _reg: *mut memmgt::Region,
                 _tbl: *mut SlHead,
                 _env: *mut SlHead,
-                args: &[*mut SlHead]
+                _args: &[*mut SlHead]
             ) -> *mut SlHead {
-                let $reg = reg;
+                let $reg = _reg;
+                let $env = _env;
 
                 let mut _ind = 0;
                 $(
-                    let $args = args[_ind];
+                    let $args = _args[_ind];
                     _ind += 1;
                 )*
 
@@ -512,7 +502,7 @@ macro_rules! sail_fn {
 
 // TODO: native functions MUST be fully safe to use
 sail_fn! {
-    reg;
+    reg env ;
 
     add [fst, snd] {
         let out = init_i64(reg);
@@ -535,19 +525,57 @@ sail_fn! {
         return out;
     }
 
-    equal [fst, snd] {
-        let out = init_bool(reg);
+    num_eq [fst, snd] {
+        // let out = init_bool(reg);
         let result = i64_get(fst) == i64_get(snd);
-        bool_set(out, result);
-        return out;
+        if result {
+            env_lookup_by_id(env, S_T_INTERN.0)
+        } else {
+            nil()
+        }
+        // bool_set(out, result);
+        // return out;
+    }
+
+    sym_eq [fst, snd] {
+        // let out = init_bool(reg);
+        let result = core_eq(fst, snd);
+        if result {
+            env_lookup_by_id(env, S_T_INTERN.0)
+        } else {
+            nil()
+        }
+        // bool_set(out, result);
+        // return out;
     }
 
     not [val] {
-        let out = init_bool(reg);
-        if bool_get(val) {
-            bool_set(out, false)
+        // let out = init_bool(reg);
+        if !truthy(val) {
+            // bool_set(out, false)
+            env_lookup_by_id(env, S_T_INTERN.0)
         } else {
-            bool_set(out, true)
+            // bool_set(out, true)
+            nil()
+        }
+        // return out;
+    }
+
+    qtx [sender, item] {
+        // println!("entered qtx");
+
+        queue::queue_tx(sender, item);
+
+        // let out = init_bool(reg);
+        // bool_set(out, true);
+        // return out;
+
+        return nil();
+    }
+
+    qrx [receiver] {
+        return queue::queue_rx(receiver);
+    }
         }
         return out;
     }

@@ -491,7 +491,7 @@ impl EvalStack {
                 let value = self.frame_obj(1);
 
                 if !env_layer_mut_entry(env, symbol, value) {
-                    panic!("symbol didn't exist")
+                    panic!("symbol not in env")
                 }
 
                 self.pop_frame();
@@ -525,10 +525,10 @@ impl EvalStack {
             Opcode::While => {
                 let pred = self.frame_obj(0);
                 let result = self.frame_obj(1);
-                coretypck!(result ; Bool);
+                // coretypck!(result ; Bool);
                 let body = self.frame_obj(2);
 
-                if bool_get(result) {
+                if truthy(result) {
                     let return_to =
                         unsafe { self.frame_start.add(FrameOffset::ArgZero as usize + 1) }
                             as *mut *mut SlHead;
@@ -554,12 +554,12 @@ impl EvalStack {
             }
             Opcode::Branch => {
                 let pred_res = self.frame_obj(0);
-                coretypck!(pred_res ; Bool);
+                // coretypck!(pred_res ; Bool);
                 let true_body = self.frame_obj(1);
                 let false_body = self.frame_obj(2);
                 self.pop_frame();
 
-                if bool_get(pred_res) {
+                if truthy(pred_res) {
                     if nnil_ref_p(true_body) {
                         self.push_frame_head(ret, Opcode::Eval, env);
                         self.push(ref_get(true_body));

@@ -68,7 +68,7 @@ pub fn queue_rx(loc: *mut SlHead) -> *mut SlHead {
         }
 
         if super::get_self_type(next) == super::T_QUEUE_TX.0 {
-            super::ref_set(next, loc);
+            unsafe { super::write_field_unchecked(next, 0, loc) };
         }
 
         // return the received item

@@ -16,7 +16,10 @@ macro_rules! coretypck {
 /// Core type predicate
 macro_rules! coretypp {
     ( $var:ident ; $typ:ident ) => {
-        core_type($var).unwrap() == CoreType::$typ
+        match core_type($var) {
+            Some(t) => t == CoreType::$typ,
+            None => false,
+        }
     };
 }
 
@@ -146,14 +149,15 @@ enum_and_tryfrom! {
     #[derive(Debug, PartialEq, Eq)]
     #[repr(u8)]
     pub enum BaseSize {
+        // don't mess around with the enum variants
         B0 = 0,
         B1 = 1,
         B2 = 2,
-        B4 = 4,
-        B8 = 8,
-        B16 = 16,
-        Vec = 42,
-        Other = 255,
+        B4 = 3,
+        B8 = 4,
+        B16 = 5,
+        Vec = 6,
+        Other = 7,
     }
 }
 
@@ -327,6 +331,18 @@ pub fn self_type_p(loc: *mut SlHead) -> bool {
     }
 }
 
+#[inline(always)]
+pub fn truthy(loc: *mut SlHead) -> bool {
+    if nil_p(loc)
+        || (coretypp!(loc ; Bool) && !bool_get(loc))
+        || (coretypp!(loc ; Ref) && ref_empty_p(loc))
+    {
+        false
+    } else {
+        true
+    }
+}
+
 /// Gets the full configuration byte from a Sail value
 #[inline(always)]
 fn get_cfg_all(loc: *mut SlHead) -> u8 {
@@ -431,13 +447,15 @@ fn temp_get_size(typ: u32) -> usize {
         t if t == super::T_F64.0 => 8,
         t if t == super::T_SYMBOL.0 => 4,
         t if t == super::T_REF.0 => 8,
-        _ => panic!("type not allowed"),
+        _t => {
+            panic!("type not allowed")
+        }
     }
 }
 
 /// Gives the overall size of a Vec with certain parameters
 #[inline(always)]
-fn vec_size(head_size: usize, elt_size: usize, capacity: usize) -> usize {
+pub fn vec_size(head_size: usize, elt_size: usize, capacity: usize) -> usize {
     head_size + (elt_size * capacity)
 }
 
@@ -734,14 +752,24 @@ fn id(fst: *mut SlHead, lst: *mut SlHead) -> bool {
 /// Returns true if both arguments match in structure
 /// TODO: make eq and hash actually function for all types
 #[inline(always)]
-fn core_eq(fst: *mut SlHead, lst: *mut SlHead) -> bool {
+pub fn core_eq(fst: *mut SlHead, lst: *mut SlHead) -> bool {
     if id(fst, lst) {
         true
     } else {
-        match core_type(fst).unwrap() {
-            typ if typ != core_type(lst).unwrap() => false,
-            CoreType::Symbol => sym_get_id(fst) == sym_get_id(lst),
-            CoreType::VecStr => string_get(fst).eq(string_get(lst)),
+        match core_type(fst) {
+            Some(CoreType::Ref) => {
+                if ref_empty_p(fst) {
+                    nil_p(lst) || (core_type(lst).unwrap() == CoreType::Ref && ref_empty_p(lst))
+                } else {
+                    false
+                }
+            }
+            Some(CoreType::Nil) => {
+                nil_p(lst) || (core_type(lst).unwrap() == CoreType::Ref && ref_empty_p(lst))
+            }
+            Some(typ) if typ != core_type(lst).unwrap() => false,
+            Some(CoreType::Symbol) => sym_get_id(fst) == sym_get_id(lst),
+            Some(CoreType::VecStr) => string_get(fst).eq(string_get(lst)),
             _ => false,
         }
     }
@@ -1031,14 +1059,15 @@ pub fn env_layer_ins_by_id(
         head
     };
 
-    let (offset, next): (_, *mut SlHead) = if coretypp!(layer ; VecHash) {
-        let idx = 8 + ((sym_id % hashvec_get_size(layer)) as usize * PTR_LEN as usize);
-        (idx, core_read_field(layer, idx))
+    let offset = if coretypp!(layer ; VecHash) {
+        8 + ((sym_id % hashvec_get_size(layer)) as usize * PTR_LEN as usize)
     } else if coretypp!(layer ; Ref) {
-        (0, core_read_field(layer, 0))
+        0
     } else {
         panic!("incorrect layer in env")
     };
+
+    let next = core_read_field(layer, offset);
 
     if !nil_p(next) {
         set_next_list_elt(entry, next);
@@ -1061,7 +1090,7 @@ fn env_layer_mut_by_id(env: *mut SlHead, sym_id: u32, val: *mut SlHead) -> bool 
     }
 }
 
-/// Uses Alist every time
+/// Uses an alist every time
 /// TODO: many improvements / optimizations possible throughout env system
 pub fn env_new_arg_layer(reg: *mut memmgt::Region) -> *mut SlHead {
     init_ref(reg)
@@ -1084,7 +1113,15 @@ pub fn env_arg_layer_ins(
     key: *mut SlHead,
     val: *mut SlHead,
 ) {
-    let entry = core_cons_copy(reg, key, val);
+    coretypck!(layer ; Ref);
+
+    let entry = {
+        let head = init_ref(reg);
+        let sym = core_copy_val(reg, key);
+        set_next_list_elt(sym, val);
+        ref_set(head, sym);
+        head
+    };
 
     let mut next = core_read_field(layer, 0);
     if nil_p(next) {
@@ -1132,6 +1169,8 @@ fn sym_tab_create(reg: *mut memmgt::Region, size: u32) -> *mut SlHead {
 fn sym_tab_insert(reg: *mut memmgt::Region, tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
     let next_id = stdvec_idx(tbl, 2);
     let id_num = sym_get_id(next_id);
+
+    // println!("unique symbol id: {}", id_num);
 
     let entry = {
         let id = core_copy_val(reg, next_id);
@@ -1319,18 +1358,18 @@ fn u16_get(loc: *mut SlHead) -> u16 {
 }
 
 #[inline(always)]
-fn init_u32(reg: *mut memmgt::Region) -> *mut SlHead {
+pub fn init_u32(reg: *mut memmgt::Region) -> *mut SlHead {
     unsafe { memmgt::alloc(reg, NUM_32_LEN as usize, Cfg::B4U32 as u8) }
 }
 
 #[inline(always)]
-fn u32_set(loc: *mut SlHead, val: u32) {
+pub fn u32_set(loc: *mut SlHead, val: u32) {
     coretypck!(loc ; U32);
     core_write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn u32_get(loc: *mut SlHead) -> u32 {
+pub fn u32_get(loc: *mut SlHead) -> u32 {
     coretypck!(loc ; U32);
     core_read_field(loc, 0)
 }
@@ -1455,18 +1494,18 @@ fn i128_get(loc: *mut SlHead) -> i128 {
 }
 
 #[inline(always)]
-fn init_f32(reg: *mut memmgt::Region) -> *mut SlHead {
+pub fn init_f32(reg: *mut memmgt::Region) -> *mut SlHead {
     unsafe { memmgt::alloc(reg, NUM_32_LEN as usize, Cfg::B4F32 as u8) }
 }
 
 #[inline(always)]
-fn f32_set(loc: *mut SlHead, val: f32) {
+pub fn f32_set(loc: *mut SlHead, val: f32) {
     coretypck!(loc ; F32);
     core_write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn f32_get(loc: *mut SlHead) -> f32 {
+pub fn f32_get(loc: *mut SlHead) -> f32 {
     coretypck!(loc ; F32);
     core_read_field(loc, 0)
 }

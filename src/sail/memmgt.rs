@@ -164,11 +164,11 @@ pub unsafe fn alloc(region: *mut Region, size: usize, cfg: u8) -> *mut SlHead {
     ptr
 }
 
-unsafe fn realloc(value: *mut SlHead, size: usize) -> *mut SlHead {
-    value
-}
+// unsafe fn realloc(value: *mut SlHead, size: usize) -> *mut SlHead {
+//     value
+// }
 
-unsafe fn dealloc(value: *mut SlHead) {}
+// unsafe fn dealloc(value: *mut SlHead) {}
 
 /// A memory region is a linked list of memory zones, all of the same size
 #[derive(Debug)]

@@ -1,7 +1,7 @@
 ; Project Euler Problem 1 Solution
 ; using Sail's while form
 
-; run time, April 21 2021: ~0.2 seconds
+; run time, April 21 2021: ~0.07 seconds
 
 (do
 (def max 1000)
