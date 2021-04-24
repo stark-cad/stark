@@ -1,4 +1,7 @@
-use super::{sail, InputStatus};
+use super::{
+    sail::{self, SlHead},
+    InputStatus,
+};
 
 use png;
 use winit::{
@@ -40,17 +43,23 @@ pub fn init_context(
 pub fn run_loop<Ij: 'static>(
     event_loop: EventLoop<()>,
     threads: Ij,
-    sl_region: usize,
-    main_tx: usize,
-    render_tx: usize,
+    sl_reg: usize,
+    sl_tbl: usize,
+    sl_env: usize,
 ) where
     Ij: Iterator<Item = thread::JoinHandle<()>>,
 {
-    let sl_region = sl_region as *mut sail::memmgt::Region;
-    let main_tx = main_tx as *mut sail::SlHead;
-    let render_tx = render_tx as *mut sail::SlHead;
-
     let mut joins = Some(threads);
+
+    let sl_reg = sl_reg as *mut sail::memmgt::Region;
+    let sl_tbl = sl_tbl as *mut sail::SlHead;
+    let sl_env = sl_env as *mut sail::SlHead;
+
+    let mut stack = sail::eval::EvalStack::new(10000);
+
+
+    let mut window_dims: [u32; 2] = [0, 0];
+    let mut vk_cursor_pos: [f32; 2] = [0.0, 0.0];
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -72,50 +81,66 @@ pub fn run_loop<Ij: 'static>(
                     *control_flow = ControlFlow::Exit;
                 }
                 WindowEvent::Resized(dims) => {
-                    // tx.send(ContextMsg::Resize(dims.width, dims.height))
-                    // .unwrap();
-                    // tx.send(ContextMsg::Redraw).unwrap();
+                    *control_flow = ControlFlow::Poll;
+                    window_dims = [dims.width, dims.height];
                 }
                 WindowEvent::ScaleFactorChanged {
                     new_inner_size: dims,
                     ..
                 } => {
-                    // tx.send(ContextMsg::Resize(dims.width, dims.height))
-                    // .unwrap();
+                    *control_flow = ControlFlow::Poll;
+                    window_dims = [dims.width, dims.height];
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
-                    // input_status.lock().unwrap().update_mouse(button, state);
+                    if state == event::ElementState::Pressed {
+                        *control_flow = ControlFlow::Poll;
+
                 }
-                WindowEvent::CursorMoved { position, .. } => {
-                    // input_status
-                    // .lock()
-                    // .unwrap()
-                    // .update_pos(position.x as u32, position.y as u32);
+                WindowEvent::CursorMoved {
+                    position: dpi::PhysicalPosition { x, y },
+                    ..
+                } => {
+                    vk_cursor_pos = [
+                        (x / (window_dims[0] / 2) as f64 - 1.0) as f32,
+                        (y / (window_dims[1] / 2) as f64 - 1.0) as f32,
+                    ];
                 }
-                _ => {}
+                _ => {
+                    if stack.is_empty() {
+                        *control_flow = ControlFlow::Wait;
+                    } else {
+                        stack.iter_once(sl_reg, sl_tbl);
+                    }
+                }
             },
 
-            Event::DeviceEvent { event, .. } => match event {
-                DeviceEvent::Key(key) => {
-                    // input_status
-                    // .lock()
-                    // .unwrap()
-                    // .update_keys(key.scancode, key.state);
-                }
-                DeviceEvent::MouseWheel {
-                    delta: event::MouseScrollDelta::LineDelta(xdel, ydel),
-                } => {
-                    // input_statu   s.lock().unwrap( ).   update_scroll(xd el, ydel);
-                }
-                DeviceEvent::MouseMotion {
-                    delta: (xdel, ydel),
-                } => {
-                    // input_statu  s.lock().unwrap(  ).  update_motion(xd  el, ydel );
-                }
-                _ => {}
-            },
+            // Event::DeviceEvent { event, .. } => match event {
+            //     DeviceEvent::Key(key) => {
+            //         // input_status
+            //         // .lock()
+            //         // .unwrap()
+            //         // .update_keys(key.scancode, key.state);
+            //     }
+            //     DeviceEvent::MouseWheel {
+            //         delta: event::MouseScrollDelta::LineDelta(xdel, ydel),
+            //     } => {
+            //         // input_statu   s.lock().unwrap( ).   update_scroll(xd el, ydel);
+            //     }
+            //     DeviceEvent::MouseMotion {
+            //         delta: (xdel, ydel),
+            //     } => {
+            //         // input_statu  s.lock().unwrap(  ).  update_motion(xd  el, ydel );
+            //     }
+            //     _ => {}
+            // },
 
-            _ => {}
+            _ => {
+                if stack.is_empty() {
+                    *control_flow = ControlFlow::Wait;
+                } else {
+                    stack.iter_once(sl_reg, sl_tbl);
+                }
+            }
         }
     });
 }

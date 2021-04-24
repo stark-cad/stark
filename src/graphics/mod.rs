@@ -1,4 +1,4 @@
-use super::sail;
+use super::sail::{self, SlHead};
 
 use gfx_hal::{
     adapter::{Adapter, PhysicalDevice},
@@ -43,32 +43,56 @@ pub fn render_loop(
     name: &'static str,
     size: [u32; 2],
     window: &winit::window::Window,
-    draw_rx: usize,
-    context_rx: usize,
+    sl_reg: usize,
+    sl_tbl: usize,
+    sl_env: usize,
 ) {
-    let draw_rx = draw_rx as *mut sail::SlHead;
-    let context_rx = context_rx as *mut sail::SlHead;
+    let sl_reg = sl_reg as *mut sail::memmgt::Region;
+    let sl_tbl = sl_tbl as *mut SlHead;
+    let sl_env = sl_env as *mut SlHead;
 
     let mut engine: Engine<backend::Backend> =
         Engine::new(GraphicsState::new(window, name, size[0], size[1]));
-    let mut should_configure_swapchain = true;
+
+    let eng_obj = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::Cfg::B8Other as u8) };
+    unsafe { sail::write_field_unchecked(eng_obj, 0, (&mut engine as *mut _) as u64) };
+    sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_ENGINE.0, eng_obj);
 
     engine.setup();
     engine.set_clear([1.0, 1.0, 1.0, 1.0]);
     // engine.add_line([-0.5, -0.5, 0.5, 0.5]);
     // engine.add_line([-0.5, 0.5, 0.5, -0.5]);
-    engine.add_line([-0.5, -0.5, -0.5, 0.5]);
-    engine.add_line([-0.5, -0.5, 0.5, -0.5]);
-    engine.add_line([0.5, 0.5, 0.5, -0.5]);
-    engine.add_line([0.5, 0.5, -0.5, 0.5]);
+    // engine.add_line([-0.5, -0.5, -0.5, 0.5]);
+    // engine.add_line([-0.5, -0.5, 0.5, -0.5]);
+    // engine.add_line([0.5, 0.5, 0.5, -0.5]);
+    // engine.add_line([0.5, 0.5, -0.5, 0.5]);
 
+    let mut stack = sail::eval::EvalStack::new(10000);
+
+    let sigil = 1 as *mut SlHead;
+
+    let mut ret_slot = sigil;
+    let ret_addr: *mut *mut SlHead = &mut ret_slot;
+
+    stack.start(ret_addr, sl_env, prog_expr);
+
+    while ret_slot == sigil {
+        stack.iter_once(sl_reg, sl_tbl);
+    }
+
+    // ret_slot = sigil;
     loop {
-        if should_configure_swapchain {
+        if engine.should_configure_swapchain {
             engine.state.config_swapchain();
             engine.draw_frame();
-            should_configure_swapchain = false;
-        } else {
-            std::hint::spin_loop();
+            engine.should_configure_swapchain = false;
+        }
+
+        stack.iter_once(sl_reg, sl_tbl);
+
+        if stack.is_empty() {
+            println!("render thread broke");
+            break;
         }
 
         // unsafe {
@@ -107,6 +131,7 @@ pub struct Engine<B: gfx_hal::Backend> {
     lines: Vec<f32>,
     buflen: u64,
     state: GraphicsState<B>,
+    should_configure_swapchain: bool,
 }
 
 impl<B: gfx_hal::Backend> Engine<B> {
@@ -116,6 +141,7 @@ impl<B: gfx_hal::Backend> Engine<B> {
             lines: vec![],
             buflen: 256,
             state,
+            should_configure_swapchain: true,
         }
     }
     fn set_clear(&mut self, clear: [f32; 4]) {

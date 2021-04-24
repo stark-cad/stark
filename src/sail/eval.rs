@@ -17,7 +17,7 @@ pub struct EvalStack {
     /// Start of the stack's top frame
     frame_start: *mut usize,
     /// Location to write discarded return values
-    null_loc: *mut usize,
+    pub null_loc: *mut usize,
 }
 
 impl EvalStack {
@@ -125,7 +125,7 @@ impl EvalStack {
     }
 
     #[inline(always)]
-    fn push_frame_head(&mut self, mut ret: *mut *mut SlHead, opc: Opcode, env: *mut SlHead) {
+    pub fn push_frame_head(&mut self, mut ret: *mut *mut SlHead, opc: Opcode, env: *mut SlHead) {
         if cfg!(feature = "stkdbg") {
             print!("PUSH: {:?}; ", opc);
         }
