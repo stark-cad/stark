@@ -1,4 +1,4 @@
-use super::{memmgt, SailErr, SlHead};
+use super::{memmgt, SlErrCode, SlHead};
 
 use std::iter;
 use std::str;
@@ -13,7 +13,7 @@ pub fn parse(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
     code: &str,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     // Accumulator for collecting string values
     let mut acc: Vec<u8> = Vec::new();
     let mut chars = code.bytes().peekable();
@@ -23,7 +23,7 @@ pub fn parse(
     Ok(val)
 }
 
-// pub fn parse_bytes(tbl: *mut SlHead, code: &[u8]) -> Result<*mut SlHead, SailErr> {
+// pub fn parse_bytes(tbl: *mut SlHead, code: &[u8]) -> Result<*mut SlHead, SlErrCode> {
 //     let mut acc: Vec<u8> = Vec::new();
 //     let mut chars = code.iter().peekable();
 
@@ -37,7 +37,7 @@ fn read_value(
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     let value;
 
     let mut c = *(chars.peek().unwrap());
@@ -48,7 +48,7 @@ fn read_value(
             }
         }
         chars.next();
-        c = *(chars.peek().ok_or(SailErr::Error)?);
+        c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
 
     match c {
@@ -105,7 +105,8 @@ fn read_value(
             acc.clear();
         }
         _ => {
-            return Err(SailErr::Error);
+            eprintln!("invalid char in value read");
+            return Err(SlErrCode::ParseInvalidChar);
         }
     }
     Ok(value)
@@ -116,7 +117,7 @@ fn read_quote(
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     let head = super::init_ref(reg);
     let start = super::init_symbol(reg);
     super::sym_set_id(start, super::sym_tab_get_id(reg, tbl, "quote"));
@@ -133,7 +134,7 @@ fn read_list(
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     let head = super::init_ref(reg);
 
     let mut c = *(chars.peek().unwrap());
@@ -168,7 +169,7 @@ fn read_list(
             }
         }
 
-        c = *(chars.peek().ok_or(SailErr::Error)?);
+        c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
 
     chars.next();
@@ -182,7 +183,7 @@ fn read_vec(
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     let vec = super::init_stdvec(reg, 8);
     let mut c = *(chars.peek().unwrap());
     while c != b']' {
@@ -193,7 +194,7 @@ fn read_vec(
             }
             _ => super::stdvec_push(vec, read_value(chars, acc, reg, tbl)?),
         }
-        c = *(chars.peek().unwrap());
+        c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
     chars.next();
     Ok(vec)
@@ -204,7 +205,7 @@ fn read_map(
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     let map = super::init_hash_map(reg, 16);
     let mut c = *(chars.peek().unwrap());
     while c != b'}' {
@@ -220,7 +221,7 @@ fn read_map(
                 read_value(chars, acc, reg, tbl)?,
             ),
         }
-        c = *(chars.peek().unwrap());
+        c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
     chars.next();
     Ok(map)
@@ -231,7 +232,7 @@ fn read_symbol(
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     let sym = super::init_symbol(reg);
     while {
         let peek = chars.peek().unwrap();
@@ -245,7 +246,10 @@ fn read_symbol(
         match next {
             b'!' | b'*' | b'+' | b'-' | b'/' | b'<' | b'=' | b'>' | b'?' | b'_' => acc.push(next),
             _ if next.is_ascii_alphanumeric() => acc.push(next),
-            _ => return Err(SailErr::Error),
+            _ => {
+                eprintln!("invalid char in symbol read");
+                return Err(SlErrCode::ParseInvalidChar);
+            }
         }
     }
 
@@ -265,7 +269,7 @@ fn read_keyword(
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     let key = super::init_symbol(reg);
     while {
         let peek = chars.peek().unwrap();
@@ -277,14 +281,17 @@ fn read_keyword(
     } {
         let next = chars.next().unwrap();
         match next {
-            b'_' => acc.push(next),
+            b'-' | b'_' => acc.push(next),
             _ if next.is_ascii_alphanumeric() => acc.push(next),
-            _ => return Err(SailErr::Error),
+            _ => {
+                eprintln!("invalid char in keyword read");
+                return Err(SlErrCode::ParseInvalidChar);
+            }
         }
     }
 
     if acc.len() == 0 {
-        return Err(SailErr::Error);
+        return Err(SlErrCode::ParseUnexpectedEnd);
     }
 
     unsafe {
@@ -305,12 +312,12 @@ fn read_string(
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     let string = super::init_string(reg, 32);
     let mut next = *(chars.peek().unwrap());
     while next != b'"' {
         acc.push(chars.next().unwrap());
-        next = *(chars.peek().unwrap());
+        next = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
 
     chars.next();
@@ -319,7 +326,7 @@ fn read_string(
         string,
         match str::from_utf8(&acc) {
             Ok(s) => s,
-            _ => return Err(SailErr::Error),
+            _ => return Err(SlErrCode::ParseInvalidString),
         },
     );
 
@@ -331,7 +338,7 @@ fn read_number(
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
         match peek {
@@ -344,7 +351,10 @@ fn read_number(
         match next {
             b'+' | b'-' | b'_' | b'.' => acc.push(next),
             _ if next.is_ascii_alphanumeric() => acc.push(next),
-            _ => return Err(SailErr::Error),
+            _ => {
+                eprintln!("invalid char in number read");
+                return Err(SlErrCode::ParseInvalidChar);
+            }
         }
     }
     process_num(unsafe { str::from_utf8_unchecked(acc) }, reg, tbl)
@@ -355,7 +365,7 @@ fn read_special(
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
         match peek {
@@ -368,12 +378,15 @@ fn read_special(
         match next {
             b'_' => acc.push(next),
             _ if next.is_ascii_alphanumeric() => acc.push(next),
-            _ => return Err(SailErr::Error),
+            _ => {
+                eprintln!("invalid char in special read");
+                return Err(SlErrCode::ParseInvalidChar);
+            }
         }
     }
 
     if acc.len() == 0 {
-        return Err(SailErr::Error);
+        return Err(SlErrCode::ParseUnexpectedEnd);
     }
 
     let val = super::init_bool(reg);
@@ -384,7 +397,7 @@ fn read_special(
         super::bool_set(val, false);
         Ok(val)
     } else {
-        return Err(SailErr::Error);
+        return Err(SlErrCode::ParseBadSpecial);
     }
 }
 
@@ -392,7 +405,7 @@ fn process_num(
     slice: &str,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
-) -> Result<*mut SlHead, SailErr> {
+) -> Result<*mut SlHead, SlErrCode> {
     let val;
     if let Ok(n) = slice.parse::<i64>() {
         val = super::init_i64(reg);
@@ -405,6 +418,6 @@ fn process_num(
 
         return Ok(val);
     } else {
-        Err(SailErr::Error)
+        Err(SlErrCode::ParseInvalidNum)
     }
 }

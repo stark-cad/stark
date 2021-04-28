@@ -15,8 +15,16 @@ pub mod memmgt;
 pub mod parser;
 pub mod queue;
 
-pub enum SailErr {
-    Error,
+#[derive(Debug)]
+#[repr(u16)]
+pub enum SlErrCode {
+    ErrorUnknown = 0,
+    ParseUnexpectedEnd,
+    ParseBadSpecial,
+    ParseInvalidChar,
+    ParseInvalidString,
+    ParseInvalidNum,
+    FileCouldNotRead,
 }
 
 // impl fmt::Display for SailErr {
@@ -413,13 +421,16 @@ pub fn repl(stream_in: std::io::Stdin) {
     }
 }
 
-pub fn run_file(filename: &str) -> Result<String, SailErr> {
-    let file = std::fs::read_to_string(filename).unwrap();
+pub fn run_file(filename: &str) -> Result<String, SlErrCode> {
+    let file = match std::fs::read_to_string(filename) {
+        Ok(s) => s,
+        Err(_) => return Err(SlErrCode::FileCouldNotRead),
+    };
     interpret(&file)
 }
 
 /// Interprets a Sail expression, returning the result
-pub fn interpret(code: &str) -> Result<String, SailErr> {
+pub fn interpret(code: &str) -> Result<String, SlErrCode> {
     let region = unsafe { memmgt::acquire_mem_region(1000000) };
 
     let (tbl, env) = prep_environment(region);
