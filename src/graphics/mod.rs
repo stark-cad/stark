@@ -134,14 +134,7 @@ pub fn render_loop(
 
     engine.setup();
     engine.set_clear([1.0, 1.0, 1.0, 1.0]);
-    // engine.add_line([-0.5, -0.5, 0.5, 0.5]);
-    // engine.add_line([-0.5, 0.5, 0.5, -0.5]);
-    // engine.add_line([-0.5, -0.5, -0.5, 0.5]);
-    // engine.add_line([-0.5, -0.5, 0.5, -0.5]);
-    // engine.add_line([0.5, 0.5, 0.5, -0.5]);
-    // engine.add_line([0.5, 0.5, -0.5, 0.5]);
 
-    // let prog_txt = include_str!("../../scripts/rndr.sl");
     let prog_txt = &std::fs::read_to_string("scripts/rndr.sl").unwrap();
     let prog_expr = sail::parser::parse(sl_reg, sl_tbl, prog_txt).unwrap();
 
@@ -157,8 +150,6 @@ pub fn render_loop(
     while ret_slot == sigil {
         stack.iter_once(sl_reg, sl_tbl);
     }
-
-    // ret_slot = sigil;
 
     let rndr = sail::env_lookup_by_id(sl_env, sail::S_RNDR.0);
 
@@ -178,35 +169,6 @@ pub fn render_loop(
             println!("render thread broke");
             break;
         }
-
-        // unsafe {
-        //     match sail::queue::queue_rx_result(draw_rx) {
-        //         Ok(next) => {
-        //             if sail::get_type(next) == sail::SlType::Vec
-        //                 || sail::vec_mode(next) == sail::SlVecMode::FlatF32
-        //             {
-        //                 state
-        //                     .draw_clear_frame([
-        //                         sail::vec_idx_f32(next, 0),
-        //                         sail::vec_idx_f32(next, 1),
-        //                         sail::vec_idx_f32(next, 2),
-        //                         sail::vec_idx_f32(next, 3),
-        //                     ])
-        //                     .unwrap();
-        //             } else if sail::get_type(next) == sail::SlType::Keyword {
-        //                 println!("wow");
-        //             }
-        //         }
-        //         Err(_) => std::hint::spin_loop(),
-        //     }
-
-        //     match sail::queue::queue_rx_result(context_rx) {
-        //         Ok(next) => {
-
-        //         }
-        //         Err(_) => std::hint::spin_loop(),
-        //     }
-        // }
     }
 }
 

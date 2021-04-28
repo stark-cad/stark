@@ -19,17 +19,17 @@ pub enum SailErr {
     Error,
 }
 
-impl fmt::Display for SailErr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "error")
-    }
-}
+// impl fmt::Display for SailErr {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         write!(f, "error")
+//     }
+// }
 
-impl fmt::Debug for SailErr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "error")
-    }
-}
+// impl fmt::Debug for SailErr {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         write!(f, "error")
+//     }
+// }
 
 /// TODO: remember types that are parents / children of others
 /// TODO: types with children cannot be a self type
@@ -97,7 +97,7 @@ incl_symbols! {
     47 S_CTX_RSZ     "ctx-rsz" Basic;
     48 S_CTX_CLK     "ctx-clk" Basic;
     49 S_ENGINE      "engine"  Basic;
-    50 S_T_INTERN    "--true"  Basic
+    50 S_T_INTERN    "%true"   Basic
     51
 }
 
@@ -451,7 +451,7 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut S
     insert_native_proc(reg, tbl, env, "not", not, 1);
     insert_native_proc(reg, tbl, env, "print", print, 1);
     insert_native_proc(reg, tbl, env, "printenv", printenv, 0);
-    // insert_native_proc(reg, tbl, env, "color", color, 4);
+
     insert_native_proc(reg, tbl, env, "qtx", qtx, 2);
     insert_native_proc(reg, tbl, env, "qrx", qrx, 1);
 
@@ -683,34 +683,6 @@ fn printenv(
 
     return nil();
 }
-
-/// TODO: replace with Sail-defined function
-// fn color(_tbl: *mut SlHead, env: *mut SlHead) -> *mut SlHead {
-//     let region = memmgt::which_mem_region(_tbl);
-
-//     let r = env_arg_layer_get(car(env), 0);
-//     let g = env_arg_layer_get(car(env), 1);
-//     let b = env_arg_layer_get(car(env), 2);
-//     let a = env_arg_layer_get(car(env), 3);
-
-//     let qstr = init_symbol(sector, false, SlSymbolMode::ByStr, 7);
-//     sym_set_str(qstr, b"g_queue");
-
-//     let queue = env_lookup(env, sym_tab_lookup_by_str(_tbl, qstr));
-
-//     let vec = init_vec(sector, false, SlVecMode::FlatF32, 4);
-
-//     vec_push_f32(vec, fixfloat_get(r) as f32);
-//     vec_push_f32(vec, fixfloat_get(g) as f32);
-//     vec_push_f32(vec, fixfloat_get(b) as f32);
-//     vec_push_f32(vec, fixfloat_get(a) as f32);
-
-//     queue::queue_tx(queue, vec);
-
-//     let out = init_bool(region);
-//     bool_set(out, true);
-//     return out;
-// }
 
 #[cfg(test)]
 mod tests {

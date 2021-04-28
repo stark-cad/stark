@@ -5,7 +5,6 @@
 
 (def alive #T)
 
-;(def get-q-next (fn [q] (def out ()) (while (not (eq out ())) (set out (qrx q)))))
 (def get-q-next (fn [q] (def out ()) (while (eq out ()) (set out (qrx q))) out))
 
 (print "prepared for render loop")

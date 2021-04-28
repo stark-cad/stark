@@ -524,9 +524,8 @@ pub fn set_next_list_elt(loc: *mut SlHead, next: *mut SlHead) {
         let head = ptr::read_unaligned(loc as *mut u16);
         ptr::write_unaligned(
             loc as *mut *mut SlHead,
-            ((next as usize) << 16) as *mut SlHead,
+            (((next as usize) << 16) + head as usize) as *mut SlHead,
         );
-        ptr::write_unaligned(loc as *mut u16, head);
     }
 }
 

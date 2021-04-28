@@ -36,12 +36,6 @@ fn main() {
 
     let (window, event_loop) = context::init_context(NAME, ICON, SIZE[0], SIZE[1]);
 
-    // let input_status = Arc::new(Mutex::new(InputStatus::new()));
-    // let inputs = Arc::clone(&input_status);
-
-    // let (mut w, mut h) = (SIZE[0], SIZE[1]);
-    // let (mut x, mut y) = (0, 0);
-
     let main_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
     let rndr_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
     let ctxt_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
@@ -82,12 +76,6 @@ fn main() {
         main_env,
         rndr_env,
         ctxt_env,
-        // mr_send,
-        // mr_recv,
-        // cm_send,
-        // cm_recv,
-        // cr_send,
-        // cr_recv,
     ) = (
         sl_tbl as usize,
         main_region as usize,
@@ -96,12 +84,6 @@ fn main() {
         main_env as usize,
         rndr_env as usize,
         ctxt_env as usize,
-        // mr_send as usize,
-        // mr_recv as usize,
-        // cm_send as usize,
-        // cm_recv as usize,
-        // cr_send as usize,
-        // cr_recv as usize,
     );
 
     // This thread handles all rendering to the graphical frame: the output interface
@@ -116,9 +98,7 @@ fn main() {
         .spawn(move || {
             let (sl_tbl, sl_env) = (sl_tbl as *mut sail::SlHead, main_env as *mut sail::SlHead);
             let sl_reg = main_region as *mut sail::memmgt::Region;
-            // let (mr_send, cm_recv) = (mr_send as *mut sail::SlHead, cm_recv as *mut sail::SlHead);
 
-            // let prog_txt = include_str!("../scripts/main.sl");
             let prog_txt = &std::fs::read_to_string("scripts/main.sl").unwrap();
             let prog_expr = sail::parser::parse(sl_reg, sl_tbl, prog_txt).unwrap();
 
@@ -135,8 +115,6 @@ fn main() {
                 stack.iter_once(sl_reg, sl_tbl);
             }
 
-            // ret_slot = sigil;
-
             let main = sail::env_lookup_by_id(sl_env, sail::S_MAIN.0);
 
             stack.push_frame_head(ret_addr, sail::eval::Opcode::Apply, sl_env);
@@ -149,77 +127,6 @@ fn main() {
                     println!("manager thread broke");
                     break;
                 }
-
-                // let mut curr_stat = inputs.lock().unwrap();
-                // // Should check_keys() and check_mouse() return iterators / iterable?
-                // if let Some(keys) = curr_stat.check_keys() {
-                //     // print!("Keys Down: ");
-                //     // keys.iter().for_each(|x| print!("{} ", x));
-                //     // println!("");
-                // }
-                // if let Some(buttons) = curr_stat.check_mouse() {
-                //     // print!("Mouse Down: ");
-                //     // buttons.iter().for_each(|x| print!("{:?} ", x));
-                //     // println!("");
-                // }
-                // if let Some(pos) = curr_stat.check_pos() {
-                //     // println!("Cursor Pos: x= {}, y= {}", pos.x, pos.y);
-                //     x = pos.x;
-                //     y = pos.y;
-                // }
-                // if let Some(scroll) = curr_stat.check_scroll() {
-                //     // println!("Scroll Delta: x= {}, y= {}", scroll.xdel, scroll.ydel);
-                // }
-                // if let Some(motion) = curr_stat.check_motion() {
-                //     // println!("Motion Delta: x= {}, y= {}", motion.xdel, motion.ydel);
-                // }
-
-                // new main functionality goes here for now
-
-                // TODO: alter a rendered image as a result of running Sail
-                // functions; call graphics functions from a Sail native
-                // function?
-
-                // let mut sl_input = String::new();
-                // io::stdin().read_line(&mut sl_input).expect("Read Failure");
-
-                // let sl_expr = match sail::parser::parse(sl_tbl, &sl_input) {
-                //     Ok(out) => out,
-                //     Err(_) => {
-                //         println!("Parse Error");
-                //         continue;
-                //     }
-                // };
-
-                // let sl_result = match unsafe { sail::eval(sl_tbl, sl_env, sl_expr) } {
-                //     Ok(out) => out,
-                //     Err(_) => {
-                //         println!("Evaluation Error");
-                //         continue;
-                //     }
-                // };
-
-                // println!("{}", sail::context(sl_tbl, sl_result).to_string());
-
-                // match rx.try_recv() {
-                //     // Last block to run in the manager thread
-                //     Ok(ContextMsg::Destroy) => {
-                //         info!("Manager got destruction message");
-                //         break;
-                //     }
-                //     Ok(ContextMsg::Resize(width, height)) => {
-                //         info!("Resized to {} by {}", width, height);
-                //         // graphics.set_extent(width, height);
-                //         // should_configure_swapchain = true;
-
-                //         w = width;
-                //         h = height;
-                //     }
-                //     Ok(ContextMsg::Redraw) => {
-                //         info!("Received redraw message");
-                //     }
-                //     _ => {}
-                // }
             }
         })
         .unwrap();

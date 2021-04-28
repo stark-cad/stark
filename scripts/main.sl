@@ -8,7 +8,6 @@
 (vec-f32-push point (as-f32 0.0))
 (vec-f32-push point (as-f32 0.0))
 
-;(def get-q-next (fn [q] (def out ()) (while (not (eq out ())) (set out (qrx q)))))
 (def get-q-next (fn [q] (def out ()) (while (eq out ()) (set out (qrx q))) out))
 
 (print "prepared for main loop")
@@ -22,13 +21,6 @@
        (if (eq input :point) (do
            (print "got point in")
            (if drawing (do
-               ;(def call (vec-f32-make))
-               ;(vec-f32-push call (vec-f32-get point 0))
-               ;(vec-f32-push call (vec-f32-get point 1))
-               ;(vec-f32-push call (get-q-next cm-recv))
-               ;(vec-f32-push call (get-q-next cm-recv))
-               (print "sending points")
-               ;(qtx mr-send call)
                (qtx mr-send :line)
                (qtx mr-send (vec-f32-get point 0))
                (qtx mr-send (vec-f32-get point 1))
