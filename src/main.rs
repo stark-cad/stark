@@ -12,7 +12,7 @@ use std::thread;
 
 fn main() {
     const NAME: &'static str = "STARK";
-    const ICON: &'static str = "icon.png";
+    const ICON: &'static str = "icons/icon.png";
     const SIZE: [u32; 2] = [1280, 720];
 
     // TODO: add useful logging throughout the program
