@@ -1,3 +1,32 @@
+// STARK, a system for computer augmented design.
+// Copyright (C) 2021 Matthew Rothlisberger
+
+// STARK is free software: you can redistribute it and / or modify it
+// under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+
+// STARK is distributed in the hope that it will be useful, but
+// WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+// Affero General Public License for more details.
+
+// You should have received a copy of the GNU Affero General Public
+// License along with STARK (in the LICENSE file). If not, see
+// <https://www.gnu.org/licenses/>.
+
+// Find full copyright information in the top level COPYRIGHT file.
+
+// <>
+
+// src/main.rs
+
+// Main function for STARK, which starts everything up. The program
+// may be started with a full graphical interface, or as a Sail REPL,
+// or may simply execute a Sail file.
+
+// <>
+
 use stark::{
     context, graphics,
     sail::{self, SlHead},
@@ -68,15 +97,7 @@ fn main() {
     sail::env_layer_ins_by_id(ctxt_region, ctxt_env, sail::S_CM_SEND.0, cm_send);
     sail::env_layer_ins_by_id(ctxt_region, ctxt_env, sail::S_CR_SEND.0, cr_send);
 
-    let (
-        sl_tbl,
-        main_region,
-        rndr_region,
-        ctxt_region,
-        main_env,
-        rndr_env,
-        ctxt_env,
-    ) = (
+    let (sl_tbl, main_region, rndr_region, ctxt_region, main_env, rndr_env, ctxt_env) = (
         sl_tbl as usize,
         main_region as usize,
         rndr_region as usize,

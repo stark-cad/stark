@@ -1,3 +1,20 @@
+; STARK, a system for computer augmented design.
+; Copyright (C) 2021 Matthew Rothlisberger
+
+; STARK is licensed under the terms of the GNU Affero General Public
+; License. See the top level LICENSE file for the license text.
+
+; Find full copyright information in the top level COPYRIGHT file.
+
+; <>
+
+; scripts/ctxt.sl
+
+; Important functions for the context thread of STARK's full graphical
+; mode.
+
+; <>
+
 (do
 
 (def ctx-dst (fn []

@@ -1,6 +1,23 @@
+// STARK, a system for computer augmented design.
+// Copyright (C) 2021 Matthew Rothlisberger
+
+// STARK is licensed under the terms of the GNU Affero General Public
+// License. See the top level LICENSE file for the license text.
+
+// Find full copyright information in the top level COPYRIGHT file.
+
+// <>
+
+// src/sail/queue.rs
+
+// Queues for communication between threads in Sail code.
+
+// <>
+
 use super::{memmgt, SlHead};
 
 // TODO: probably will need to use atomic operations for these
+// TODO: use atomics when writing outside of home sector
 // TODO: global identifiers for queues?
 
 // unsafe fn atomic_ref_set(loc: *mut SlHead, next: *mut SlHead) {}

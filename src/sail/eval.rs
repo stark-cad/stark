@@ -1,3 +1,21 @@
+// STARK, a system for computer augmented design.
+// Copyright (C) 2021 Matthew Rothlisberger
+
+// STARK is licensed under the terms of the GNU Affero General Public
+// License. See the top level LICENSE file for the license text.
+
+// Find full copyright information in the top level COPYRIGHT file.
+
+// <>
+
+// src/sail/eval.rs
+
+// Iterative stack evaluator for Sail. Defines a stack format, utility
+// functions, and logic to evaluate any valid Sail expression one
+// stack frame at a time.
+
+// <>
+
 use super::core::*;
 use super::memmgt;
 use super::{SP_DEF, SP_DO, SP_FN, SP_IF, SP_QUOTE, SP_SET, SP_WHILE};

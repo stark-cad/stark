@@ -1,5 +1,33 @@
+// STARK, a system for computer augmented design.
+// Copyright (C) 2021 Matthew Rothlisberger
+
+// STARK is free software: you can redistribute it and / or modify it
+// under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+
+// STARK is distributed in the hope that it will be useful, but
+// WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+// Affero General Public License for more details.
+
+// You should have received a copy of the GNU Affero General Public
+// License along with STARK (in the LICENSE file). If not, see
+// <https://www.gnu.org/licenses/>.
+
+// Find full copyright information in the top level COPYRIGHT file.
+
+// <>
+
+// src/sail/mod.rs
+
+// Sail is a Lisp dialect built specifically for STARK. There is a
+// parser, interpreter, REPL, and small "standard library". Much of
+// STARK's function will be described in Sail.
+
+// <>
+
 //! The Structured Augmentation Interchange Language
-//!
 //! A custom Lisp dialect for writing STARK
 
 use std::fmt;

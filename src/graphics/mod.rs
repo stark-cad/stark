@@ -1,3 +1,32 @@
+// STARK, a system for computer augmented design.
+// Copyright (C) 2021 Matthew Rothlisberger
+
+// STARK is free software: you can redistribute it and / or modify it
+// under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+
+// STARK is distributed in the hope that it will be useful, but
+// WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+// Affero General Public License for more details.
+
+// You should have received a copy of the GNU Affero General Public
+// License along with STARK (in the LICENSE file). If not, see
+// <https://www.gnu.org/licenses/>.
+
+// Find full copyright information in the top level COPYRIGHT file.
+
+// <>
+
+// src/graphics/mod.rs
+
+// Graphics rendering system for STARK. Relies on gfx-hal for low
+// level access to Vulkan and other graphics APIs. Contains code for a
+// dedicate rendering thread.
+
+// <>
+
 use super::sail::{self, SlHead};
 
 use gfx_hal::{
@@ -282,9 +311,18 @@ impl<B: gfx_hal::Backend> Engine<B> {
     }
     fn state_buffer_setup(&mut self) {
         unsafe {
+            self.state
+                .device
+                .wait_for_fence(
+                    self.state.submission_complete_fence.as_ref().unwrap(),
+                    1_000_000_000,
+                )
+                .unwrap();
+
             for mem in self.state.vertex_memory.drain(..) {
                 self.state.device.free_memory(mem);
             }
+
             for buf in self.state.vertex_buffers.drain(..) {
                 self.state.device.destroy_buffer(buf);
             }

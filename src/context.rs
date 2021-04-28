@@ -1,3 +1,21 @@
+// STARK, a system for computer augmented design.
+// Copyright (C) 2021 Matthew Rothlisberger
+
+// STARK is licensed under the terms of the GNU Affero General Public
+// License. See the top level LICENSE file for the license text.
+
+// Find full copyright information in the top level COPYRIGHT file.
+
+// <>
+
+// src/context.rs
+
+// Functions to acquire a window from the desktop environment and get
+// user input. A Sail stack is used to send input information to other
+// threads.
+
+// <>
+
 use super::sail::{self, SlHead};
 
 use png;

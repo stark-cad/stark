@@ -1,3 +1,20 @@
+// STARK, a system for computer augmented design.
+// Copyright (C) 2021 Matthew Rothlisberger
+
+// STARK is licensed under the terms of the GNU Affero General Public
+// License. See the top level LICENSE file for the license text.
+
+// Find full copyright information in the top level COPYRIGHT file.
+
+// <>
+
+// src/sail/parser.rs
+
+// Recursive descent parser which converts string slices into Sail
+// values, usually for evaluation.
+
+// <>
+
 use super::{memmgt, SlErrCode, SlHead};
 
 use std::iter;

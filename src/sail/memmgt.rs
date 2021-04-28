@@ -1,3 +1,21 @@
+// STARK, a system for computer augmented design.
+// Copyright (C) 2021 Matthew Rothlisberger
+
+// STARK is licensed under the terms of the GNU Affero General Public
+// License. See the top level LICENSE file for the license text.
+
+// Find full copyright information in the top level COPYRIGHT file.
+
+// <>
+
+// src/sail/memmgt.rs
+
+// Memory management for Sail. Creates regions and zones in which to
+// store values, includes a purpose built allocator, and permits
+// reflection on the region or zone of a particular value.
+
+// <>
+
 use super::{SlHead, HEAD_LEN, SYMBOL_LEN};
 
 use std::alloc;

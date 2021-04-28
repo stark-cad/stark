@@ -1,3 +1,21 @@
+// STARK, a system for computer augmented design.
+// Copyright (C) 2021 Matthew Rothlisberger
+
+// STARK is licensed under the terms of the GNU Affero General Public
+// License. See the top level LICENSE file for the license text.
+
+// Find full copyright information in the top level COPYRIGHT file.
+
+// <>
+
+// src/sail/core.rs
+
+// Sail types and many, many important utility functions for building
+// list structures and evaluating Sail code. Contains the necessary
+// definitions for constructing a useful Sail environment.
+
+// <>
+
 //! TODO: Gradual typing; more extensible type system; subtypes
 
 use std::convert::TryFrom;
