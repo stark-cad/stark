@@ -15,7 +15,7 @@ use gfx_hal::{
     pso::{
         AttributeDesc, BlendState, ColorBlendDesc, ColorMask, Element, EntryPoint,
         GraphicsPipelineDesc, InputAssemblerDesc, Primitive, PrimitiveAssemblerDesc, Rasterizer,
-        Rect, Specialization, VertexBufferDesc, VertexInputRate, Viewport,
+        Rect, ShaderStageFlags, Specialization, VertexBufferDesc, VertexInputRate, Viewport,
     },
     queue::{Queue, QueueFamily, QueueGroup},
     window::{Extent2D, PresentationSurface, Surface, SwapchainConfig},
@@ -118,9 +118,18 @@ pub fn render_loop(
         assert_eq!(sail::core_type(points), Some(sail::CoreType::VecAny));
         assert_eq!(sail::core_read_field::<u32>(points, 0), sail::T_F32.0);
 
-        for idx in 0..4 {
-            let pt = sail::core_read_field::<f32>(points, (4 * idx as usize) + 12);
-            engine.lines.push(pt);
+        let colors = _args[2];
+        assert_eq!(sail::core_type(points), Some(sail::CoreType::VecAny));
+        assert_eq!(sail::core_read_field::<u32>(points, 0), sail::T_F32.0);
+
+        unsafe {
+            let ln =
+                std::ptr::read_unaligned::<[f32; 4]>(sail::value_ptr(points).add(12) as *mut _);
+            engine.lines.push(ln);
+
+            let cl =
+                std::ptr::read_unaligned::<[f32; 3]>(sail::value_ptr(colors).add(12) as *mut _);
+            engine.colors.push(cl);
         }
 
         engine.buffer_size_check();
@@ -128,9 +137,50 @@ pub fn render_loop(
         return sail::nil();
     }
 
+    fn bg_col(
+        _reg: *mut sail::memmgt::Region,
+        _tbl: *mut SlHead,
+        _env: *mut SlHead,
+        _args: &[*mut SlHead],
+    ) -> *mut SlHead {
+        let eng_ptr = _args[0];
+        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+        let engine = unsafe {
+            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+        };
+
+        engine.set_clear([
+            sail::f32_get(_args[1]),
+            sail::f32_get(_args[2]),
+            sail::f32_get(_args[3]),
+            1.0,
+        ]);
+
+        return sail::nil();
+    }
+
+    fn clear(
+        _reg: *mut sail::memmgt::Region,
+        _tbl: *mut SlHead,
+        _env: *mut SlHead,
+        _args: &[*mut SlHead],
+    ) -> *mut SlHead {
+        let eng_ptr = _args[0];
+        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+        let engine = unsafe {
+            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+        };
+
+        engine.empty_lines();
+
+        return sail::nil();
+    }
+
     sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "redraw", redraw, 1);
     sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "frame-size", frame_size, 3);
-    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "new-line", new_line, 2);
+    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "new-line", new_line, 3);
+    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "bg-col", bg_col, 4);
+    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "clear", clear, 1);
 
     engine.setup();
     engine.set_clear([1.0, 1.0, 1.0, 1.0]);
@@ -174,7 +224,8 @@ pub fn render_loop(
 
 pub struct Engine<B: gfx_hal::Backend> {
     clear: [f32; 4],
-    lines: Vec<f32>,
+    lines: Vec<[f32; 4]>,
+    colors: Vec<[f32; 3]>,
     buflen: u64,
     state: GraphicsState<B>,
     should_configure_swapchain: bool,
@@ -185,6 +236,7 @@ impl<B: gfx_hal::Backend> Engine<B> {
         Self {
             clear: [0.0, 0.0, 0.0, 1.0],
             lines: vec![],
+            colors: vec![],
             buflen: 256,
             state,
             should_configure_swapchain: true,
@@ -193,25 +245,28 @@ impl<B: gfx_hal::Backend> Engine<B> {
     fn set_clear(&mut self, clear: [f32; 4]) {
         self.clear = clear;
     }
-    fn add_line(&mut self, points: [f32; 4]) {
-        for f in points.iter() {
-            self.lines.push(*f);
-        }
+    fn add_line(&mut self, points: [f32; 4], color: [f32; 3]) {
+        self.lines.push(points);
+        self.colors.push(color);
         self.buffer_size_check();
     }
     fn empty_lines(&mut self) {
         self.lines.clear();
+        self.colors.clear();
     }
     fn state_pipeline_setup(&mut self) {
         let pipeline_layout = unsafe {
             self.state
                 .device
-                .create_pipeline_layout(iter::empty(), iter::empty())
+                .create_pipeline_layout(
+                    iter::empty(),
+                    iter::once((ShaderStageFlags::FRAGMENT, 0..12)),
+                )
                 .unwrap()
         };
 
-        let vertex_shader = include_str!("shaders/test.vert");
-        let fragment_shader = include_str!("shaders/test.frag");
+        let vertex_shader = include_str!("shaders/lines.vert");
+        let fragment_shader = include_str!("shaders/lines.frag");
 
         let pipeline = unsafe {
             self.state.make_pipeline(
@@ -247,7 +302,7 @@ impl<B: gfx_hal::Backend> Engine<B> {
         self.state.vertex_buffers.push(buffer);
     }
     fn buffer_size_check(&mut self) {
-        let line_vec_size = size_of::<f32>() * self.lines.len();
+        let line_vec_size = size_of::<[f32; 4]>() * self.lines.len();
 
         if line_vec_size as u64 >= self.buflen {
             self.buflen = 2 * self.buflen;
@@ -287,7 +342,7 @@ impl<B: gfx_hal::Backend> Engine<B> {
                 .0
         };
 
-        let line_vec_size = size_of::<f32>() * self.lines.len();
+        let line_vec_size = size_of::<[f32; 4]>() * self.lines.len();
 
         if line_vec_size > 0 {
             unsafe {
@@ -296,10 +351,11 @@ impl<B: gfx_hal::Backend> Engine<B> {
                     .device
                     .map_memory(
                         &mut self.state.vertex_memory[0],
-                        Segment {
-                            offset: 0,
-                            size: Some(line_vec_size as u64),
-                        },
+                        Segment::ALL,
+                        // Segment {
+                        //     offset: 0,
+                        //     size: Some(line_vec_size as u64),
+                        // },
                     )
                     .unwrap();
 
@@ -313,10 +369,11 @@ impl<B: gfx_hal::Backend> Engine<B> {
                     .device
                     .flush_mapped_memory_ranges(iter::once((
                         &self.state.vertex_memory[0],
-                        Segment {
-                            offset: 0,
-                            size: Some(line_vec_size as u64),
-                        },
+                        Segment::ALL,
+                        // Segment {
+                        //     offset: 0,
+                        //     size: Some(line_vec_size as u64),
+                        // },
                     )))
                     .unwrap();
 
@@ -372,7 +429,17 @@ impl<B: gfx_hal::Backend> Engine<B> {
                 )),
             );
 
-            buffer.draw(0..(self.lines.len() as u32), 0..1);
+            for l in 0..self.lines.len() as u32 {
+                buffer.push_graphics_constants(
+                    &self.state.pipeline_layouts[0],
+                    ShaderStageFlags::FRAGMENT,
+                    0,
+                    std::mem::transmute::<&[f32], &[u32]>(&self.colors[l as usize][..]),
+                );
+
+                let ind = 2 * l;
+                buffer.draw(ind..(ind + 2), 0..1);
+            }
 
             buffer.end_render_pass();
             buffer.finish();
@@ -785,7 +852,10 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         usage: gfx_hal::buffer::Usage,
         properties: gfx_hal::memory::Properties,
     ) -> (B::Memory, B::Buffer) {
-        let mut buffer = self.device.create_buffer(buffer_len, usage).unwrap();
+        let mut buffer = self
+            .device
+            .create_buffer(buffer_len, usage, gfx_hal::memory::SparseFlags::empty())
+            .unwrap();
 
         let req = self.device.get_buffer_requirements(&buffer);
 

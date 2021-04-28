@@ -5,7 +5,15 @@
 
 (def alive #T)
 
+(def line-col (vec-f32-make))
+(vec-f32-push line-col (as-f32 0.0))
+(vec-f32-push line-col (as-f32 0.0))
+(vec-f32-push line-col (as-f32 0.0))
+
 (def get-q-next (fn [q] (def out ()) (while (eq out ()) (set out (qrx q))) out))
+
+;(bg-col engine (as-f32 0.0) (as-f32 0.0) (as-f32 0.0))
+(redraw engine)
 
 (print "prepared for render loop")
 
@@ -27,8 +35,21 @@
                (vec-f32-push line (get-q-next mr-recv))
                (vec-f32-push line (get-q-next mr-recv))
                (vec-f32-push line (get-q-next mr-recv))
-               (new-line engine line)
-               (redraw engine)) ()))
+               (new-line engine line line-col)
+               (redraw engine))
+       (if (eq m-input :line-col)
+           (do (vec-f32-set line-col (get-q-next mr-recv))
+               (vec-f32-set line-col (get-q-next mr-recv))
+               (vec-f32-set line-col (get-q-next mr-recv)))
+       (if (eq m-input :back-col)
+           (do (bg-col engine (get-q-next mr-recv)
+                              (get-q-next mr-recv)
+                              (get-q-next mr-recv))
+               (redraw engine))
+       (if (eq m-input :clear)
+           (do (clear engine)
+               (redraw engine))
+       ())))))
 
 (print "render end")
 

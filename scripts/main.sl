@@ -10,6 +10,18 @@
 
 (def get-q-next (fn [q] (def out ()) (while (eq out ()) (set out (qrx q))) out))
 
+(def line-col-set (fn [r g b] (qtx mr-send :line-col)
+                              (qtx mr-send (as-f32 r))
+                              (qtx mr-send (as-f32 g))
+                              (qtx mr-send (as-f32 b))))
+
+(def back-col-set (fn [r g b] (qtx mr-send :back-col)
+                              (qtx mr-send (as-f32 r))
+                              (qtx mr-send (as-f32 g))
+                              (qtx mr-send (as-f32 b))))
+
+(def clear-lines (fn [] (qtx mr-send :clear)))
+
 (print "prepared for main loop")
 
 (while alive
