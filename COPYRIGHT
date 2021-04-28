@@ -3,11 +3,11 @@ This notice applies to STARK, a system for computer augmented design.
 STARK is software composed of all source code files in the repository
 which contains this notice.
 
-Copyright (C) 2020 The STARK Lead Developers
+Copyright (C) 2021 Matthew Rothlisberger
 
-The STARK Lead Developers are the exclusive copyright owners and
-licensors of STARK and all associated trade names, trademarks, and
-service marks. For more information, see the AUTHORS file.
+Matthew Rothlisberger is the exclusive copyright owner and licensor of
+STARK and all associated trade names, trademarks, and service
+marks. For more information, see the AUTHORS file.
 
 
 STARK is free software: you can redistribute it and / or modify it
@@ -40,12 +40,12 @@ General Public License:
 
     - You may not use the names of the authors, contributors, or
       licensors of STARK for publicity purposes without the express
-      written permission of the STARK Lead Developers.
+      written permission of Matthew Rothlisberger.
 
     - You are not granted any rights to use any trade names,
       trademarks, or service marks associated with STARK, for any
-      purpose, without the express permission of the STARK Lead
-      Developers.
+      purpose, without the express permission of Matthew
+      Rothlisberger.
 
     - You are required to indemnify and to hold harmless licensors and
       authors of STARK if you convey it, or a modified version, with
@@ -55,4 +55,4 @@ General Public License:
 
 The above supplemental terms apply, along with the GNU Affero General
 Public License, to all versions of STARK, modified or unmodified,
-except as explicitly permitted by the STARK Lead Developers.
+except as explicitly permitted by Matthew Rothlisberger.
