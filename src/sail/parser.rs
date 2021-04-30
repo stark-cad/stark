@@ -57,7 +57,7 @@ fn read_value(
 ) -> Result<*mut SlHead, SlErrCode> {
     let value;
 
-    let mut c = *(chars.peek().unwrap());
+    let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while c.is_ascii_whitespace() || c == b';' {
         if c == b';' {
             while *(chars.peek().unwrap()) != b'\n' {
@@ -154,7 +154,7 @@ fn read_list(
 ) -> Result<*mut SlHead, SlErrCode> {
     let head = super::init_ref(reg);
 
-    let mut c = *(chars.peek().unwrap());
+    let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     if c == b')' {
         chars.next();
         super::ref_set(head, super::nil());
@@ -202,7 +202,7 @@ fn read_vec(
     tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
     let vec = super::init_stdvec(reg, 8);
-    let mut c = *(chars.peek().unwrap());
+    let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while c != b']' {
         match c {
             b';' => while chars.next().unwrap() != b'\n' {},
@@ -224,7 +224,7 @@ fn read_map(
     tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
     let map = super::init_hash_map(reg, 16);
-    let mut c = *(chars.peek().unwrap());
+    let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while c != b'}' {
         match c {
             b';' => while chars.next().unwrap() != b'\n' {},
@@ -252,7 +252,7 @@ fn read_symbol(
 ) -> Result<*mut SlHead, SlErrCode> {
     let sym = super::init_symbol(reg);
     while {
-        let peek = chars.peek().unwrap();
+        let peek = chars.peek().unwrap_or(&b' ');
         match peek {
             b')' | b']' | b'}' => false,
             _ if peek.is_ascii_whitespace() => false,
@@ -289,7 +289,7 @@ fn read_keyword(
 ) -> Result<*mut SlHead, SlErrCode> {
     let key = super::init_symbol(reg);
     while {
-        let peek = chars.peek().unwrap();
+        let peek = chars.peek().unwrap_or(&b' ');
         match peek {
             b')' | b']' | b'}' => false,
             _ if peek.is_ascii_whitespace() => false,
@@ -330,14 +330,15 @@ fn read_string(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
-    let string = super::init_string(reg, 32);
-    let mut next = *(chars.peek().unwrap());
+    let mut next = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while next != b'"' {
         acc.push(chars.next().unwrap());
         next = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
 
     chars.next();
+
+    let string = super::init_string(reg, acc.len() as u32);
 
     super::string_set(
         string,

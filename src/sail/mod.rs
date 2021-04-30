@@ -30,6 +30,7 @@
 //! The Structured Augmentation Interchange Language
 //! A custom Lisp dialect for writing STARK
 
+use std::convert::TryFrom;
 use std::fmt;
 use std::mem;
 use std::ptr;
@@ -55,17 +56,45 @@ pub enum SlErrCode {
     FileCouldNotRead,
 }
 
-// impl fmt::Display for SailErr {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         write!(f, "error")
-//     }
-// }
+impl TryFrom<u16> for SlErrCode {
+    type Error = ();
 
-// impl fmt::Debug for SailErr {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         write!(f, "error")
-//     }
-// }
+    #[inline(always)]
+    fn try_from(v: u16) -> Result<Self, Self::Error> {
+        use SlErrCode::*;
+        match v {
+            x if x == ErrorUnknown as u16 => Ok(ErrorUnknown),
+            x if x == ParseUnexpectedEnd as u16 => Ok(ParseUnexpectedEnd),
+            x if x == ParseBadSpecial as u16 => Ok(ParseBadSpecial),
+            x if x == ParseInvalidChar as u16 => Ok(ParseInvalidChar),
+            x if x == ParseInvalidString as u16 => Ok(ParseInvalidString),
+            x if x == ParseInvalidNum as u16 => Ok(ParseInvalidNum),
+            x if x == FileCouldNotRead as u16 => Ok(FileCouldNotRead),
+            _ => Err(()),
+        }
+    }
+}
+
+#[inline(always)]
+fn init_errcode(reg: *mut memmgt::Region) -> *mut SlHead {
+    unsafe {
+        let ptr = memmgt::alloc(reg, 2, Cfg::B2Err as u8);
+        write_field_unchecked::<u16>(ptr, 0, 0);
+        ptr
+    }
+}
+
+#[inline(always)]
+fn errcode_set(loc: *mut SlHead, err: SlErrCode) {
+    coretypck!(loc ; ErrCode);
+    core_write_field(loc, 0, err as u16);
+}
+
+#[inline(always)]
+fn errcode_get(loc: *mut SlHead) -> SlErrCode {
+    coretypck!(loc ; ErrCode);
+    SlErrCode::try_from(core_read_field::<u16>(loc, 0)).unwrap()
+}
 
 /// TODO: remember types that are parents / children of others
 /// TODO: types with children cannot be a self type
@@ -319,6 +348,7 @@ impl fmt::Display for SlContextVal {
                 I64 => write!(f, "{}", i64_get(value)),
                 F64 => write!(f, "{}", f64_get(value)),
                 F32 => write!(f, "{}", f32_get(value)),
+                ErrCode => write!(f, "<err: {:?}>", errcode_get(value)),
                 Symbol => {
                     let full_id = sym_get_id(value);
                     match mode_of_sym(full_id) {
@@ -496,12 +526,11 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut S
     insert_native_proc(reg, tbl, env, "qtx", qtx, 2);
     insert_native_proc(reg, tbl, env, "qrx", qrx, 1);
 
+    insert_native_proc(reg, tbl, env, "as-f32", as_f32, 1);
     insert_native_proc(reg, tbl, env, "vec-f32-make", vec_f32_make, 0);
     insert_native_proc(reg, tbl, env, "vec-f32-push", vec_f32_push, 2);
     insert_native_proc(reg, tbl, env, "vec-f32-get", vec_f32_get, 2);
     insert_native_proc(reg, tbl, env, "vec-f32-set", vec_f32_set, 3);
-
-    insert_native_proc(reg, tbl, env, "as-f32", as_f32, 1);
 }
 
 /// TODO: intended to be temporary; still relies on some "magic values"
@@ -525,7 +554,7 @@ pub fn insert_native_proc(
 /// TODO: type checks and variable length arglists for native functions
 /// TODO: generate these functions somehow else if macros won't cut it
 macro_rules! sail_fn {
-    ( $reg:ident $env:ident ; $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
+    ( $reg:ident $tbl:ident $env:ident ; $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
         $(
             fn $fn_name (
                 _reg: *mut memmgt::Region,
@@ -534,6 +563,7 @@ macro_rules! sail_fn {
                 _args: &[*mut SlHead]
             ) -> *mut SlHead {
                 let $reg = _reg;
+                let $tbl = _tbl;
                 let $env = _env;
 
                 let mut _ind = 0;
@@ -550,24 +580,24 @@ macro_rules! sail_fn {
 
 // TODO: native functions MUST be fully safe to use
 sail_fn! {
-    reg env ;
+    _reg _tbl _env ;
 
     add [fst, snd] {
-        let out = init_i64(reg);
+        let out = init_i64(_reg);
         let result = i64_get(fst) + i64_get(snd);
         i64_set(out, result);
         return out;
     }
 
     sub [fst, snd] {
-        let out = init_i64(reg);
+        let out = init_i64(_reg);
         let result = i64_get(fst) - i64_get(snd);
         i64_set(out, result);
         return out;
     }
 
     modulus [fst, snd] {
-        let out = init_i64(reg);
+        let out = init_i64(_reg);
         let result = i64_get(fst) % i64_get(snd);
         i64_set(out, result);
         return out;
@@ -577,7 +607,7 @@ sail_fn! {
         // let out = init_bool(reg);
         let result = i64_get(fst) == i64_get(snd);
         if result {
-            env_lookup_by_id(env, S_T_INTERN.0)
+            env_lookup_by_id(_env, S_T_INTERN.0)
         } else {
             nil()
         }
@@ -589,7 +619,7 @@ sail_fn! {
         // let out = init_bool(reg);
         let result = core_eq(fst, snd);
         if result {
-            env_lookup_by_id(env, S_T_INTERN.0)
+            env_lookup_by_id(_env, S_T_INTERN.0)
         } else {
             nil()
         }
@@ -601,7 +631,7 @@ sail_fn! {
         // let out = init_bool(reg);
         if !truthy(val) {
             // bool_set(out, false)
-            env_lookup_by_id(env, S_T_INTERN.0)
+            env_lookup_by_id(_env, S_T_INTERN.0)
         } else {
             // bool_set(out, true)
             nil()
@@ -610,8 +640,6 @@ sail_fn! {
     }
 
     qtx [sender, item] {
-        // println!("entered qtx");
-
         queue::queue_tx(sender, item);
 
         // let out = init_bool(reg);
@@ -626,7 +654,7 @@ sail_fn! {
     }
 
     vec_f32_make [] {
-        let vec = unsafe { memmgt::alloc(reg, vec_size(12, 4, 8), Cfg::VecAny as u8) };
+        let vec = unsafe { memmgt::alloc(_reg, vec_size(12, 4, 8), Cfg::VecAny as u8) };
         unsafe {
             write_field_unchecked(vec, 0, T_F32.0);
             write_field_unchecked(vec, 4, 8 as u32);
@@ -660,7 +688,7 @@ sail_fn! {
         let idx = i64_get(idx) as u32;
 
         if idx < len {
-            let out = init_f32(reg);
+            let out = init_f32(_reg);
             f32_set(out, core_read_field::<f32>(target, (4 * idx as usize) + 12));
             return out;
         } else {
@@ -687,40 +715,21 @@ sail_fn! {
     }
 
     as_f32 [val] {
-        let out = init_f32(reg);
+        let out = init_f32(_reg);
         f32_set(out, f64_get(val) as f32);
         return out;
     }
-}
 
-fn print(
-    _reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    _env: *mut SlHead,
-    args: &[*mut SlHead],
-) -> *mut SlHead {
-    let arg = args[0];
-    println!("{}", context(tbl, arg).to_string());
+    print [arg] {
+        println!("{}", context(_tbl, arg).to_string());
+        return nil();
+    }
 
-    // let out = init_bool(_reg);
-    // bool_set(out, true);
-    // return out;
+    printenv [] {
+        println!("{}", context(_tbl, _env).to_string());
+        return nil();
+    }
 
-    return nil();
-}
-
-// TODO: sail_fn macro does not work for functions that access higher environment levels
-fn printenv(
-    _reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    env: *mut SlHead,
-    _args: &[*mut SlHead],
-) -> *mut SlHead {
-    println!("{}", context(tbl, env).to_string());
-
-    // let out = init_bool(_reg);
-    // bool_set(out, true);
-    // return out;
 
     return nil();
 }

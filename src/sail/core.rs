@@ -468,6 +468,7 @@ fn temp_get_size(typ: u32) -> usize {
         t if t == super::T_F64.0 => 8,
         t if t == super::T_SYMBOL.0 => 4,
         t if t == super::T_REF.0 => 8,
+        t if t == super::T_ERR.0 => 2,
         _t => {
             panic!("type not allowed")
         }
