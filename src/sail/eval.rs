@@ -204,22 +204,7 @@ impl EvalStack {
         if !self.is_empty() {
             false
         } else {
-            if nnil_ref_p(expr) {
-                self.push_frame_head(ret, Opcode::Eval, env);
-                self.push(ref_get(expr));
-            } else {
-                unsafe {
-                    ptr::write(
-                        ret,
-                        if basic_sym_p(expr) {
-                            env_lookup(env, expr)
-                        } else {
-                            expr
-                        },
-                    );
-                }
-            }
-
+            self.eval_expr(ret, env, expr);
             true
         }
     }
@@ -286,9 +271,27 @@ impl EvalStack {
     }
 
     #[inline(always)]
+    fn frame_addr(&mut self, offset: usize) -> *mut *mut SlHead {
+        unsafe { self.frame_start.add(FrameOffset::ArgZero as usize + offset) as *mut *mut SlHead }
+    }
+
+    #[inline(always)]
     fn frame_obj(&mut self, offset: usize) -> *mut SlHead {
-        unsafe {
-            ptr::read(self.frame_start.add(FrameOffset::ArgZero as usize + offset)) as *mut SlHead
+        unsafe { ptr::read(self.frame_addr(offset)) as *mut SlHead }
+    }
+
+    #[inline(always)]
+    fn eval_expr(&mut self, ret: *mut *mut SlHead, env: *mut SlHead, expr: *mut SlHead) {
+        if nnil_ref_p(expr) {
+            self.push_frame_head(ret, Opcode::Eval, env);
+            self.push(ref_get(expr));
+        } else {
+            let out = if basic_sym_p(expr) {
+                env_lookup(env, expr)
+            } else {
+                expr
+            };
+            unsafe { ptr::write(ret, out) };
         }
     }
 
@@ -311,22 +314,7 @@ impl EvalStack {
             Opcode::PreEval => {
                 let expr = self.frame_obj(0);
                 self.pop_frame();
-
-                if nnil_ref_p(expr) {
-                    self.push_frame_head(ret, Opcode::Eval, env);
-                    self.push(ref_get(expr));
-                } else {
-                    unsafe {
-                        ptr::write(
-                            ret,
-                            if basic_sym_p(expr) {
-                                env_lookup(env, expr)
-                            } else {
-                                expr
-                            },
-                        );
-                    }
-                }
+                self.eval_expr(ret, env, expr);
             }
             Opcode::Eval => {
                 let list = self.frame_obj(0);
@@ -341,25 +329,12 @@ impl EvalStack {
                             // needs: symbol to bind, value to bind to it
                             self.push_frame_head(ret, Opcode::Bind, env);
                             self.push(raw_args);
+                            self.push(nil());
 
                             let value = get_next_list_elt(raw_args);
-                            if nnil_ref_p(value) {
-                                self.push(nil());
+                            let return_to = self.frame_addr(1);
 
-                                let return_to = unsafe {
-                                    self.frame_start.add(FrameOffset::ArgZero as usize + 1)
-                                }
-                                    as *mut *mut SlHead;
-                                self.push_frame_head(return_to, Opcode::Eval, env);
-                                self.push(ref_get(value));
-                            } else {
-                                let out = if basic_sym_p(value) {
-                                    env_lookup(env, value)
-                                } else {
-                                    value
-                                };
-                                self.push(out);
-                            }
+                            self.eval_expr(return_to, env, value);
                             return;
                         }
                         id if id == SP_DO.0 => {
@@ -372,21 +347,9 @@ impl EvalStack {
                             self.push_frame_head(ret, Opcode::PreEval, env);
                             self.push(nil());
 
-                            let return_to =
-                                unsafe { self.frame_start.add(FrameOffset::ArgZero as usize) }
-                                    as *mut *mut SlHead;
+                            let return_to = self.frame_addr(0);
 
-                            if nnil_ref_p(raw_args) {
-                                self.push_frame_head(return_to, Opcode::Eval, env);
-                                self.push(ref_get(raw_args));
-                            } else {
-                                let out = if basic_sym_p(raw_args) {
-                                    env_lookup(env, raw_args)
-                                } else {
-                                    raw_args
-                                };
-                                unsafe { ptr::write(return_to, out) };
-                            }
+                            self.eval_expr(return_to, env, raw_args);
                             return;
                         }
                         id if id == SP_FN.0 => {
@@ -413,21 +376,9 @@ impl EvalStack {
                             self.push(get_next_list_elt(raw_args));
                             self.push(get_next_list_elt(get_next_list_elt(raw_args)));
 
-                            let return_to =
-                                unsafe { self.frame_start.add(FrameOffset::ArgZero as usize) }
-                                    as *mut *mut SlHead;
+                            let return_to = self.frame_addr(0);
 
-                            if nnil_ref_p(raw_args) {
-                                self.push_frame_head(return_to, Opcode::Eval, env);
-                                self.push(ref_get(raw_args));
-                            } else {
-                                let out = if basic_sym_p(raw_args) {
-                                    env_lookup(env, raw_args)
-                                } else {
-                                    raw_args
-                                };
-                                unsafe { ptr::write(return_to, out) };
-                            }
+                            self.eval_expr(return_to, env, raw_args);
                             return;
                         }
                         id if id == SP_QUOTE.0 => {
@@ -439,25 +390,12 @@ impl EvalStack {
                             // needs: symbol to bind, value to bind to it
                             self.push_frame_head(ret, Opcode::Mutate, env);
                             self.push(raw_args);
+                            self.push(nil());
 
                             let value = get_next_list_elt(raw_args);
-                            if nnil_ref_p(value) {
-                                self.push(nil());
+                            let return_to = self.frame_addr(1);
 
-                                let return_to = unsafe {
-                                    self.frame_start.add(FrameOffset::ArgZero as usize + 1)
-                                }
-                                    as *mut *mut SlHead;
-                                self.push_frame_head(return_to, Opcode::Eval, env);
-                                self.push(ref_get(value));
-                            } else {
-                                let out = if basic_sym_p(value) {
-                                    env_lookup(env, value)
-                                } else {
-                                    value
-                                };
-                                self.push(out);
-                            }
+                            self.eval_expr(return_to, env, value);
                             return;
                         }
                         id if id == SP_WHILE.0 => {
@@ -466,21 +404,9 @@ impl EvalStack {
                             self.push(nil());
                             self.push(get_next_list_elt(raw_args));
 
-                            let return_to =
-                                unsafe { self.frame_start.add(FrameOffset::ArgZero as usize + 1) }
-                                    as *mut *mut SlHead;
+                            let return_to = self.frame_addr(1);
 
-                            if nnil_ref_p(raw_args) {
-                                self.push_frame_head(return_to, Opcode::Eval, env);
-                                self.push(ref_get(raw_args));
-                            } else {
-                                let out = if basic_sym_p(raw_args) {
-                                    env_lookup(env, raw_args)
-                                } else {
-                                    raw_args
-                                };
-                                unsafe { ptr::write(return_to, out) };
-                            }
+                            self.eval_expr(return_to, env, raw_args);
                             return;
                         }
                         _ => {}
@@ -492,8 +418,7 @@ impl EvalStack {
                     self.push(nil());
                     self.push(raw_args);
 
-                    let return_to = unsafe { self.frame_start.add(FrameOffset::ArgZero as usize) }
-                        as *mut *mut SlHead;
+                    let return_to = self.frame_addr(0);
 
                     self.push_frame_head(return_to, Opcode::Eval, env);
                     self.push(ref_get(raw_op));
@@ -517,20 +442,12 @@ impl EvalStack {
                         for _ in 0..i {
                             arg = get_next_list_elt(arg);
                         }
+
                         let return_to = unsafe {
                             apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize)
                         } as *mut *mut SlHead;
-                        if nnil_ref_p(arg) {
-                            self.push_frame_head(return_to, Opcode::Eval, env);
-                            self.push(ref_get(arg));
-                        } else {
-                            let out = if basic_sym_p(arg) {
-                                env_lookup(env, arg)
-                            } else {
-                                arg
-                            };
-                            unsafe { ptr::write(return_to, out) };
-                        }
+
+                        self.eval_expr(return_to, env, arg);
                     }
                 }
             }
@@ -561,17 +478,7 @@ impl EvalStack {
                 let remainder = self.frame_obj(0);
                 if nil_p(get_next_list_elt(remainder)) {
                     self.pop_frame();
-                    if nnil_ref_p(remainder) {
-                        self.push_frame_head(ret, Opcode::Eval, env);
-                        self.push(ref_get(remainder));
-                    } else {
-                        let out = if basic_sym_p(remainder) {
-                            env_lookup(env, remainder)
-                        } else {
-                            remainder
-                        };
-                        unsafe { ptr::write(ret, out) };
-                    }
+                    self.eval_expr(ret, env, remainder);
                 } else {
                     self.pop();
                     self.push(get_next_list_elt(remainder));
@@ -584,25 +491,11 @@ impl EvalStack {
             Opcode::While => {
                 let pred = self.frame_obj(0);
                 let result = self.frame_obj(1);
-                // coretypck!(result ; Bool);
                 let body = self.frame_obj(2);
 
                 if truthy(result) {
-                    let return_to =
-                        unsafe { self.frame_start.add(FrameOffset::ArgZero as usize + 1) }
-                            as *mut *mut SlHead;
-
-                    if nnil_ref_p(pred) {
-                        self.push_frame_head(return_to, Opcode::Eval, env);
-                        self.push(ref_get(pred));
-                    } else {
-                        let out = if basic_sym_p(pred) {
-                            env_lookup(env, pred)
-                        } else {
-                            pred
-                        };
-                        unsafe { ptr::write(return_to, out) };
-                    }
+                    let return_to = self.frame_addr(1);
+                    self.eval_expr(return_to, env, pred);
 
                     self.push_frame_head(self.null_loc as *mut *mut SlHead, Opcode::DoSeq, env);
                     self.push(body);
@@ -613,35 +506,14 @@ impl EvalStack {
             }
             Opcode::Branch => {
                 let pred_res = self.frame_obj(0);
-                // coretypck!(pred_res ; Bool);
                 let true_body = self.frame_obj(1);
                 let false_body = self.frame_obj(2);
                 self.pop_frame();
 
                 if truthy(pred_res) {
-                    if nnil_ref_p(true_body) {
-                        self.push_frame_head(ret, Opcode::Eval, env);
-                        self.push(ref_get(true_body));
-                    } else {
-                        let out = if basic_sym_p(true_body) {
-                            env_lookup(env, true_body)
-                        } else {
-                            true_body
-                        };
-                        unsafe { ptr::write(ret, out) };
-                    }
+                    self.eval_expr(ret, env, true_body);
                 } else {
-                    if nnil_ref_p(false_body) {
-                        self.push_frame_head(ret, Opcode::Eval, env);
-                        self.push(ref_get(false_body));
-                    } else {
-                        let out = if basic_sym_p(false_body) {
-                            env_lookup(env, false_body)
-                        } else {
-                            false_body
-                        };
-                        unsafe { ptr::write(ret, out) };
-                    }
+                    self.eval_expr(ret, env, false_body);
                 }
             }
             Opcode::PreApp => {
@@ -662,20 +534,12 @@ impl EvalStack {
                     for _ in 0..i {
                         arg = get_next_list_elt(arg);
                     }
+
                     let return_to =
                         unsafe { apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize) }
                             as *mut *mut SlHead;
-                    if nnil_ref_p(arg) {
-                        self.push_frame_head(return_to, Opcode::Eval, env);
-                        self.push(ref_get(arg));
-                    } else {
-                        let out = if basic_sym_p(arg) {
-                            env_lookup(env, arg)
-                        } else {
-                            arg
-                        };
-                        unsafe { ptr::write(return_to, out) };
-                    }
+
+                    self.eval_expr(return_to, env, arg);
                 }
             }
             Opcode::Apply => {
@@ -706,17 +570,12 @@ impl EvalStack {
                     self.push_frame_head(ret, Opcode::DoSeq, proc_env);
                     self.push(proc_lambda_get_body(proc));
                 } else {
-                    let args: &[*mut SlHead] = unsafe {
-                        std::slice::from_raw_parts(
-                            self.frame_start.add(FrameOffset::ArgZero as usize + 1)
-                                as *mut *mut SlHead,
-                            argct as usize,
-                        )
-                    };
+                    let args: &[*mut SlHead] =
+                        unsafe { std::slice::from_raw_parts(self.frame_addr(1), argct as usize) };
 
                     let fn_rslt = proc_native_get_body(proc)(reg, tbl, env, args);
-
                     unsafe { ptr::write(ret, fn_rslt) };
+
                     self.pop_frame();
                 }
             }
@@ -724,7 +583,7 @@ impl EvalStack {
     }
 }
 
-pub fn eval_expr(
+pub fn eval(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
     env: *mut SlHead,

@@ -500,7 +500,7 @@ pub fn interpret(code: &str) -> Result<String, SlErrCode> {
     environment_setup(region, tbl, env);
 
     let expr = parser::parse(region, tbl, code)?;
-    let result = eval::eval_expr(region, tbl, env, expr);
+    let result = eval::eval(region, tbl, env, expr);
 
     Ok(context(tbl, result).to_string())
 }

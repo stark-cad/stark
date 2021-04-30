@@ -60,7 +60,7 @@ fn read_value(
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while c.is_ascii_whitespace() || c == b';' {
         if c == b';' {
-            while *(chars.peek().unwrap()) != b'\n' {
+            while *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?) != b'\n' {
                 chars.next();
             }
         }
@@ -102,7 +102,11 @@ fn read_value(
         }
         b'+' | b'-' => {
             acc.push(chars.next().unwrap());
-            if chars.peek().unwrap().is_ascii_digit() {
+            if chars
+                .peek()
+                .ok_or(SlErrCode::ParseUnexpectedEnd)?
+                .is_ascii_digit()
+            {
                 value = read_number(chars, acc, reg, tbl)?;
             } else {
                 value = read_symbol(chars, acc, reg, tbl)?;
@@ -122,7 +126,6 @@ fn read_value(
             acc.clear();
         }
         _ => {
-            eprintln!("invalid char in value read");
             return Err(SlErrCode::ParseInvalidChar);
         }
     }
@@ -166,7 +169,7 @@ fn read_list(
 
     while c != b')' {
         match c {
-            b';' => while chars.next().unwrap() != b'\n' {},
+            b';' => while chars.next().unwrap_or(b'\n') != b'\n' {},
             _ if c.is_ascii_whitespace() => {
                 chars.next();
             }
@@ -205,7 +208,7 @@ fn read_vec(
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while c != b']' {
         match c {
-            b';' => while chars.next().unwrap() != b'\n' {},
+            b';' => while chars.next().unwrap_or(b'\n') != b'\n' {},
             _ if c.is_ascii_whitespace() => {
                 chars.next();
             }
@@ -227,7 +230,7 @@ fn read_map(
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while c != b'}' {
         match c {
-            b';' => while chars.next().unwrap() != b'\n' {},
+            b';' => while chars.next().unwrap_or(b'\n') != b'\n' {},
             _ if c.is_ascii_whitespace() => {
                 chars.next();
             }
@@ -264,7 +267,6 @@ fn read_symbol(
             b'!' | b'*' | b'+' | b'-' | b'/' | b'<' | b'=' | b'>' | b'?' | b'_' => acc.push(next),
             _ if next.is_ascii_alphanumeric() => acc.push(next),
             _ => {
-                eprintln!("invalid char in symbol read");
                 return Err(SlErrCode::ParseInvalidChar);
             }
         }
@@ -280,7 +282,6 @@ fn read_symbol(
     Ok(sym)
 }
 
-// TODO: make keywords work properly again
 fn read_keyword(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -301,7 +302,6 @@ fn read_keyword(
             b'-' | b'_' => acc.push(next),
             _ if next.is_ascii_alphanumeric() => acc.push(next),
             _ => {
-                eprintln!("invalid char in keyword read");
                 return Err(SlErrCode::ParseInvalidChar);
             }
         }
@@ -370,7 +370,6 @@ fn read_number(
             b'+' | b'-' | b'_' | b'.' => acc.push(next),
             _ if next.is_ascii_alphanumeric() => acc.push(next),
             _ => {
-                eprintln!("invalid char in number read");
                 return Err(SlErrCode::ParseInvalidChar);
             }
         }
@@ -397,7 +396,6 @@ fn read_special(
             b'_' => acc.push(next),
             _ if next.is_ascii_alphanumeric() => acc.push(next),
             _ => {
-                eprintln!("invalid char in special read");
                 return Err(SlErrCode::ParseInvalidChar);
             }
         }
