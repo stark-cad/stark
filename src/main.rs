@@ -67,21 +67,17 @@ fn main() {
 
     let main_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
     let rndr_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
-    let ctxt_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
+    let ctxt_region = unsafe { sail::memmgt::acquire_mem_region(1000) };
 
-    let (sl_tbl, main_env, rndr_env, ctxt_env) = {
+    let (sl_tbl, main_env, rndr_env) = {
         let (tbl, m_env) = sail::prep_environment(main_region);
         sail::environment_setup(main_region, tbl, m_env);
 
-        let (r_env, c_env) = (
-            sail::env_create(rndr_region, 255),
-            sail::env_create(ctxt_region, 255),
-        );
+        let r_env = sail::env_create(rndr_region, 255);
 
         sail::set_next_list_elt(r_env, m_env);
-        sail::set_next_list_elt(c_env, m_env);
 
-        (tbl, m_env, r_env, c_env)
+        (tbl, m_env, r_env)
     };
 
     let (mr_send, mr_recv) = sail::queue::queue_create(main_region, rndr_region);
@@ -94,17 +90,24 @@ fn main() {
     sail::env_layer_ins_by_id(rndr_region, rndr_env, sail::S_MR_RECV.0, mr_recv);
     sail::env_layer_ins_by_id(rndr_region, rndr_env, sail::S_CR_RECV.0, cr_recv);
 
-    sail::env_layer_ins_by_id(ctxt_region, ctxt_env, sail::S_CM_SEND.0, cm_send);
-    sail::env_layer_ins_by_id(ctxt_region, ctxt_env, sail::S_CR_SEND.0, cr_send);
-
-    let (sl_tbl, main_region, rndr_region, ctxt_region, main_env, rndr_env, ctxt_env) = (
+    let (
+        sl_tbl,
+        main_region,
+        rndr_region,
+        ctxt_region,
+        main_env,
+        rndr_env,
+        cm_send,
+        cr_send,
+    ) = (
         sl_tbl as usize,
         main_region as usize,
         rndr_region as usize,
         ctxt_region as usize,
         main_env as usize,
         rndr_env as usize,
-        ctxt_env as usize,
+        cm_send as usize,
+        cr_send as usize,
     );
 
     // This thread handles all rendering to the graphical frame: the output interface
@@ -157,8 +160,8 @@ fn main() {
     context::run_loop(
         event_loop,
         vec![manager, render].into_iter(),
+        cm_send,
+        cr_send,
         ctxt_region,
-        sl_tbl,
-        ctxt_env,
     );
 }

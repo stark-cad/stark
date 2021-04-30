@@ -129,12 +129,14 @@ incl_symbols! {
     43 S_CR_RECV     "cr-recv" Basic;
     44 S_MAIN        "main"    Basic;
     45 S_RNDR        "rndr"    Basic;
-    46 S_CTX_DST     "ctx-dst" Basic;
-    47 S_CTX_RSZ     "ctx-rsz" Basic;
-    48 S_CTX_CLK     "ctx-clk" Basic;
     49 S_ENGINE      "engine"  Basic;
     50 S_T_INTERN    "%true"   Basic
     51
+    49 K_CX_DESTR    "cx-dstr" Keyword;
+    50 K_CX_RESIZ    "cx-resz" Keyword;
+    51 K_CX_CLICK    "cx-clck" Keyword;
+    52 K_CX_REDRW    "cx-rdrw" Keyword;
+    53 K_CX_SHELL    "cx-shel" Keyword
 }
 
 /// Set a symbol to one of the four symbol modes

@@ -10,8 +10,9 @@
 
 ; scripts/ctxt.sl
 
-; Important functions for the context thread of STARK's full graphical
-; mode.
+; Functions for the context thread of STARK's full graphical mode. All
+; now directly implemented in `src/context.rs`. THIS FILE IS CURRENTLY
+; NOT LOADED OR USED.
 
 ; <>
 
