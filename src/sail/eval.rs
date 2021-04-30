@@ -18,7 +18,7 @@
 
 use super::core::*;
 use super::memmgt;
-use super::{SP_DEF, SP_DO, SP_FN, SP_IF, SP_QUOTE, SP_SET, SP_WHILE};
+use super::{SP_DEF, SP_DO, SP_EVAL, SP_FN, SP_IF, SP_QUOTE, SP_SET, SP_WHILE};
 
 use std::alloc;
 use std::convert::TryInto;
@@ -308,6 +308,26 @@ impl EvalStack {
         }
 
         match opc {
+            Opcode::PreEval => {
+                let expr = self.frame_obj(0);
+                self.pop_frame();
+
+                if nnil_ref_p(expr) {
+                    self.push_frame_head(ret, Opcode::Eval, env);
+                    self.push(ref_get(expr));
+                } else {
+                    unsafe {
+                        ptr::write(
+                            ret,
+                            if basic_sym_p(expr) {
+                                env_lookup(env, expr)
+                            } else {
+                                expr
+                            },
+                        );
+                    }
+                }
+            }
             Opcode::Eval => {
                 let list = self.frame_obj(0);
                 self.pop_frame();
@@ -346,6 +366,27 @@ impl EvalStack {
                             // needs: current remaining list of expressions
                             self.push_frame_head(ret, Opcode::DoSeq, env);
                             self.push(raw_args);
+                            return;
+                        }
+                        id if id == SP_EVAL.0 => {
+                            self.push_frame_head(ret, Opcode::PreEval, env);
+                            self.push(nil());
+
+                            let return_to =
+                                unsafe { self.frame_start.add(FrameOffset::ArgZero as usize) }
+                                    as *mut *mut SlHead;
+
+                            if nnil_ref_p(raw_args) {
+                                self.push_frame_head(return_to, Opcode::Eval, env);
+                                self.push(ref_get(raw_args));
+                            } else {
+                                let out = if basic_sym_p(raw_args) {
+                                    env_lookup(env, raw_args)
+                                } else {
+                                    raw_args
+                                };
+                                unsafe { ptr::write(return_to, out) };
+                            }
                             return;
                         }
                         id if id == SP_FN.0 => {
@@ -710,6 +751,9 @@ enum_and_tryfrom! {
     #[derive(Debug, PartialEq, Eq)]
     #[repr(u8)]
     pub enum Opcode {
+        /// Expression to be evaluated
+        PreEval,
+
         /// List to be evaluated
         Eval,
 

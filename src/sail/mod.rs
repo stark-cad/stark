@@ -145,27 +145,28 @@ incl_symbols! {
     30 T_QUEUE_RX    "q-rx"    Type;
     31 SP_DEF        "def"     Basic;
     32 SP_DO         "do"      Basic;
-    33 SP_FN         "fn"      Basic;
-    34 SP_IF         "if"      Basic;
-    35 SP_QUOTE      "quote"   Basic;
-    36 SP_SET        "set"     Basic;
-    37 SP_WHILE      "while"   Basic;
-    38 S_MR_SEND     "mr-send" Basic;
-    39 S_MR_RECV     "mr-recv" Basic;
-    40 S_CM_SEND     "cm-send" Basic;
-    41 S_CM_RECV     "cm-recv" Basic;
-    42 S_CR_SEND     "cr-send" Basic;
-    43 S_CR_RECV     "cr-recv" Basic;
-    44 S_MAIN        "main"    Basic;
-    45 S_RNDR        "rndr"    Basic;
-    49 S_ENGINE      "engine"  Basic;
-    50 S_T_INTERN    "%true"   Basic
-    51
+    33 SP_EVAL       "eval"    Basic;
+    34 SP_FN         "fn"      Basic;
+    35 SP_IF         "if"      Basic;
+    36 SP_QUOTE      "quote"   Basic;
+    37 SP_SET        "set"     Basic;
+    38 SP_WHILE      "while"   Basic;
+    39 S_MR_SEND     "mr-send" Basic;
+    40 S_MR_RECV     "mr-recv" Basic;
+    41 S_CM_SEND     "cm-send" Basic;
+    42 S_CM_RECV     "cm-recv" Basic;
+    43 S_CR_SEND     "cr-send" Basic;
+    44 S_CR_RECV     "cr-recv" Basic;
+    45 S_MAIN        "main"    Basic;
+    46 S_RNDR        "rndr"    Basic;
+    47 S_ENGINE      "engine"  Basic;
+    48 S_T_INTERN    "%true"   Basic;
     49 K_CX_DESTR    "cx-dstr" Keyword;
     50 K_CX_RESIZ    "cx-resz" Keyword;
     51 K_CX_CLICK    "cx-clck" Keyword;
     52 K_CX_REDRW    "cx-rdrw" Keyword;
     53 K_CX_SHELL    "cx-shel" Keyword
+    54
 }
 
 /// Set a symbol to one of the four symbol modes
@@ -520,8 +521,11 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut S
     insert_native_proc(reg, tbl, env, "=", num_eq, 2);
     insert_native_proc(reg, tbl, env, "eq", sym_eq, 2);
     insert_native_proc(reg, tbl, env, "not", not, 1);
+
     insert_native_proc(reg, tbl, env, "print", print, 1);
     insert_native_proc(reg, tbl, env, "printenv", printenv, 0);
+
+    insert_native_proc(reg, tbl, env, "parse", parse, 1);
 
     insert_native_proc(reg, tbl, env, "qtx", qtx, 2);
     insert_native_proc(reg, tbl, env, "qrx", qrx, 1);
@@ -730,8 +734,19 @@ sail_fn! {
         return nil();
     }
 
+    parse [strin] {
+        coretypck!(strin ; VecStr);
+        let strsl = string_get(strin);
 
-    return nil();
+        match parser::parse(_reg, _tbl, strsl) {
+            Ok(head) => return head,
+            Err(err) => {
+                let out = init_errcode(_reg);
+                errcode_set(out, err);
+                return out;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
