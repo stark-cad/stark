@@ -93,8 +93,6 @@ pub fn render_loop(
         _env: *mut SlHead,
         _args: &[*mut SlHead],
     ) -> *mut SlHead {
-        println!("render redraw");
-
         let eng_ptr = _args[0];
         assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
         let engine = unsafe {
@@ -112,8 +110,6 @@ pub fn render_loop(
         _env: *mut SlHead,
         _args: &[*mut SlHead],
     ) -> *mut SlHead {
-        println!("render frame_size");
-
         let eng_ptr = _args[0];
         assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
         let engine = unsafe {
@@ -135,8 +131,6 @@ pub fn render_loop(
         _env: *mut SlHead,
         _args: &[*mut SlHead],
     ) -> *mut SlHead {
-        println!("render new_line");
-
         let eng_ptr = _args[0];
         assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
         let engine = unsafe {

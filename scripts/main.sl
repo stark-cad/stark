@@ -36,32 +36,41 @@
                               (qtx mr-send (as-f32 g))
                               (qtx mr-send (as-f32 b))))
 
-(def clear-lines (fn [] (qtx mr-send :clear)))
+(def lines-clear (fn [] (qtx mr-send :clear)))
+
+; TODO: user-added lines are inexplicably broken
+(def line-add-f32 (fn [x1 y1 x2 y2]
+                      (qtx mr-send :line)
+                      (qtx mr-send x1) (qtx mr-send y1)
+                      (qtx mr-send x2) (qtx mr-send y2)))
+
+(def line-add (fn [x1 y1 x2 y2]
+                  (line-add-f32 (as-f32 x1) (as-f32 y1)
+                                (as-f32 x2) (as-f32 y2))))
 
 (print "prepared for main loop")
 
 (while alive
        (set input (qrx cm-recv))
-       (if (eq input :destroy) (do
+       (if (eq input :cx-dstr) (do
            (print "destroying main")
            (set alive #F))
 
-       (if (eq input :point) (do
+       (if (eq input :cx-clck) (do
            (print "got point in")
            (if drawing (do
-               (qtx mr-send :line)
-               (qtx mr-send (vec-f32-get point 0))
-               (qtx mr-send (vec-f32-get point 1))
-               (qtx mr-send (get-q-next cm-recv))
-               (qtx mr-send (get-q-next cm-recv))
-               (print "points sent")
+               (line-add-f32 (vec-f32-get point 0) (vec-f32-get point 1)
+                             (get-q-next cm-recv) (get-q-next cm-recv))
                (set drawing #F))
 
            (do (set drawing #T)
-               (print "loading point")
                (vec-f32-set point 0 (get-q-next cm-recv))
                (vec-f32-set point 1 (get-q-next cm-recv)))))
-       ())))
+
+       (if (eq input :cx-shel)
+           (do (print (eval (parse (get-q-next cm-recv)))))
+
+       ()))))
 
 (print "main end")
 

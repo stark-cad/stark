@@ -35,14 +35,17 @@
 
 (while alive
        (set c-input (qrx cr-recv))
-       (if (eq c-input :destroy)
+       (if (eq c-input :cx-dstr)
        (do
            (print "destroying render")
            (set alive #F))
-       (if (eq c-input :resize)
+       (if (eq c-input :cx-resz)
            (do (frame-size engine (get-q-next cr-recv) (get-q-next cr-recv))
                (print "frame sized")
-               (redraw engine)) ()))
+               (redraw engine))
+       (if (eq c-input :cx-rdrw)
+           (do (redraw engine))
+       ())))
 
        (set m-input (qrx mr-recv))
        (if (eq m-input :line)
@@ -54,9 +57,9 @@
                (new-line engine line line-col)
                (redraw engine))
        (if (eq m-input :line-col)
-           (do (vec-f32-set line-col (get-q-next mr-recv))
-               (vec-f32-set line-col (get-q-next mr-recv))
-               (vec-f32-set line-col (get-q-next mr-recv)))
+           (do (vec-f32-set line-col 0 (get-q-next mr-recv))
+               (vec-f32-set line-col 1 (get-q-next mr-recv))
+               (vec-f32-set line-col 2 (get-q-next mr-recv)))
        (if (eq m-input :back-col)
            (do (bg-col engine (get-q-next mr-recv)
                               (get-q-next mr-recv)
