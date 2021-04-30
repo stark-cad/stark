@@ -30,7 +30,11 @@
 use stark::{
     context, graphics,
     sail::{self, SlHead},
+    WinHandle,
 };
+
+use raw_window_handle::HasRawWindowHandle;
+use winit::window::Window;
 
 use std::env;
 use std::io;
@@ -65,6 +69,8 @@ fn main() {
 
     let (window, event_loop) = context::init_context(NAME, ICON, SIZE[0], SIZE[1]);
 
+    let winhandle = WinHandle(window.raw_window_handle());
+
     let main_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
     let rndr_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
     let ctxt_region = unsafe { sail::memmgt::acquire_mem_region(1000) };
@@ -90,16 +96,7 @@ fn main() {
     sail::env_layer_ins_by_id(rndr_region, rndr_env, sail::S_MR_RECV.0, mr_recv);
     sail::env_layer_ins_by_id(rndr_region, rndr_env, sail::S_CR_RECV.0, cr_recv);
 
-    let (
-        sl_tbl,
-        main_region,
-        rndr_region,
-        ctxt_region,
-        main_env,
-        rndr_env,
-        cm_send,
-        cr_send,
-    ) = (
+    let (sl_tbl, main_region, rndr_region, ctxt_region, main_env, rndr_env, cm_send, cr_send) = (
         sl_tbl as usize,
         main_region as usize,
         rndr_region as usize,
@@ -113,15 +110,43 @@ fn main() {
     // This thread handles all rendering to the graphical frame: the output interface
     let render = thread::Builder::new()
         .name("render".to_string())
-        .spawn(move || graphics::render_loop(NAME, SIZE, &window, rndr_region, sl_tbl, rndr_env))
+        .spawn(move || graphics::render_loop(NAME, SIZE, &winhandle, rndr_region, sl_tbl, rndr_env))
         .unwrap();
 
     // This thread manages the program, treating the actual main thread as a source of user input
     let manager = thread::Builder::new()
         .name("manager".to_string())
         .spawn(move || {
+            // TODO: use the window as an opaque Sail object and
+            // create native functions to operate on it (similar to
+            // the graphics engine setup)
+
             let (sl_tbl, sl_env) = (sl_tbl as *mut sail::SlHead, main_env as *mut sail::SlHead);
             let sl_reg = main_region as *mut sail::memmgt::Region;
+
+            window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
+
+            let win_obj = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::Cfg::B8Other as u8) };
+            unsafe { sail::write_field_unchecked(win_obj, 0, (&window as *const _) as u64) };
+            sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_WINDOW.0, win_obj);
+
+            fn cursor_vis(
+                _reg: *mut sail::memmgt::Region,
+                _tbl: *mut SlHead,
+                _env: *mut SlHead,
+                _args: &[*mut SlHead],
+            ) -> *mut SlHead {
+                let win_ptr = _args[0];
+                assert_eq!(sail::get_cfg_spec(win_ptr), sail::Cfg::B8Other);
+                let window =
+                    unsafe { &*(sail::read_field_unchecked::<u64>(win_ptr, 0) as *const Window) };
+
+                window.set_cursor_visible(sail::bool_get(_args[1]));
+
+                return sail::nil();
+            }
+
+            sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "cursor-vis", cursor_vis, 2);
 
             let prog_txt = &std::fs::read_to_string("scripts/main.sl").unwrap();
             let prog_expr = sail::parser::parse(sl_reg, sl_tbl, prog_txt).unwrap();

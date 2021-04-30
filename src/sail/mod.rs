@@ -158,15 +158,16 @@ incl_symbols! {
     43 S_CR_SEND     "cr-send" Basic;
     44 S_CR_RECV     "cr-recv" Basic;
     45 S_MAIN        "main"    Basic;
-    46 S_RNDR        "rndr"    Basic;
-    47 S_ENGINE      "engine"  Basic;
-    48 S_T_INTERN    "%true"   Basic;
-    49 K_CX_DESTR    "cx-dstr" Keyword;
-    50 K_CX_RESIZ    "cx-resz" Keyword;
-    51 K_CX_CLICK    "cx-clck" Keyword;
-    52 K_CX_REDRW    "cx-rdrw" Keyword;
-    53 K_CX_SHELL    "cx-shel" Keyword
-    54
+    46 S_WINDOW      "window"  Basic;
+    47 S_RNDR        "rndr"    Basic;
+    48 S_ENGINE      "engine"  Basic;
+    49 S_T_INTERN    "%true"   Basic;
+    50 K_CX_DESTR    "cx-dstr" Keyword;
+    51 K_CX_RESIZ    "cx-resz" Keyword;
+    52 K_CX_CLICK    "cx-clck" Keyword;
+    53 K_CX_REDRW    "cx-rdrw" Keyword;
+    54 K_CX_SHELL    "cx-shel" Keyword
+    55
 }
 
 /// Set a symbol to one of the four symbol modes

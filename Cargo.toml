@@ -14,10 +14,9 @@ stkdbg = []
 winit = { path = "../winit" }
 gfx-hal = { path = "../gfx/src/hal" }
 
-shaderc = "0.6.3"
-
-# arrayvec = "0.5.2"
 png = "0.16.7"
+raw-window-handle = "0.3.3"
+shaderc = "0.6.3"
 
 log = "0.4.11"
 simple_logger = "1.11.0"

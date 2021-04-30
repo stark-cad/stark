@@ -27,7 +27,8 @@
 
 // <>
 
-use super::sail::{self, SlHead};
+use crate::sail::{self, SlHead};
+use crate::WinHandle;
 
 use gfx_hal::{
     adapter::{Adapter, PhysicalDevice},
@@ -71,7 +72,7 @@ impl Triangle {
 pub fn render_loop(
     name: &'static str,
     size: [u32; 2],
-    window: &winit::window::Window,
+    window: &WinHandle,
     sl_reg: usize,
     sl_tbl: usize,
     sl_env: usize,
@@ -148,6 +149,7 @@ pub fn render_loop(
         unsafe {
             let ln =
                 std::ptr::read_unaligned::<[f32; 4]>(sail::value_ptr(points).add(12) as *mut _);
+            // println!("rndr line: {:?}", ln);
             engine.lines.push(ln);
 
             let cl =
@@ -243,6 +245,9 @@ pub fn render_loop(
             break;
         }
     }
+
+    // TODO: dispose of Sail environment first (reverse creation order)
+    drop(engine);
 }
 
 pub struct Engine<B: gfx_hal::Backend> {
@@ -519,7 +524,7 @@ pub struct GraphicsState<B: gfx_hal::Backend> {
 
 /// Initialize the graphics system and track necessary state
 impl<B: gfx_hal::Backend> GraphicsState<B> {
-    pub fn new(window: &winit::window::Window, name: &str, width: u32, height: u32) -> Self {
+    pub fn new(window: &WinHandle, name: &str, width: u32, height: u32) -> Self {
         let surface_extent = Extent2D { width, height };
         let instance = B::Instance::create(name, 1).unwrap();
         let surface = unsafe { instance.create_surface(window).unwrap() };
