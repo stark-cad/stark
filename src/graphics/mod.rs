@@ -28,7 +28,7 @@
 // <>
 
 use crate::sail::{self, SlHead};
-use crate::WinHandle;
+use crate::FrameHandle;
 
 use gfx_hal::{
     adapter::{Adapter, PhysicalDevice},
@@ -72,7 +72,7 @@ impl Triangle {
 pub fn render_loop(
     name: &'static str,
     size: [u32; 2],
-    window: &WinHandle,
+    window: &FrameHandle,
     sl_reg: usize,
     sl_tbl: usize,
     sl_env: usize,
@@ -370,13 +370,19 @@ impl<B: gfx_hal::Backend> Engine<B> {
         }
 
         let surface_image = unsafe {
-            self.state
+            match self
+                .state
                 .surface
                 .as_mut()
                 .unwrap()
-                .acquire_image(timeout_ns)
-                .unwrap()
-                .0
+                .acquire_image(timeout_ns) {
+                    Ok((image, _)) => image,
+                    Err(gfx_hal::window::AcquireError::OutOfDate(_)) => {
+                        // TODO: this error is common and must be handled
+                        panic!("swapchain out of date again")
+                    }
+                    Err(_) => panic!("could not acquire image"),
+                }
         };
 
         let line_vec_size = size_of::<[f32; 4]>() * self.lines.len();
@@ -524,7 +530,7 @@ pub struct GraphicsState<B: gfx_hal::Backend> {
 
 /// Initialize the graphics system and track necessary state
 impl<B: gfx_hal::Backend> GraphicsState<B> {
-    pub fn new(window: &WinHandle, name: &str, width: u32, height: u32) -> Self {
+    pub fn new(window: &FrameHandle, name: &str, width: u32, height: u32) -> Self {
         let surface_extent = Extent2D { width, height };
         let instance = B::Instance::create(name, 1).unwrap();
         let surface = unsafe { instance.create_surface(window).unwrap() };

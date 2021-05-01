@@ -38,7 +38,6 @@
 
 (def lines-clear (fn [] (qtx mr-send :clear)))
 
-; TODO: user-added lines are inexplicably broken
 (def line-add-f32 (fn [x1 y1 x2 y2]
                       (qtx mr-send :line)
                       (qtx mr-send x1) (qtx mr-send y1)
@@ -52,17 +51,18 @@
 
 (while alive
        (set input (qrx cm-recv))
+
        (if (eq input :cx-dstr) (do
            (print "destroying main")
            (set alive #F))
 
        (if (eq input :cx-clck) (do
-           (print "got point in")
            (if drawing (do
+               (set drawing #F)
+               (def x2 (get-q-next cm-recv))
+               (def y2 (get-q-next cm-recv))
                (line-add-f32 (vec-f32-get point 0) (vec-f32-get point 1)
-                             (get-q-next cm-recv) (get-q-next cm-recv))
-               (set drawing #F))
-
+                             x2 y2))
            (do (set drawing #T)
                (vec-f32-set point 0 (get-q-next cm-recv))
                (vec-f32-set point 1 (get-q-next cm-recv)))))

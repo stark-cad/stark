@@ -27,14 +27,9 @@
 
 // <>
 
-use stark::{
-    context, graphics,
-    sail::{self, SlHead},
-    WinHandle,
-};
+use stark::{FrameHandle, context, graphics, manager_loop, sail};
 
 use raw_window_handle::HasRawWindowHandle;
-use winit::window::Window;
 
 use std::env;
 use std::io;
@@ -60,16 +55,15 @@ fn main() {
     if args.len() >= 3 {
         match sail::run_file(&args[2]) {
             Ok(out) => println!("{}", out),
-            Err(_) => println!("Error"),
+            Err(err) => println!("{:?}", err),
         }
         std::process::exit(0);
     } else if args.len() >= 2 {
         sail::repl(io::stdin())
     }
 
-    let (window, event_loop) = context::init_context(NAME, ICON, SIZE[0], SIZE[1]);
-
-    let winhandle = WinHandle(window.raw_window_handle());
+    let (frame, event_loop) = context::init_context(NAME, ICON, SIZE[0], SIZE[1]);
+    let handle = FrameHandle(frame.raw_window_handle());
 
     let main_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
     let rndr_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
@@ -80,7 +74,6 @@ fn main() {
         sail::environment_setup(main_region, tbl, m_env);
 
         let r_env = sail::env_create(rndr_region, 255);
-
         sail::set_next_list_elt(r_env, m_env);
 
         (tbl, m_env, r_env)
@@ -110,74 +103,13 @@ fn main() {
     // This thread handles all rendering to the graphical frame: the output interface
     let render = thread::Builder::new()
         .name("render".to_string())
-        .spawn(move || graphics::render_loop(NAME, SIZE, &winhandle, rndr_region, sl_tbl, rndr_env))
+        .spawn(move || graphics::render_loop(NAME, SIZE, &handle, rndr_region, sl_tbl, rndr_env))
         .unwrap();
 
     // This thread manages the program, treating the actual main thread as a source of user input
     let manager = thread::Builder::new()
         .name("manager".to_string())
-        .spawn(move || {
-            // TODO: use the window as an opaque Sail object and
-            // create native functions to operate on it (similar to
-            // the graphics engine setup)
-
-            let (sl_tbl, sl_env) = (sl_tbl as *mut sail::SlHead, main_env as *mut sail::SlHead);
-            let sl_reg = main_region as *mut sail::memmgt::Region;
-
-            window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
-
-            let win_obj = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::Cfg::B8Other as u8) };
-            unsafe { sail::write_field_unchecked(win_obj, 0, (&window as *const _) as u64) };
-            sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_WINDOW.0, win_obj);
-
-            fn cursor_vis(
-                _reg: *mut sail::memmgt::Region,
-                _tbl: *mut SlHead,
-                _env: *mut SlHead,
-                _args: &[*mut SlHead],
-            ) -> *mut SlHead {
-                let win_ptr = _args[0];
-                assert_eq!(sail::get_cfg_spec(win_ptr), sail::Cfg::B8Other);
-                let window =
-                    unsafe { &*(sail::read_field_unchecked::<u64>(win_ptr, 0) as *const Window) };
-
-                window.set_cursor_visible(sail::bool_get(_args[1]));
-
-                return sail::nil();
-            }
-
-            sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "cursor-vis", cursor_vis, 2);
-
-            let prog_txt = &std::fs::read_to_string("scripts/main.sl").unwrap();
-            let prog_expr = sail::parser::parse(sl_reg, sl_tbl, prog_txt).unwrap();
-
-            let mut stack = sail::eval::EvalStack::new(10000);
-
-            let sigil = 1 as *mut SlHead;
-
-            let mut ret_slot = sigil;
-            let ret_addr: *mut *mut SlHead = &mut ret_slot;
-
-            stack.start(ret_addr, sl_env, prog_expr);
-
-            while ret_slot == sigil {
-                stack.iter_once(sl_reg, sl_tbl);
-            }
-
-            let main = sail::env_lookup_by_id(sl_env, sail::S_MAIN.0);
-
-            stack.push_frame_head(ret_addr, sail::eval::Opcode::Apply, sl_env);
-            stack.push(main);
-
-            loop {
-                stack.iter_once(sl_reg, sl_tbl);
-
-                if stack.is_empty() {
-                    println!("manager thread broke");
-                    break;
-                }
-            }
-        })
+        .spawn(move || manager_loop(frame, main_region, sl_tbl, main_env))
         .unwrap();
 
     // This loop gets input from the user and detects changes to the context

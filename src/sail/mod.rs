@@ -474,8 +474,8 @@ pub fn repl(stream_in: std::io::Stdin) {
 
         let expr = match parser::parse(region, tbl, &input) {
             Ok(out) => out,
-            Err(_) => {
-                println!("Parse Error");
+            Err(err) => {
+                println!("{:?}", err);
                 continue;
             }
         };
@@ -532,6 +532,7 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut S
     insert_native_proc(reg, tbl, env, "not", not, 1);
 
     insert_native_proc(reg, tbl, env, "print", print, 1);
+    insert_native_proc(reg, tbl, env, "dbg", dbg, 1);
     insert_native_proc(reg, tbl, env, "printenv", printenv, 0);
 
     insert_native_proc(reg, tbl, env, "parse", parse, 1);
@@ -732,6 +733,11 @@ sail_fn! {
     print [arg] {
         println!("{}", context(_tbl, arg).to_string());
         return nil();
+    }
+
+    dbg [arg] {
+        println!("{}", context(_tbl, arg).to_string());
+        return arg;
     }
 
     printenv [] {
