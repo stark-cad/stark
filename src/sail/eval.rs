@@ -357,7 +357,7 @@ impl EvalStack {
                             // TODO: type annotations
                             let argvec = raw_args;
                             let argct = stdvec_get_len(argvec) as u16;
-                            let out = init_proc_lambda(reg, argct);
+                            let out = proc_lambda_make(reg, argct);
                             for i in 0..argct {
                                 proc_lambda_set_arg(
                                     out,

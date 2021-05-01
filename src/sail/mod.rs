@@ -76,10 +76,19 @@ impl TryFrom<u16> for SlErrCode {
 }
 
 #[inline(always)]
-fn init_errcode(reg: *mut memmgt::Region) -> *mut SlHead {
+fn errcode_make(reg: *mut memmgt::Region) -> *mut SlHead {
     unsafe {
         let ptr = memmgt::alloc(reg, 2, Cfg::B2Err as u8);
         write_field_unchecked::<u16>(ptr, 0, 0);
+        ptr
+    }
+}
+
+#[inline(always)]
+fn errcode_init(reg: *mut memmgt::Region, err: SlErrCode) -> *mut SlHead {
+    unsafe {
+        let ptr = memmgt::alloc(reg, 2, Cfg::B2Err as u8);
+        write_field_unchecked::<u16>(ptr, 0, err as u16);
         ptr
     }
 }
@@ -511,8 +520,7 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut S
         sym_tab_get_id(reg, tbl, s);
     }
 
-    let true_intern = init_bool(reg);
-    bool_set(true_intern, true);
+    let true_intern = bool_init(reg, true);
     env_layer_ins_by_id(reg, env, S_T_INTERN.0, true_intern);
 
     // Native functions
@@ -547,11 +555,11 @@ pub fn insert_native_proc(
     func: NativeFn,
     argct: u16,
 ) {
-    let proc_id = init_symbol(reg);
-    sym_set_id(proc_id, sym_tab_get_id(reg, tbl, name));
+    let proc_id = sym_init(reg, sym_tab_get_id(reg, tbl, name));
 
-    let proc_fn = init_proc_native(reg, argct);
+    let proc_fn = proc_native_make(reg, argct);
     proc_native_set_body(proc_fn, func);
+
     env_layer_ins_entry(reg, env, proc_id, proc_fn);
 }
 
@@ -588,21 +596,21 @@ sail_fn! {
     _reg _tbl _env ;
 
     add [fst, snd] {
-        let out = init_i64(_reg);
+        let out = i64_make(_reg);
         let result = i64_get(fst) + i64_get(snd);
         i64_set(out, result);
         return out;
     }
 
     sub [fst, snd] {
-        let out = init_i64(_reg);
+        let out = i64_make(_reg);
         let result = i64_get(fst) - i64_get(snd);
         i64_set(out, result);
         return out;
     }
 
     modulus [fst, snd] {
-        let out = init_i64(_reg);
+        let out = i64_make(_reg);
         let result = i64_get(fst) % i64_get(snd);
         i64_set(out, result);
         return out;
@@ -692,13 +700,11 @@ sail_fn! {
         let len = core_read_field::<u32>(target, 8);
         let idx = i64_get(idx) as u32;
 
-        if idx < len {
-            let out = init_f32(_reg);
-            f32_set(out, core_read_field::<f32>(target, (4 * idx as usize) + 12));
-            return out;
+        return if idx < len {
+            f32_init(_reg, core_read_field::<f32>(target, (4 * idx as usize) + 12))
         } else {
             panic!("invalid index")
-        }
+        };
     }
 
     vec_f32_set [target, idx, val] {
@@ -720,9 +726,7 @@ sail_fn! {
     }
 
     as_f32 [val] {
-        let out = init_f32(_reg);
-        f32_set(out, f64_get(val) as f32);
-        return out;
+        return f32_init(_reg, f64_get(val) as f32);
     }
 
     print [arg] {
@@ -739,14 +743,10 @@ sail_fn! {
         coretypck!(strin ; VecStr);
         let strsl = string_get(strin);
 
-        match parser::parse(_reg, _tbl, strsl) {
-            Ok(head) => return head,
-            Err(err) => {
-                let out = init_errcode(_reg);
-                errcode_set(out, err);
-                return out;
-            }
-        }
+        return match parser::parse(_reg, _tbl, strsl) {
+            Ok(head) => head,
+            Err(err) => errcode_init(_reg, err),
+        };
     }
 }
 

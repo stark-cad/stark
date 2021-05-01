@@ -15,7 +15,7 @@
 
 // <>
 
-use super::{memmgt, SlErrCode, SlHead};
+use super::{core::*, memmgt, SlErrCode, SlHead};
 
 use std::iter;
 use std::str;
@@ -138,13 +138,11 @@ fn read_quote(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
-    let head = super::init_ref(reg);
-    let start = super::init_symbol(reg);
-    super::sym_set_id(start, super::sym_tab_get_id(reg, tbl, "quote"));
-    super::ref_set(head, start);
+    let start = sym_init(reg, super::SP_QUOTE.0);
+    let head = ref_init(reg, start);
 
     let end = read_value(chars, acc, reg, tbl)?;
-    super::set_next_list_elt(start, end);
+    set_next_list_elt(start, end);
 
     Ok(head)
 }
@@ -155,12 +153,11 @@ fn read_list(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
-    let head = super::init_ref(reg);
+    let head = ref_make(reg);
 
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     if c == b')' {
         chars.next();
-        super::ref_set(head, super::nil());
         return Ok(head);
     }
 
@@ -178,9 +175,9 @@ fn read_list(
                 tail = {
                     let next = read_value(chars, acc, reg, tbl)?;
                     if count < 1 {
-                        super::ref_set(tail, next)
+                        ref_set(tail, next)
                     } else {
-                        super::set_next_list_elt(tail, next)
+                        set_next_list_elt(tail, next)
                     }
                     next
                 };
@@ -204,7 +201,8 @@ fn read_vec(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
-    let vec = super::init_stdvec(reg, 8);
+    // TODO: allow vectors of arbitrary length
+    let vec = stdvec_make(reg, 8);
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while c != b']' {
         match c {
@@ -212,7 +210,7 @@ fn read_vec(
             _ if c.is_ascii_whitespace() => {
                 chars.next();
             }
-            _ => super::stdvec_push(vec, read_value(chars, acc, reg, tbl)?),
+            _ => stdvec_push(vec, read_value(chars, acc, reg, tbl)?),
         }
         c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
@@ -226,7 +224,7 @@ fn read_map(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
-    let map = super::init_hash_map(reg, 16);
+    let map = hashvec_make(reg, 16);
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while c != b'}' {
         match c {
@@ -234,7 +232,7 @@ fn read_map(
             _ if c.is_ascii_whitespace() => {
                 chars.next();
             }
-            _ => super::hash_map_insert(
+            _ => hash_map_insert(
                 reg,
                 map,
                 read_value(chars, acc, reg, tbl)?,
@@ -253,7 +251,6 @@ fn read_symbol(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
-    let sym = super::init_symbol(reg);
     while {
         let peek = chars.peek().unwrap_or(&b' ');
         match peek {
@@ -272,8 +269,8 @@ fn read_symbol(
         }
     }
 
-    super::sym_set_id(
-        sym,
+    let sym = sym_init(
+        reg,
         super::sym_tab_get_id(reg, tbl, unsafe {
             str::from_utf8_unchecked(acc.as_slice())
         }),
@@ -288,7 +285,6 @@ fn read_keyword(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
-    let key = super::init_symbol(reg);
     while {
         let peek = chars.peek().unwrap_or(&b' ');
         match peek {
@@ -311,15 +307,15 @@ fn read_keyword(
         return Err(SlErrCode::ParseUnexpectedEnd);
     }
 
-    unsafe {
-        super::sym_set_id(
-            key,
+    let key = unsafe {
+        sym_init(
+            reg,
             super::modeize_sym(
-                super::sym_tab_get_id(reg, tbl, str::from_utf8_unchecked(acc.as_slice())),
-                super::SymbolMode::Keyword,
+                sym_tab_get_id(reg, tbl, str::from_utf8_unchecked(acc.as_slice())),
+                SymbolMode::Keyword,
             ),
         )
-    }
+    };
 
     Ok(key)
 }
@@ -338,10 +334,8 @@ fn read_string(
 
     chars.next();
 
-    let string = super::init_string(reg, acc.len() as u32);
-
-    super::string_set(
-        string,
+    let string = string_init(
+        reg,
         match str::from_utf8(&acc) {
             Ok(s) => s,
             _ => return Err(SlErrCode::ParseInvalidString),
@@ -405,15 +399,12 @@ fn read_special(
         return Err(SlErrCode::ParseUnexpectedEnd);
     }
 
-    let val = super::init_bool(reg);
     if acc[0].eq_ignore_ascii_case(&b't') && acc.len() == 1 {
-        super::bool_set(val, true);
-        Ok(val)
+        Ok(bool_init(reg, true))
     } else if acc[0].eq_ignore_ascii_case(&b'f') && acc.len() == 1 {
-        super::bool_set(val, false);
-        Ok(val)
+        Ok(bool_init(reg, false))
     } else {
-        return Err(SlErrCode::ParseBadSpecial);
+        Err(SlErrCode::ParseBadSpecial)
     }
 }
 
@@ -422,17 +413,10 @@ fn process_num(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
-    let val;
     if let Ok(n) = slice.parse::<i64>() {
-        val = super::init_i64(reg);
-        super::i64_set(val, n);
-
-        return Ok(val);
+        Ok(i64_init(reg, n))
     } else if let Ok(n) = slice.parse::<f64>() {
-        val = super::init_f64(reg);
-        super::f64_set(val, n);
-
-        return Ok(val);
+        Ok(f64_init(reg, n))
     } else {
         Err(SlErrCode::ParseInvalidNum)
     }

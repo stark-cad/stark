@@ -71,11 +71,8 @@ pub fn run_loop<Ij: 'static>(
 
                 // println!("Got: {}", buffer);
 
-                let strin = sail::init_string(sl_reg, buffer.len() as u32);
-                sail::string_set(strin, &buffer);
-
-                let shell = sail::init_symbol(sl_reg);
-                sail::sym_set_id(shell, sail::K_CX_SHELL.0);
+                let strin = sail::string_init(sl_reg, &buffer);
+                let shell = sail::sym_init(sl_reg, sail::K_CX_SHELL.0);
 
                 sail::queue::queue_tx(main_tx, shell);
                 sail::queue::queue_tx(main_tx, strin);
@@ -108,36 +105,32 @@ pub fn run_loop<Ij: 'static>(
 
             Event::RedrawRequested(..) => {
                 // println!("context redraw");
-                // let redrw = sail::init_symbol(sl_reg);
-                // sail::sym_set_id(redrw, sail::K_CX_REDRW.0);
-                // sail::queue::queue_tx(rndr_tx, redrw);
+
+                let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
+
+                sail::queue::queue_tx(rndr_tx, redrw);
             }
 
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
                     *control_flow = ControlFlow::Exit;
 
-                    println!("context destroy");
+                    // println!("context destroy");
 
-                    let destr = sail::init_symbol(sl_reg);
-                    sail::sym_set_id(destr, sail::K_CX_DESTR.0);
+                    let destr = sail::sym_init(sl_reg, sail::K_CX_DESTR.0);
+
                     sail::queue::queue_tx(main_tx, destr);
                     sail::queue::queue_tx(rndr_tx, destr);
-
-                    // sail::memmgt::dealloc(destr);
                 }
                 WindowEvent::Resized(dims) => {
-                    println!("context resize");
+                    // println!("context resize");
 
                     window_dims = [dims.width, dims.height];
 
-                    let w = sail::init_u32(sl_reg);
-                    let h = sail::init_u32(sl_reg);
-                    sail::u32_set(w, dims.width);
-                    sail::u32_set(h, dims.height);
+                    let w = sail::u32_init(sl_reg, dims.width);
+                    let h = sail::u32_init(sl_reg, dims.height);
+                    let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
 
-                    let resiz = sail::init_symbol(sl_reg);
-                    sail::sym_set_id(resiz, sail::K_CX_RESIZ.0);
                     sail::queue::queue_tx(rndr_tx, resiz);
                     sail::queue::queue_tx(rndr_tx, w);
                     sail::queue::queue_tx(rndr_tx, h);
@@ -146,32 +139,28 @@ pub fn run_loop<Ij: 'static>(
                     new_inner_size: dims,
                     ..
                 } => {
-                    println!("context resize");
+                    // println!("context resize");
 
                     window_dims = [dims.width, dims.height];
 
-                    let w = sail::init_u32(sl_reg);
-                    let h = sail::init_u32(sl_reg);
-                    sail::u32_set(w, dims.width);
-                    sail::u32_set(h, dims.width);
+                    let w = sail::u32_init(sl_reg, dims.width);
+                    let h = sail::u32_init(sl_reg, dims.height);
+                    let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
 
-                    let resiz = sail::init_symbol(sl_reg);
-                    sail::sym_set_id(resiz, sail::K_CX_RESIZ.0);
                     sail::queue::queue_tx(rndr_tx, resiz);
                     sail::queue::queue_tx(rndr_tx, w);
                     sail::queue::queue_tx(rndr_tx, h);
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
-                    if state == event::ElementState::Pressed {
-                        println!("context click");
+                    if state == ElementState::Pressed {
+                        // println!("context click");
 
-                        let x = sail::init_f32(sl_reg);
-                        let y = sail::init_f32(sl_reg);
-                        sail::f32_set(x, vk_cursor_pos[0]);
-                        sail::f32_set(y, vk_cursor_pos[1]);
+                        // println!("ctxt point: {:?}", vk_cursor_pos);
 
-                        let click = sail::init_symbol(sl_reg);
-                        sail::sym_set_id(click, sail::K_CX_CLICK.0);
+                        let x = sail::f32_init(sl_reg, vk_cursor_pos[0]);
+                        let y = sail::f32_init(sl_reg, vk_cursor_pos[1]);
+                        let click = sail::sym_init(sl_reg, sail::K_CX_CLICK.0);
+
                         sail::queue::queue_tx(main_tx, click);
                         sail::queue::queue_tx(main_tx, x);
                         sail::queue::queue_tx(main_tx, y);
@@ -181,6 +170,8 @@ pub fn run_loop<Ij: 'static>(
                     position: dpi::PhysicalPosition { x, y },
                     ..
                 } => {
+                    // TODO: add tracking line that shows next line position
+
                     vk_cursor_pos = [
                         (x / (window_dims[0] / 2) as f64 - 1.0) as f32,
                         (y / (window_dims[1] / 2) as f64 - 1.0) as f32,
