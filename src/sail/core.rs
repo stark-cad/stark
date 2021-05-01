@@ -510,6 +510,27 @@ pub unsafe fn write_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usiz
     ptr::write_unaligned(dst, src)
 }
 
+#[inline(always)]
+pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(
+    loc: *mut SlHead,
+    offset: usize,
+    src: T,
+) {
+    let dst = value_ptr(loc).add(offset) as *mut T;
+    std::intrinsics::atomic_store(dst, src);
+}
+
+#[inline(always)]
+pub unsafe fn write_field_cmpxcg_unchecked<T: SizedBase + Copy>(
+    loc: *mut SlHead,
+    offset: usize,
+    old: T,
+    src: T,
+) -> bool {
+    let dst = value_ptr(loc).add(offset) as *mut T;
+    std::intrinsics::atomic_cxchg(dst, old, src).1
+}
+
 /// Read from a field of a core type
 #[inline(always)]
 pub fn core_read_field<T: SizedBase>(loc: *mut SlHead, offset: usize) -> T {
@@ -525,6 +546,15 @@ pub fn core_read_field<T: SizedBase>(loc: *mut SlHead, offset: usize) -> T {
 pub unsafe fn read_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usize) -> T {
     let src = value_ptr(loc).add(offset) as *mut T;
     ptr::read_unaligned(src)
+}
+
+#[inline(always)]
+pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(
+    loc: *mut SlHead,
+    offset: usize,
+) -> T {
+    let src = value_ptr(loc).add(offset) as *mut T;
+    std::intrinsics::atomic_load(src)
 }
 
 // irrelevant
@@ -1117,7 +1147,7 @@ pub fn env_new_arg_layer(reg: *mut memmgt::Region) -> *mut SlHead {
     init_ref(reg)
 }
 
-/// TODO: this should be a vector or something else more sensible, especially for natives
+/// TODO: this should be a vector or something else more sensible
 pub fn env_arg_layer_get(layer: *mut SlHead, idx: u16) -> *mut SlHead {
     let mut left = idx;
     let mut pos = core_read_field(layer, 0);
