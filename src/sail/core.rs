@@ -574,9 +574,22 @@ pub fn set_next_list_elt(loc: *mut SlHead, next: *mut SlHead) {
     unsafe {
         let head = ptr::read_unaligned(loc as *mut u16);
         ptr::write_unaligned(
-            loc as *mut *mut SlHead,
-            (((next as usize) << 16) + head as usize) as *mut SlHead,
+            loc as *mut u64,
+            ((next as u64) << 16) + head as u64,
         );
+    }
+}
+
+#[inline(always)]
+pub fn set_next_list_elt_cmpxcg(loc: *mut SlHead, old: *mut SlHead, new: *mut SlHead) -> bool {
+    unsafe {
+        let head = ptr::read_unaligned(loc as *mut u16);
+        std::intrinsics::atomic_cxchg_acqrel(
+            loc as *mut u64,
+            ((old as u64) << 16) + head as u64,
+            ((new as u64) << 16) + head as u64,
+        )
+        .1
     }
 }
 
