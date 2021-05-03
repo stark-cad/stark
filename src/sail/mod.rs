@@ -523,28 +523,7 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut S
     let true_intern = bool_init(reg, true);
     env_layer_ins_by_id(reg, env, S_T_INTERN.0, true_intern);
 
-    // Native functions
-    insert_native_proc(reg, tbl, env, "+", add, 2);
-    insert_native_proc(reg, tbl, env, "-", sub, 2);
-    insert_native_proc(reg, tbl, env, "mod", modulus, 2);
-    insert_native_proc(reg, tbl, env, "=", num_eq, 2);
-    insert_native_proc(reg, tbl, env, "eq", sym_eq, 2);
-    insert_native_proc(reg, tbl, env, "not", not, 1);
-
-    insert_native_proc(reg, tbl, env, "print", print, 1);
-    insert_native_proc(reg, tbl, env, "dbg", dbg, 1);
-    insert_native_proc(reg, tbl, env, "printenv", printenv, 0);
-
-    insert_native_proc(reg, tbl, env, "parse", parse, 1);
-
-    insert_native_proc(reg, tbl, env, "qtx", qtx, 2);
-    insert_native_proc(reg, tbl, env, "qrx", qrx, 1);
-
-    insert_native_proc(reg, tbl, env, "as-f32", as_f32, 1);
-    insert_native_proc(reg, tbl, env, "vec-f32-make", vec_f32_make, 0);
-    insert_native_proc(reg, tbl, env, "vec-f32-push", vec_f32_push, 2);
-    insert_native_proc(reg, tbl, env, "vec-f32-get", vec_f32_get, 2);
-    insert_native_proc(reg, tbl, env, "vec-f32-set", vec_f32_set, 3);
+    insert_native_procs(reg, tbl, env, &NATFNS[..]);
 }
 
 /// TODO: intended to be temporary; still relies on some "magic values"
@@ -564,11 +543,28 @@ pub fn insert_native_proc(
     env_layer_ins_entry(reg, env, proc_id, proc_fn);
 }
 
-/// TODO: improve macro to allow adding functions to environment?
+fn insert_native_procs(
+    reg: *mut memmgt::Region,
+    tbl: *mut SlHead,
+    env: *mut SlHead,
+    fns: &[(&str, NativeFn, u16)],
+) {
+    for entry in fns {
+        let proc_id = sym_init(reg, sym_tab_get_id(reg, tbl, entry.0));
+
+        let proc_fn = proc_native_make(reg, entry.2);
+        proc_native_set_body(proc_fn, entry.1);
+
+        env_layer_ins_entry(reg, env, proc_id, proc_fn);
+    }
+}
+
 /// TODO: type checks and variable length arglists for native functions
 /// TODO: generate these functions somehow else if macros won't cut it
 macro_rules! sail_fn {
-    ( $reg:ident $tbl:ident $env:ident ; $( $fn_name:ident [ $($args:ident),* ] $body:block )+ ) => {
+    ( $reg:ident $tbl:ident $env:ident ; $fnct:literal $array:ident
+      $( $name:literal $fn_name:ident $argct:literal [ $($args:ident),* ] $body:block )+
+    ) => {
         $(
             fn $fn_name (
                 _reg: *mut memmgt::Region,
@@ -589,6 +585,8 @@ macro_rules! sail_fn {
                 $body
             }
         )+
+
+            const $array: [(&str, NativeFn, u16); $fnct] = [$(($name, $fn_name, $argct)),+];
     };
 }
 
@@ -596,28 +594,30 @@ macro_rules! sail_fn {
 sail_fn! {
     _reg _tbl _env ;
 
-    add [fst, snd] {
+    17 NATFNS
+
+    "+" add 2 [fst, snd] {
         let out = i64_make(_reg);
         let result = i64_get(fst) + i64_get(snd);
         i64_set(out, result);
         return out;
     }
 
-    sub [fst, snd] {
+    "-" sub 2 [fst, snd] {
         let out = i64_make(_reg);
         let result = i64_get(fst) - i64_get(snd);
         i64_set(out, result);
         return out;
     }
 
-    modulus [fst, snd] {
+    "mod" modulus 2 [fst, snd] {
         let out = i64_make(_reg);
         let result = i64_get(fst) % i64_get(snd);
         i64_set(out, result);
         return out;
     }
 
-    num_eq [fst, snd] {
+    "=" num_eq 2 [fst, snd] {
         // let out = init_bool(reg);
         let result = i64_get(fst) == i64_get(snd);
         if result {
@@ -629,7 +629,7 @@ sail_fn! {
         // return out;
     }
 
-    sym_eq [fst, snd] {
+    "eq" sym_eq 2 [fst, snd] {
         // let out = init_bool(reg);
         let result = core_eq(fst, snd);
         if result {
@@ -641,7 +641,7 @@ sail_fn! {
         // return out;
     }
 
-    not [val] {
+    "not" not 1 [val] {
         // let out = init_bool(reg);
         if !truthy(val) {
             // bool_set(out, false)
@@ -653,7 +653,7 @@ sail_fn! {
         // return out;
     }
 
-    qtx [sender, item] {
+    "qtx" qtx 2 [sender, item] {
         queue::queue_tx(sender, item);
 
         // let out = init_bool(reg);
@@ -663,11 +663,11 @@ sail_fn! {
         return nil();
     }
 
-    qrx [receiver] {
+    "qrx" qrx 2 [receiver] {
         return queue::queue_rx(receiver);
     }
 
-    vec_f32_make [] {
+    "vec-f32-make" vec_f32_make 0 [] {
         let vec = unsafe { memmgt::alloc(_reg, vec_size(12, 4, 8), Cfg::VecAny as u8) };
         unsafe {
             write_field_unchecked(vec, 0, T_F32.0);
@@ -677,7 +677,7 @@ sail_fn! {
         return vec;
     }
 
-    vec_f32_push [target, value] {
+    "vec-f32-push" vec_f32_push 2 [target, value] {
         coretypck!(target ; VecAny);
         coretypck!(value ; F32);
         assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
@@ -693,7 +693,7 @@ sail_fn! {
         return target;
     }
 
-    vec_f32_get [target, idx] {
+    "vec-f32-get" vec_f32_get 2 [target, idx] {
         coretypck!(target ; VecAny);
         coretypck!(idx ; I64);
         assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
@@ -708,7 +708,7 @@ sail_fn! {
         };
     }
 
-    vec_f32_set [target, idx, val] {
+    "vec-f32-set" vec_f32_set 3 [target, idx, val] {
         coretypck!(target ; VecAny);
         coretypck!(idx ; I64);
         coretypck!(val; F32);
@@ -726,26 +726,26 @@ sail_fn! {
         return target;
     }
 
-    as_f32 [val] {
+    "as-f32" as_f32 1 [val] {
         return f32_init(_reg, f64_get(val) as f32);
     }
 
-    print [arg] {
+    "print" print 1 [arg] {
         println!("{}", context(_tbl, arg).to_string());
         return nil();
     }
 
-    dbg [arg] {
+    "dbg" dbg 1 [arg] {
         println!("{}", context(_tbl, arg).to_string());
         return arg;
     }
 
-    printenv [] {
+    "printenv" printenv 0 [] {
         println!("{}", context(_tbl, _env).to_string());
         return nil();
     }
 
-    parse [strin] {
+    "parse" parse 1 [strin] {
         coretypck!(strin ; VecStr);
         let strsl = string_get(strin);
 
