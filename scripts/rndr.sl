@@ -37,7 +37,6 @@
 
 (while alive
        ; TODO: avoid hardcoding this for lines here
-       ; TODO: only redraw when it's necessary
        (if drawing (do (if track
                            (pop-line engine)
                            (set track #T))
@@ -45,8 +44,9 @@
                    (arr-vec-set line 1 (arr-vec-get point 1))
                    (arr-vec-set line 2 (arr-vec-get cur-pos 0))
                    (arr-vec-set line 3 (arr-vec-get cur-pos 1))
-                   (add-line engine line line-col)
-                   (redraw engine)) ())
+                   (add-line engine line line-col))
+
+                   (if track (do (pop-line engine) (set track #F)) ()))
 
        (set c-input (qrx cr-recv))
        (if (eq c-input :cx-dstr)
@@ -88,7 +88,10 @@
            (do (clear engine)
                (redraw engine))
 
-       ())))))
+       (if (eq m-input :redraw)
+           (do (redraw engine))
+
+       ()))))))
 
 (print "render end")
 

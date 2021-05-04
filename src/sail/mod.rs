@@ -234,7 +234,7 @@ incl_symbols! {
     43 S_CR_SEND     "cr-send" Basic;
     44 S_CR_RECV     "cr-recv" Basic;
     45 S_MAIN        "main"    Basic;
-    46 S_WINDOW      "window"  Basic;
+    46 S_FRAME       "frame"   Basic;
     47 S_RNDR        "rndr"    Basic;
     48 S_ENGINE      "engine"  Basic;
     49 S_T_INTERN    "%true"   Basic;
@@ -244,8 +244,15 @@ incl_symbols! {
     53 K_CX_RESIZ    "cx-resz" Keyword;
     54 K_CX_RECRD    "cx-rcrd" Keyword;
     55 K_CX_REDRW    "cx-rdrw" Keyword;
-    56 K_CX_SHELL    "cx-shel" Keyword
-    57
+    56 K_CX_SHELL    "cx-shel" Keyword;
+    57 K_CX_KEY_U    "cx-kb-u" Keyword;
+    58 K_CX_KEY_D    "cx-kb-d" Keyword;
+    59 K_CX_KEY_F    "cx-kb-f" Keyword;
+    60 K_CX_KEY_B    "cx-kb-b" Keyword;
+    61 K_CX_KEY_L    "cx-kb-l" Keyword;
+    62 K_CX_KEY_S    "cx-kb-s" Keyword;
+    63 K_CX_KEY_E    "cx-kb-e" Keyword
+    64
 }
 
 /// Set a symbol to one of the four symbol modes
@@ -661,25 +668,96 @@ macro_rules! sail_fn {
 }
 
 // TODO: native functions MUST be fully safe to use
+// TODO: sensible type checking & operator overloading
 sail_fn! {
     _reg _tbl _env ;
 
-    16 NATFNS
+    18 NATFNS
 
-        // TODO: make arithmetic operators work for F32
+    // TODO: use fixed point at times to avoid floating point errors?
 
     "+" add 2 [fst, snd] {
-        let out = i64_make(_reg);
-        let result = i64_get(fst) + i64_get(snd);
-        i64_set(out, result);
-        return out;
+        let typ = core_type(fst);
+        assert_eq!(typ, core_type(snd));
+
+        match typ.expect("type invalid") {
+            CoreType::I64 => {
+                let out = i64_make(_reg);
+                let result = i64_get(fst) + i64_get(snd);
+                i64_set(out, result);
+                return out;
+            }
+            CoreType::F32 => {
+                let out = f32_make(_reg);
+                let result = f32_get(fst) + f32_get(snd);
+                f32_set(out, result);
+                return out;
+            }
+            _ => panic!("type invalid for add"),
+        }
     }
 
     "-" sub 2 [fst, snd] {
-        let out = i64_make(_reg);
-        let result = i64_get(fst) - i64_get(snd);
-        i64_set(out, result);
-        return out;
+        let typ = core_type(fst);
+        assert_eq!(typ, core_type(snd));
+
+        match typ.expect("type invalid") {
+            CoreType::I64 => {
+                let out = i64_make(_reg);
+                let result = i64_get(fst) - i64_get(snd);
+                i64_set(out, result);
+                return out;
+            }
+            CoreType::F32 => {
+                let out = f32_make(_reg);
+                let result = f32_get(fst) - f32_get(snd);
+                f32_set(out, result);
+                return out;
+            }
+            _ => panic!("type invalid for sub"),
+        }
+    }
+
+    "*" mul 2 [fst, snd] {
+        let typ = core_type(fst);
+        assert_eq!(typ, core_type(snd));
+
+        match typ.expect("type invalid") {
+            CoreType::I64 => {
+                let out = i64_make(_reg);
+                let result = i64_get(fst) * i64_get(snd);
+                i64_set(out, result);
+                return out;
+            }
+            CoreType::F32 => {
+                let out = f32_make(_reg);
+                let result = f32_get(fst) * f32_get(snd);
+                f32_set(out, result);
+                return out;
+            }
+            _ => panic!("type invalid for mul"),
+        }
+    }
+
+    "/" div 2 [fst, snd] {
+        let typ = core_type(fst);
+        assert_eq!(typ, core_type(snd));
+
+        match typ.expect("type invalid") {
+            CoreType::I64 => {
+                let out = i64_make(_reg);
+                let result = i64_get(fst) / i64_get(snd);
+                i64_set(out, result);
+                return out;
+            }
+            CoreType::F32 => {
+                let out = f32_make(_reg);
+                let result = f32_get(fst) / f32_get(snd);
+                f32_set(out, result);
+                return out;
+            }
+            _ => panic!("type invalid for div"),
+        }
     }
 
     "mod" modulus 2 [fst, snd] {

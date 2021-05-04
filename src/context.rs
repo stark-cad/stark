@@ -157,6 +157,9 @@ pub fn run_loop<Ij: 'static>(
                     ];
 
                     sail::arrvec_rplc(cur_pos, &vk_cursor_pos[..]);
+
+                    let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
+                    sail::queue::queue_tx(rndr_tx, redrw);
                 }
                 _ => {}
             },
@@ -172,6 +175,41 @@ pub fn run_loop<Ij: 'static>(
 
                     if state == ElementState::Pressed {
                         match virtual_keycode {
+                            Some(VirtualKeyCode::U) => {
+                                // move up
+                                let key_u = sail::sym_init(sl_reg, sail::K_CX_KEY_U.0);
+                                sail::queue::queue_tx(main_tx, key_u);
+                            }
+                            Some(VirtualKeyCode::D) => {
+                                // move down
+                                let key_d = sail::sym_init(sl_reg, sail::K_CX_KEY_D.0);
+                                sail::queue::queue_tx(main_tx, key_d);
+                            }
+                            Some(VirtualKeyCode::F) => {
+                                // move forward (right)
+                                let key_f = sail::sym_init(sl_reg, sail::K_CX_KEY_F.0);
+                                sail::queue::queue_tx(main_tx, key_f);
+                            }
+                            Some(VirtualKeyCode::B) => {
+                                // move backward (left)
+                                let key_b = sail::sym_init(sl_reg, sail::K_CX_KEY_B.0);
+                                sail::queue::queue_tx(main_tx, key_b);
+                            }
+                            Some(VirtualKeyCode::L) => {
+                                // make step longer
+                                let key_l = sail::sym_init(sl_reg, sail::K_CX_KEY_L.0);
+                                sail::queue::queue_tx(main_tx, key_l);
+                            }
+                            Some(VirtualKeyCode::S) => {
+                                // make step shorter
+                                let key_s = sail::sym_init(sl_reg, sail::K_CX_KEY_S.0);
+                                sail::queue::queue_tx(main_tx, key_s);
+                            }
+                            Some(VirtualKeyCode::E) => {
+                                // escape line in progress
+                                let key_e = sail::sym_init(sl_reg, sail::K_CX_KEY_E.0);
+                                sail::queue::queue_tx(main_tx, key_e);
+                            }
                             Some(VirtualKeyCode::Space) => {
                                 // enter the point
                                 let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
