@@ -21,10 +21,12 @@
 
 (def alive #T)
 
-(def line-col (vec-f32-make))
-(vec-f32-push line-col (as-f32 0.0))
-(vec-f32-push line-col (as-f32 0.0))
-(vec-f32-push line-col (as-f32 0.0))
+; currently tracking next line?
+(def track #F)
+
+(def line (arr-vec-make $f32 4 (as-f32 0.0)))
+
+(def line-col (arr-vec-make $f32 3 (as-f32 0.0)))
 
 (def get-q-next (fn [q] (def out ()) (while (eq out ()) (set out (qrx q))) out))
 
@@ -34,6 +36,18 @@
 (print "prepared for render loop")
 
 (while alive
+       ; TODO: avoid hardcoding this for lines here
+       ; TODO: only redraw when it's necessary
+       (if drawing (do (if track
+                           (pop-line engine)
+                           (set track #T))
+                   (arr-vec-set line 0 (arr-vec-get point 0))
+                   (arr-vec-set line 1 (arr-vec-get point 1))
+                   (arr-vec-set line 2 (arr-vec-get cur-pos 0))
+                   (arr-vec-set line 3 (arr-vec-get cur-pos 1))
+                   (add-line engine line line-col)
+                   (redraw engine)) ())
+
        (set c-input (qrx cr-recv))
        (if (eq c-input :cx-dstr)
        (do
@@ -50,18 +64,18 @@
 
        (set m-input (qrx mr-recv))
        (if (eq m-input :line)
-           (do (def line (vec-f32-make))
-               (vec-f32-push line (get-q-next mr-recv))
-               (vec-f32-push line (get-q-next mr-recv))
-               (vec-f32-push line (get-q-next mr-recv))
-               (vec-f32-push line (get-q-next mr-recv))
-               (new-line engine line line-col)
+           (do (if track (do (pop-line engine) (set track #F)) ())
+               (arr-vec-set line 0 (get-q-next mr-recv))
+               (arr-vec-set line 1 (get-q-next mr-recv))
+               (arr-vec-set line 2 (get-q-next mr-recv))
+               (arr-vec-set line 3 (get-q-next mr-recv))
+               (add-line engine line line-col)
                (redraw engine))
 
        (if (eq m-input :line-col)
-           (do (vec-f32-set line-col 0 (get-q-next mr-recv))
-               (vec-f32-set line-col 1 (get-q-next mr-recv))
-               (vec-f32-set line-col 2 (get-q-next mr-recv)))
+           (do (arr-vec-set line-col 0 (get-q-next mr-recv))
+               (arr-vec-set line-col 1 (get-q-next mr-recv))
+               (arr-vec-set line-col 2 (get-q-next mr-recv)))
 
        (if (eq m-input :back-col)
            (do (def r (get-q-next mr-recv))

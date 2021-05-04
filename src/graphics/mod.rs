@@ -62,6 +62,7 @@ use std::mem::size_of;
 pub struct Triangle {
     pub points: [[f32; 2]; 3],
 }
+
 impl Triangle {
     pub fn points_flat(self) -> [f32; 6] {
         let [[a, b], [c, d], [e, f]] = self.points;
@@ -126,7 +127,7 @@ pub fn render_loop(
         return sail::nil();
     }
 
-    fn new_line(
+    fn add_line(
         _reg: *mut sail::memmgt::Region,
         _tbl: *mut SlHead,
         _env: *mut SlHead,
@@ -139,25 +140,40 @@ pub fn render_loop(
         };
 
         let points = _args[1];
-        assert_eq!(sail::core_type(points), Some(sail::CoreType::VecAny));
+        assert_eq!(sail::core_type(points), Some(sail::CoreType::VecArr));
         assert_eq!(sail::core_read_field::<u32>(points, 0), sail::T_F32.0);
 
         let colors = _args[2];
-        assert_eq!(sail::core_type(points), Some(sail::CoreType::VecAny));
+        assert_eq!(sail::core_type(points), Some(sail::CoreType::VecArr));
         assert_eq!(sail::core_read_field::<u32>(points, 0), sail::T_F32.0);
 
         unsafe {
-            let ln =
-                std::ptr::read_unaligned::<[f32; 4]>(sail::value_ptr(points).add(12) as *mut _);
-            // println!("rndr line: {:?}", ln);
+            let ln = std::ptr::read_unaligned::<[f32; 4]>(sail::value_ptr(points).add(8) as *mut _);
             engine.lines.push(ln);
 
-            let cl =
-                std::ptr::read_unaligned::<[f32; 3]>(sail::value_ptr(colors).add(12) as *mut _);
+            let cl = std::ptr::read_unaligned::<[f32; 3]>(sail::value_ptr(colors).add(8) as *mut _);
             engine.colors.push(cl);
         }
 
         engine.buffer_size_check();
+
+        return sail::nil();
+    }
+
+    fn pop_line(
+        _reg: *mut sail::memmgt::Region,
+        _tbl: *mut SlHead,
+        _env: *mut SlHead,
+        _args: &[*mut SlHead],
+    ) -> *mut SlHead {
+        let eng_ptr = _args[0];
+        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+        let engine = unsafe {
+            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+        };
+
+        engine.lines.pop();
+        engine.colors.pop();
 
         return sail::nil();
     }
@@ -203,7 +219,8 @@ pub fn render_loop(
 
     sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "redraw", redraw, 1);
     sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "frame-size", frame_size, 3);
-    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "new-line", new_line, 3);
+    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "add-line", add_line, 3);
+    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "pop-line", pop_line, 1);
     sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "bg-col", bg_col, 4);
     sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "clear", clear, 1);
 
@@ -375,14 +392,15 @@ impl<B: gfx_hal::Backend> Engine<B> {
                 .surface
                 .as_mut()
                 .unwrap()
-                .acquire_image(timeout_ns) {
-                    Ok((image, _)) => image,
-                    Err(gfx_hal::window::AcquireError::OutOfDate(_)) => {
-                        // TODO: this error is common and must be handled
-                        panic!("swapchain out of date again")
-                    }
-                    Err(_) => panic!("could not acquire image"),
+                .acquire_image(timeout_ns)
+            {
+                Ok((image, _)) => image,
+                Err(gfx_hal::window::AcquireError::OutOfDate(_)) => {
+                    // TODO: this error is common and must be handled
+                    panic!("swapchain out of date again")
                 }
+                Err(_) => panic!("could not acquire image"),
+            }
         };
 
         let line_vec_size = size_of::<[f32; 4]>() * self.lines.len();
@@ -496,6 +514,7 @@ impl<B: gfx_hal::Backend> Engine<B> {
                 self.state.submission_complete_fence.as_mut(),
             );
 
+            // TODO: out of date errors are appearing here too
             self.state.queue_group.queues[0]
                 .present(
                     self.state.surface.as_mut().unwrap(),

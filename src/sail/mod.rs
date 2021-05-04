@@ -242,7 +242,7 @@ incl_symbols! {
     51 S_CUR_POS     "cur-pos" Basic;
     52 K_CX_DESTR    "cx-dstr" Keyword;
     53 K_CX_RESIZ    "cx-resz" Keyword;
-    54 K_CX_CLICK    "cx-clck" Keyword;
+    54 K_CX_RECRD    "cx-rcrd" Keyword;
     55 K_CX_REDRW    "cx-rdrw" Keyword;
     56 K_CX_SHELL    "cx-shel" Keyword
     57
@@ -664,7 +664,9 @@ macro_rules! sail_fn {
 sail_fn! {
     _reg _tbl _env ;
 
-    20 NATFNS
+    16 NATFNS
+
+        // TODO: make arithmetic operators work for F32
 
     "+" add 2 [fst, snd] {
         let out = i64_make(_reg);
@@ -737,64 +739,64 @@ sail_fn! {
         return queue::queue_rx(receiver);
     }
 
-    "vec-f32-make" vec_f32_make 0 [] {
-        let vec = unsafe { memmgt::alloc(_reg, vec_size(12, 4, 8), Cfg::VecAny as u8) };
-        unsafe {
-            write_field_unchecked(vec, 0, T_F32.0);
-            write_field_unchecked(vec, 4, 8 as u32);
-        }
-        core_write_field(vec, 8, 0 as u32);
-        return vec;
-    }
+    // "vec-f32-make" vec_f32_make 0 [] {
+    //     let vec = unsafe { memmgt::alloc(_reg, vec_size(12, 4, 8), Cfg::VecAny as u8) };
+    //     unsafe {
+    //         write_field_unchecked(vec, 0, T_F32.0);
+    //         write_field_unchecked(vec, 4, 8 as u32);
+    //     }
+    //     core_write_field(vec, 8, 0 as u32);
+    //     return vec;
+    // }
 
-    "vec-f32-push" vec_f32_push 2 [target, value] {
-        coretypck!(target ; VecAny);
-        coretypck!(value ; F32);
-        assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
+    // "vec-f32-push" vec_f32_push 2 [target, value] {
+    //     coretypck!(target ; VecAny);
+    //     coretypck!(value ; F32);
+    //     assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
 
-        let cap = core_read_field::<u32>(target, 4);
-        let len = core_read_field::<u32>(target, 8);
+    //     let cap = core_read_field::<u32>(target, 4);
+    //     let len = core_read_field::<u32>(target, 8);
 
-        if len < cap {
-            core_write_field(target, 8, len + 1);
-            core_write_field(target, (4 * len as usize) + 12, f32_get(value));
-        }
+    //     if len < cap {
+    //         core_write_field(target, 8, len + 1);
+    //         core_write_field(target, (4 * len as usize) + 12, f32_get(value));
+    //     }
 
-        return target;
-    }
+    //     return target;
+    // }
 
-    "vec-f32-get" vec_f32_get 2 [target, idx] {
-        coretypck!(target ; VecAny);
-        coretypck!(idx ; I64);
-        assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
+    // "vec-f32-get" vec_f32_get 2 [target, idx] {
+    //     coretypck!(target ; VecAny);
+    //     coretypck!(idx ; I64);
+    //     assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
 
-        let len = core_read_field::<u32>(target, 8);
-        let idx = i64_get(idx) as u32;
+    //     let len = core_read_field::<u32>(target, 8);
+    //     let idx = i64_get(idx) as u32;
 
-        return if idx < len {
-            f32_init(_reg, core_read_field::<f32>(target, (4 * idx as usize) + 12))
-        } else {
-            panic!("invalid index")
-        };
-    }
+    //     return if idx < len {
+    //         f32_init(_reg, core_read_field::<f32>(target, (4 * idx as usize) + 12))
+    //     } else {
+    //         panic!("invalid index")
+    //     };
+    // }
 
-    "vec-f32-set" vec_f32_set 3 [target, idx, val] {
-        coretypck!(target ; VecAny);
-        coretypck!(idx ; I64);
-        coretypck!(val ; F32);
-        assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
+    // "vec-f32-set" vec_f32_set 3 [target, idx, val] {
+    //     coretypck!(target ; VecAny);
+    //     coretypck!(idx ; I64);
+    //     coretypck!(val ; F32);
+    //     assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
 
-        let len = core_read_field::<u32>(target, 8);
-        let idx = i64_get(idx) as u32;
+    //     let len = core_read_field::<u32>(target, 8);
+    //     let idx = i64_get(idx) as u32;
 
-        if idx < len {
-            core_write_field::<f32>(target, (4 * idx as usize) + 12, f32_get(val));
-        } else {
-            panic!("invalid index")
-        }
+    //     if idx < len {
+    //         core_write_field::<f32>(target, (4 * idx as usize) + 12, f32_get(val));
+    //     } else {
+    //         panic!("invalid index")
+    //     }
 
-        return target;
-    }
+    //     return target;
+    // }
 
     "as-f32" as_f32 1 [val] {
         return f32_init(_reg, f64_get(val) as f32);

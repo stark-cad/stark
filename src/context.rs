@@ -21,7 +21,7 @@ use crate::sail;
 use png;
 use winit::{
     dpi,
-    event::{self, DeviceEvent, Event, WindowEvent},
+    event::{self, DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::{self, Window, WindowBuilder},
 };
@@ -141,8 +141,8 @@ pub fn run_loop<Ij: 'static>(
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     if state == ElementState::Pressed {
-                        let click = sail::sym_init(sl_reg, sail::K_CX_CLICK.0);
-                        sail::queue::queue_tx(main_tx, click);
+                        let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
+                        sail::queue::queue_tx(main_tx, recrd);
                     }
                 }
                 WindowEvent::CursorMoved {
@@ -163,14 +163,30 @@ pub fn run_loop<Ij: 'static>(
 
             Event::DeviceEvent { event, .. } => match event {
                 DeviceEvent::Key(event::KeyboardInput {
-                    scancode, state, ..
-                }) => {}
-                DeviceEvent::MouseWheel {
-                    delta: event::MouseScrollDelta::LineDelta(xdel, ydel),
-                } => {}
-                DeviceEvent::MouseMotion {
-                    delta: (xdel, ydel),
-                } => {}
+                    scancode,
+                    state,
+                    virtual_keycode,
+                    ..
+                }) => {
+                    // TODO: full keyboard input based line drawing
+
+                    if state == ElementState::Pressed {
+                        match virtual_keycode {
+                            Some(VirtualKeyCode::Space) => {
+                                // enter the point
+                                let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
+                                sail::queue::queue_tx(main_tx, recrd);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                // DeviceEvent::MouseWheel {
+                //     delta: event::MouseScrollDelta::LineDelta(xdel, ydel),
+                // } => {}
+                // DeviceEvent::MouseMotion {
+                //     delta: (xdel, ydel),
+                // } => {}
                 _ => {}
             },
 
