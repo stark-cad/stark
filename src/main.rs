@@ -27,7 +27,7 @@
 
 // <>
 
-use stark::{FrameHandle, context, graphics, manager_loop, sail};
+use stark::{context, graphics, manager_loop, sail, FrameHandle};
 
 use raw_window_handle::HasRawWindowHandle;
 
@@ -89,7 +89,24 @@ fn main() {
     sail::env_layer_ins_by_id(rndr_region, rndr_env, sail::S_MR_RECV.0, mr_recv);
     sail::env_layer_ins_by_id(rndr_region, rndr_env, sail::S_CR_RECV.0, cr_recv);
 
-    let (sl_tbl, main_region, rndr_region, ctxt_region, main_env, rndr_env, cm_send, cr_send) = (
+    let fr_dims = sail::arrvec_init::<u32>(main_region, sail::T_U32.0, 2, &[0, 0]);
+    let cur_pos = sail::arrvec_init::<f32>(main_region, sail::T_F32.0, 2, &[0.0, 0.0]);
+
+    sail::env_layer_ins_by_id(main_region, main_env, sail::S_FR_DIMS.0, fr_dims);
+    sail::env_layer_ins_by_id(main_region, main_env, sail::S_CUR_POS.0, cur_pos);
+
+    let (
+        sl_tbl,
+        main_region,
+        rndr_region,
+        ctxt_region,
+        main_env,
+        rndr_env,
+        cm_send,
+        cr_send,
+        fr_dims,
+        cur_pos,
+    ) = (
         sl_tbl as usize,
         main_region as usize,
         rndr_region as usize,
@@ -98,6 +115,8 @@ fn main() {
         rndr_env as usize,
         cm_send as usize,
         cr_send as usize,
+        fr_dims as usize,
+        cur_pos as usize,
     );
 
     // This thread handles all rendering to the graphical frame: the output interface
@@ -117,8 +136,10 @@ fn main() {
     context::run_loop(
         event_loop,
         vec![manager, render].into_iter(),
+        ctxt_region,
         cm_send,
         cr_send,
-        ctxt_region,
+        fr_dims,
+        cur_pos,
     );
 }

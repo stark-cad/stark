@@ -16,7 +16,7 @@
 
 // <>
 
-use super::sail::{self, SlHead};
+use crate::sail;
 
 use png;
 use winit::{
@@ -49,15 +49,17 @@ pub fn init_context(
 pub fn run_loop<Ij: 'static>(
     event_loop: EventLoop<()>,
     threads: Ij,
+    sl_reg: usize,
     m_send: usize,
     r_send: usize,
-    sl_reg: usize,
+    fr_dims: usize,
+    cur_pos: usize,
 ) where
     Ij: Iterator<Item = thread::JoinHandle<()>>,
 {
     let mut joins = Some(threads);
 
-    let stdin = thread::Builder::new()
+    let _stdin = thread::Builder::new()
         .name("stdin".to_string())
         .spawn(move || {
             let sl_reg = sl_reg as *mut sail::memmgt::Region;
@@ -85,6 +87,9 @@ pub fn run_loop<Ij: 'static>(
     let main_tx = m_send as *mut sail::SlHead;
     let rndr_tx = r_send as *mut sail::SlHead;
 
+    let fr_dims = fr_dims as *mut sail::SlHead;
+    let cur_pos = cur_pos as *mut sail::SlHead;
+
     // TODO: use a small region with space for a queue sender;
     // allocate values to send in region, send them, and then
     // deallocate them to leave space for more
@@ -92,7 +97,7 @@ pub fn run_loop<Ij: 'static>(
     // TODO: this will allow this thread and the stdin thread to be
     // much simpler
 
-    let mut window_dims: [u32; 2] = [0, 0];
+    let mut frame_dims: [u32; 2] = [0, 0];
     let mut vk_cursor_pos: [f32; 2] = [0.0, 0.0];
 
     event_loop.run(move |event, _, control_flow| {
@@ -104,10 +109,7 @@ pub fn run_loop<Ij: 'static>(
             }
 
             Event::RedrawRequested(..) => {
-                // println!("context redraw");
-
                 let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
-
                 sail::queue::queue_tx(rndr_tx, redrw);
             }
 
@@ -115,55 +117,32 @@ pub fn run_loop<Ij: 'static>(
                 WindowEvent::CloseRequested => {
                     *control_flow = ControlFlow::Exit;
 
-                    // println!("context destroy");
-
                     let destr = sail::sym_init(sl_reg, sail::K_CX_DESTR.0);
 
                     sail::queue::queue_tx(main_tx, destr);
                     sail::queue::queue_tx(rndr_tx, destr);
                 }
                 WindowEvent::Resized(dims) => {
-                    // println!("context resize");
+                    frame_dims = [dims.width, dims.height];
+                    sail::arrvec_rplc(fr_dims, &frame_dims[..]);
 
-                    window_dims = [dims.width, dims.height];
-
-                    let w = sail::u32_init(sl_reg, dims.width);
-                    let h = sail::u32_init(sl_reg, dims.height);
                     let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
-
                     sail::queue::queue_tx(rndr_tx, resiz);
-                    sail::queue::queue_tx(rndr_tx, w);
-                    sail::queue::queue_tx(rndr_tx, h);
                 }
                 WindowEvent::ScaleFactorChanged {
                     new_inner_size: dims,
                     ..
                 } => {
-                    // println!("context resize");
+                    frame_dims = [dims.width, dims.height];
+                    sail::arrvec_rplc(fr_dims, &frame_dims[..]);
 
-                    window_dims = [dims.width, dims.height];
-
-                    let w = sail::u32_init(sl_reg, dims.width);
-                    let h = sail::u32_init(sl_reg, dims.height);
                     let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
-
                     sail::queue::queue_tx(rndr_tx, resiz);
-                    sail::queue::queue_tx(rndr_tx, w);
-                    sail::queue::queue_tx(rndr_tx, h);
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     if state == ElementState::Pressed {
-                        // println!("context click");
-
-                        // println!("ctxt point: {:?}", vk_cursor_pos);
-
-                        let x = sail::f32_init(sl_reg, vk_cursor_pos[0]);
-                        let y = sail::f32_init(sl_reg, vk_cursor_pos[1]);
                         let click = sail::sym_init(sl_reg, sail::K_CX_CLICK.0);
-
                         sail::queue::queue_tx(main_tx, click);
-                        sail::queue::queue_tx(main_tx, x);
-                        sail::queue::queue_tx(main_tx, y);
                     }
                 }
                 WindowEvent::CursorMoved {
@@ -173,9 +152,11 @@ pub fn run_loop<Ij: 'static>(
                     // TODO: add tracking line that shows next line position
 
                     vk_cursor_pos = [
-                        (x / (window_dims[0] / 2) as f64 - 1.0) as f32,
-                        (y / (window_dims[1] / 2) as f64 - 1.0) as f32,
+                        (x / (frame_dims[0] / 2) as f64 - 1.0) as f32,
+                        (y / (frame_dims[1] / 2) as f64 - 1.0) as f32,
                     ];
+
+                    sail::arrvec_rplc(cur_pos, &vk_cursor_pos[..]);
                 }
                 _ => {}
             },

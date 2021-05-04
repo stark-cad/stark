@@ -41,7 +41,7 @@
            (set alive #F))
 
        (if (eq c-input :cx-resz)
-           (do (frame-size engine (get-q-next cr-recv) (get-q-next cr-recv)))
+           (do (frame-size engine (arr-vec-get fr-dims 0) (arr-vec-get fr-dims 1)))
 
        (if (eq c-input :cx-rdrw)
            (do (redraw engine))

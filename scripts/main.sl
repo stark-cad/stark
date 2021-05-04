@@ -59,10 +59,8 @@
        (if (eq input :cx-clck) (do
            (if drawing (do
                (set drawing #F)
-               (def x2 (get-q-next cm-recv))
-               (def y2 (get-q-next cm-recv))
                (line-add-f32 (vec-f32-get point 0) (vec-f32-get point 1)
-                             x2 y2))
+                             (arr-vec-get cur-pos 0) (arr-vec-get cur-pos 1)))
            (do (set drawing #T)
                (vec-f32-set point 0 (get-q-next cm-recv))
                (vec-f32-set point 1 (get-q-next cm-recv)))))

@@ -238,12 +238,14 @@ incl_symbols! {
     47 S_RNDR        "rndr"    Basic;
     48 S_ENGINE      "engine"  Basic;
     49 S_T_INTERN    "%true"   Basic;
-    50 K_CX_DESTR    "cx-dstr" Keyword;
-    51 K_CX_RESIZ    "cx-resz" Keyword;
-    52 K_CX_CLICK    "cx-clck" Keyword;
-    53 K_CX_REDRW    "cx-rdrw" Keyword;
-    54 K_CX_SHELL    "cx-shel" Keyword
-    55
+    50 S_FR_DIMS     "fr-dims" Basic;
+    51 S_CUR_POS     "cur-pos" Basic;
+    52 K_CX_DESTR    "cx-dstr" Keyword;
+    53 K_CX_RESIZ    "cx-resz" Keyword;
+    54 K_CX_CLICK    "cx-clck" Keyword;
+    55 K_CX_REDRW    "cx-rdrw" Keyword;
+    56 K_CX_SHELL    "cx-shel" Keyword
+    57
 }
 
 /// Set a symbol to one of the four symbol modes
@@ -424,6 +426,7 @@ impl fmt::Display for SlContextVal {
                 Nil => write!(f, "()"),
                 Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
                 I64 => write!(f, "{}", i64_get(value)),
+                U32 => write!(f, "{}", u32_get(value)),
                 F64 => write!(f, "{}", f64_get(value)),
                 F32 => write!(f, "{}", f32_get(value)),
                 ErrCode => write!(f, "<err: {:?}>", errcode_get(value)),
