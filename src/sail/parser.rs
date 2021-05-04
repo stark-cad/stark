@@ -87,7 +87,12 @@ fn read_value(
         }
         b':' => {
             chars.next();
-            value = read_keyword(chars, acc, reg, tbl)?;
+            value = read_spec_sym(chars, acc, reg, tbl, SymbolMode::Keyword)?;
+            acc.clear();
+        }
+        b'$' => {
+            chars.next();
+            value = read_spec_sym(chars, acc, reg, tbl, SymbolMode::Type)?;
             acc.clear();
         }
         b'"' => {
@@ -279,11 +284,12 @@ fn read_symbol(
     Ok(sym)
 }
 
-fn read_keyword(
+fn read_spec_sym(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
+    mode: SymbolMode,
 ) -> Result<*mut SlHead, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
@@ -307,17 +313,17 @@ fn read_keyword(
         return Err(SlErrCode::ParseUnexpectedEnd);
     }
 
-    let key = unsafe {
+    let sym = unsafe {
         sym_init(
             reg,
             super::modeize_sym(
                 sym_tab_get_id(reg, tbl, str::from_utf8_unchecked(acc.as_slice())),
-                SymbolMode::Keyword,
+                mode,
             ),
         )
     };
 
-    Ok(key)
+    Ok(sym)
 }
 
 fn read_string(

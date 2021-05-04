@@ -147,13 +147,9 @@ enum_and_tryfrom! {
         B16Other = 0b10111100,
         VecStd = 0b11000000,
         VecStr = 0b11000100,
-        VecHash = 0b11001000,
+        VecArr = 0b11001000,
         VecAny = 0b11001100,
-        // VecB1 = 0b11000000,
-        // VecB2 = 0b11000100,
-        // VecB4 = 0b11001000,
-        // VecB8 = 0b11001100,
-        // VecB16 = 0b11010000,
+        VecHash = 0b11010000,
         VecOther = 0b11011100,
         ProcLambda = 0b11100000,
         ProcNative = 0b11100100,
@@ -219,8 +215,9 @@ pub enum CoreType {
     ErrCode,
     VecStd,
     VecStr,
-    VecHash,
+    VecArr,
     VecAny,
+    VecHash,
     ProcLambda,
     ProcNative,
 }
@@ -249,8 +246,9 @@ impl TryFrom<Cfg> for CoreType {
             Cfg::B16I128 => Ok(Self::I128),
             Cfg::VecStd => Ok(Self::VecStd),
             Cfg::VecStr => Ok(Self::VecStr),
-            Cfg::VecHash => Ok(Self::VecHash),
+            Cfg::VecArr => Ok(Self::VecArr),
             Cfg::VecAny => Ok(Self::VecAny),
+            Cfg::VecHash => Ok(Self::VecHash),
             Cfg::ProcLambda => Ok(Self::ProcLambda),
             Cfg::ProcNative => Ok(Self::ProcNative),
             _ => Err(()),
@@ -438,20 +436,53 @@ pub fn core_size(loc: *mut SlHead) -> usize {
             as usize),
         VecHash => vec_size(8, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }
             as usize),
+        VecArr => vec_size(
+            8,
+            temp_get_size(unsafe { read_field_unchecked::<u32>(loc, 0) }),
+            unsafe { read_field_unchecked::<u32>(loc, 4) } as usize,
+        ),
         VecAny => vec_size(
             12,
             temp_get_size(unsafe { read_field_unchecked::<u32>(loc, 0) }),
-            unsafe { read_field_unchecked::<u32>(loc, 1) } as usize,
+            unsafe { read_field_unchecked::<u32>(loc, 4) } as usize,
         ),
         ProcLambda => proc_lambda_size(unsafe { read_field_unchecked::<u16>(loc, 0) }),
         ProcNative => proc_native_size(),
     }
 }
 
-// a VecAny has head of type, capacity, size
+// a VecArr has head of type, length
+// a VecAny has head of type, capacity, length
 
-/// Gives the size of a limited range of types by type ID
-fn temp_get_size(typ: u32) -> usize {
+// TODO: the lack of a real type system needs to be rectified
+
+/// Identifies whether a given type ID refers to a base sized type
+pub fn temp_base_sized_p(typ: u32) -> bool {
+    match typ {
+        t if t == super::T_U8.0
+            || t == super::T_I8.0
+            || t == super::T_U16.0
+            || t == super::T_I16.0
+            || t == super::T_U32.0
+            || t == super::T_I32.0
+            || t == super::T_U64.0
+            || t == super::T_I64.0
+            || t == super::T_U128.0
+            || t == super::T_I128.0
+            || t == super::T_F32.0
+            || t == super::T_F64.0
+            || t == super::T_SYMBOL.0
+            || t == super::T_REF.0
+            || t == super::T_ERR.0 =>
+        {
+            true
+        }
+        _t => false,
+    }
+}
+
+/// Gives the size of a limited range of types (base sized) by type ID
+pub fn temp_get_size(typ: u32) -> usize {
     match typ {
         t if t == super::T_U8.0 => 1,
         t if t == super::T_I8.0 => 1,
@@ -470,6 +501,33 @@ fn temp_get_size(typ: u32) -> usize {
         t if t == super::T_ERR.0 => 2,
         _t => {
             panic!("type not allowed")
+        }
+    }
+}
+
+/// Initializes a Sail value from a base sized type and a pointer
+pub fn temp_init_from(reg: *mut Region, typ: u32, ptr: *const u8) -> *mut SlHead {
+    assert!(temp_base_sized_p(typ));
+    unsafe {
+        match typ {
+            t if t == super::T_U8.0 => u8_init(reg, ptr::read_unaligned(ptr)),
+            t if t == super::T_I8.0 => i8_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_U16.0 => u16_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_I16.0 => i16_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_U32.0 => u32_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_I32.0 => i32_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_U64.0 => u64_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_I64.0 => i64_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_U128.0 => u128_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_I128.0 => i128_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_F32.0 => f32_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_F64.0 => f64_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_SYMBOL.0 => sym_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_REF.0 => ref_init(reg, ptr::read_unaligned(ptr as *const _)),
+            t if t == super::T_ERR.0 => {
+                super::errcode_init(reg, ptr::read_unaligned(ptr as *const _))
+            }
+            _ => unreachable!(),
         }
     }
 }
@@ -573,10 +631,7 @@ pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(
 pub fn set_next_list_elt(loc: *mut SlHead, next: *mut SlHead) {
     unsafe {
         let head = ptr::read_unaligned(loc as *mut u16);
-        ptr::write_unaligned(
-            loc as *mut u64,
-            ((next as u64) << 16) + head as u64,
-        );
+        ptr::write_unaligned(loc as *mut u64, ((next as u64) << 16) + head as u64);
     }
 }
 

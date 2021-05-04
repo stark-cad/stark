@@ -105,6 +105,73 @@ fn errcode_get(loc: *mut SlHead) -> SlErrCode {
     SlErrCode::try_from(core_read_field::<u16>(loc, 0)).unwrap()
 }
 
+fn arrvec_make<T: SizedBase + Copy>(
+    reg: *mut memmgt::Region,
+    typ: u32,
+    len: u32,
+    fill: T,
+) -> *mut SlHead {
+    assert_eq!(temp_get_size(typ), mem::size_of::<T>());
+    unsafe {
+        let size = vec_size(8, temp_get_size(typ), len as usize);
+        let ptr = memmgt::alloc(reg, size, Cfg::VecArr as u8);
+
+        write_field_unchecked::<u32>(ptr, 0, typ);
+        write_field_unchecked::<u32>(ptr, 4, len);
+
+        for i in 0..len {
+            write_field_unchecked(ptr, 8 + (temp_get_size(typ) * i as usize), fill)
+        }
+
+        ptr
+    }
+}
+
+pub fn arrvec_init<T: SizedBase + Copy>(
+    reg: *mut memmgt::Region,
+    typ: u32,
+    len: u32,
+    val: &[T],
+) -> *mut SlHead {
+    assert_eq!(len, val.len() as u32);
+    assert_eq!(temp_get_size(typ), mem::size_of::<T>());
+
+    unsafe {
+        let size = vec_size(8, temp_get_size(typ), len as usize);
+        let ptr = memmgt::alloc(reg, size, Cfg::VecArr as u8);
+
+        write_field_unchecked::<u32>(ptr, 0, typ);
+        write_field_unchecked::<u32>(ptr, 4, len);
+
+        for (i, p) in val.iter().enumerate() {
+            write_field_unchecked(ptr, 8 + (temp_get_size(typ) * i), *p)
+        }
+
+        ptr
+    }
+}
+
+fn arrvec_get_typ(loc: *mut SlHead) -> u32 {
+    coretypck!(loc ; VecArr);
+    core_read_field(loc, 0)
+}
+
+fn arrvec_get_len(loc: *mut SlHead) -> u32 {
+    coretypck!(loc ; VecArr);
+    core_read_field(loc, 4)
+}
+
+pub fn arrvec_rplc<T: SizedBase + Copy>(loc: *mut SlHead, val: &[T]) {
+    let (len, typ) = (arrvec_get_len(loc), arrvec_get_typ(loc));
+
+    assert_eq!(len, val.len() as u32);
+    assert_eq!(temp_get_size(typ), mem::size_of::<T>());
+
+    for (i, p) in val.iter().enumerate() {
+        unsafe { write_field_unchecked(loc, 8 + (temp_get_size(typ) * i), *p) }
+    }
+}
+
 /// TODO: remember types that are parents / children of others
 /// TODO: types with children cannot be a self type
 /// TODO: these items must be added to the symtab and env on every run
@@ -594,7 +661,7 @@ macro_rules! sail_fn {
 sail_fn! {
     _reg _tbl _env ;
 
-    17 NATFNS
+    20 NATFNS
 
     "+" add 2 [fst, snd] {
         let out = i64_make(_reg);
@@ -711,7 +778,7 @@ sail_fn! {
     "vec-f32-set" vec_f32_set 3 [target, idx, val] {
         coretypck!(target ; VecAny);
         coretypck!(idx ; I64);
-        coretypck!(val; F32);
+        coretypck!(val ; F32);
         assert_eq!(core_read_field::<u32>(target, 0), T_F32.0);
 
         let len = core_read_field::<u32>(target, 8);
@@ -728,6 +795,71 @@ sail_fn! {
 
     "as-f32" as_f32 1 [val] {
         return f32_init(_reg, f64_get(val) as f32);
+    }
+
+    "arr-vec-make" arr_vec_make 3 [typ, len, init] {
+        coretypck!(typ ; Symbol);
+        coretypck!(len ; I64);
+
+        let typ = sym_get_id(typ);
+        let len = i64_get(len) as u32;
+
+        assert!(temp_base_sized_p(typ));
+        assert_eq!(typ, get_self_type(init));
+
+        unsafe {
+            let size = vec_size(8, temp_get_size(typ), len as usize);
+            let ptr = memmgt::alloc(_reg, size, Cfg::VecArr as u8);
+
+            write_field_unchecked::<u32>(ptr, 0, typ);
+            write_field_unchecked::<u32>(ptr, 4, len);
+
+            for i in 0..len {
+                ptr::copy_nonoverlapping(
+                    value_ptr(init),
+                    value_ptr(ptr).add(8 + (temp_get_size(typ) * i as usize)),
+                    temp_get_size(typ),
+                )
+            }
+
+            return ptr;
+        }
+
+    }
+
+    "arr-vec-get" arr_vec_get 2 [target, idx] {
+        coretypck!(target ; VecArr);
+        coretypck!(idx ; I64);
+        let typ = arrvec_get_typ(target);
+        assert!(temp_base_sized_p(typ));
+
+        let idx = i64_get(idx) as u32;
+        assert!(idx < arrvec_get_len(target));
+
+        return temp_init_from(_reg, typ, unsafe {
+            value_ptr(target).add(8 + (temp_get_size(typ) * idx as usize))
+        });
+    }
+
+    "arr-vec-set" arr_vec_set 3 [target, idx, val] {
+        coretypck!(target ; VecArr);
+        coretypck!(idx ; I64);
+        let typ = arrvec_get_typ(target);
+        assert!(temp_base_sized_p(typ));
+        assert_eq!(typ, get_self_type(val));
+
+        let idx = i64_get(idx) as u32;
+        assert!(idx < arrvec_get_len(target));
+
+        unsafe {
+            ptr::copy_nonoverlapping(
+                value_ptr(val),
+                value_ptr(target).add(8 + (temp_get_size(typ) * idx as usize)),
+                temp_get_size(typ),
+            )
+        }
+
+        return target;
     }
 
     "print" print 1 [arg] {
