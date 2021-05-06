@@ -59,58 +59,50 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_env: usize) {
     unsafe { sail::write_field_unchecked(frm_obj, 0, (&frame as *const _) as u64) };
     sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_FRAME.0, frm_obj);
 
-    fn cursor_vis(
-        _reg: *mut sail::memmgt::Region,
-        _tbl: *mut SlHead,
-        _env: *mut SlHead,
-        _args: &[*mut SlHead],
-    ) -> *mut SlHead {
-        let frm_ptr = _args[0];
-        assert_eq!(sail::get_cfg_spec(frm_ptr), sail::Cfg::B8Other);
-        let frame = unsafe { &*(sail::read_field_unchecked::<u64>(frm_ptr, 0) as *const Frame) };
+    sail_fn! {
+        let mngr_fns;
+        _reg _tbl _env;
 
-        frame.set_cursor_visible(sail::bool_get(_args[1]));
+        "cursor-vis" 2 [frm_ptr, vis] {
+            assert_eq!(sail::get_cfg_spec(frm_ptr), sail::Cfg::B8Other);
+            let frame = unsafe { &*(sail::read_field_unchecked::<u64>(frm_ptr, 0) as *const Frame) };
 
-        return sail::nil();
+            frame.set_cursor_visible(sail::bool_get(vis));
+
+            return sail::nil();
+
+        }
+
+        "cursor-pos" 5 [frm_ptr, w, h, x, y] {
+            assert_eq!(sail::get_cfg_spec(frm_ptr), sail::Cfg::B8Other);
+            let frame = unsafe { &*(sail::read_field_unchecked::<u64>(frm_ptr, 0) as *const Frame) };
+
+            assert_eq!(sail::core_type(w), Some(sail::CoreType::U32));
+            assert_eq!(sail::core_type(h), Some(sail::CoreType::U32));
+            assert_eq!(sail::core_type(x), Some(sail::CoreType::F32));
+            assert_eq!(sail::core_type(y), Some(sail::CoreType::F32));
+
+            let (w, h, x, y) = (
+                sail::u32_get(w),
+                sail::u32_get(h),
+                sail::f32_get(x),
+                sail::f32_get(y),
+            );
+
+            frame
+                .set_cursor_position(winit::dpi::Position::Physical(
+                    winit::dpi::PhysicalPosition {
+                        x: ((x + 1.0) * (w / 2) as f32) as i32,
+                        y: ((y + 1.0) * (h / 2) as f32) as i32,
+                    },
+                ))
+                .unwrap();
+
+            return sail::nil();
+        }
     }
 
-    fn cursor_pos(
-        _reg: *mut sail::memmgt::Region,
-        _tbl: *mut SlHead,
-        _env: *mut SlHead,
-        _args: &[*mut SlHead],
-    ) -> *mut SlHead {
-        let frm_ptr = _args[0];
-        assert_eq!(sail::get_cfg_spec(frm_ptr), sail::Cfg::B8Other);
-        let frame = unsafe { &*(sail::read_field_unchecked::<u64>(frm_ptr, 0) as *const Frame) };
-
-        let (w, h, x, y) = (_args[1], _args[2], _args[3], _args[4]);
-        assert_eq!(sail::core_type(w), Some(sail::CoreType::U32));
-        assert_eq!(sail::core_type(h), Some(sail::CoreType::U32));
-        assert_eq!(sail::core_type(x), Some(sail::CoreType::F32));
-        assert_eq!(sail::core_type(y), Some(sail::CoreType::F32));
-
-        let (w, h, x, y) = (
-            sail::u32_get(w),
-            sail::u32_get(h),
-            sail::f32_get(x),
-            sail::f32_get(y),
-        );
-
-        frame
-            .set_cursor_position(winit::dpi::Position::Physical(
-                winit::dpi::PhysicalPosition {
-                    x: ((x + 1.0) * (w / 2) as f32) as i32,
-                    y: ((y + 1.0) * (h / 2) as f32) as i32,
-                },
-            ))
-            .unwrap();
-
-        return sail::nil();
-    }
-
-    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "cursor-vis", cursor_vis, 2);
-    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "cursor-pos", cursor_pos, 5);
+    sail::insert_native_procs(sl_reg, sl_tbl, sl_env, mngr_fns);
 
     let prog_txt = &std::fs::read_to_string("scripts/main.sl").unwrap();
     let prog_expr = sail::parser::parse(sl_reg, sl_tbl, prog_txt).unwrap();

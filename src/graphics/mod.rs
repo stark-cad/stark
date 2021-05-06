@@ -89,140 +89,102 @@ pub fn render_loop(
     unsafe { sail::write_field_unchecked(eng_obj, 0, (&mut engine as *mut _) as u64) };
     sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_ENGINE.0, eng_obj);
 
-    fn redraw(
-        _reg: *mut sail::memmgt::Region,
-        _tbl: *mut SlHead,
-        _env: *mut SlHead,
-        _args: &[*mut SlHead],
-    ) -> *mut SlHead {
-        let eng_ptr = _args[0];
-        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
-        let engine = unsafe {
-            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
-        };
+    crate::sail_fn! {
+        let rndr_fns;
+        _reg _tbl _env;
 
-        engine.draw_frame();
+        "redraw" 1 [eng_ptr] {
+            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            let engine = unsafe {
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+            };
 
-        return sail::nil();
-    }
+            engine.draw_frame();
 
-    fn frame_size(
-        _reg: *mut sail::memmgt::Region,
-        _tbl: *mut SlHead,
-        _env: *mut SlHead,
-        _args: &[*mut SlHead],
-    ) -> *mut SlHead {
-        let eng_ptr = _args[0];
-        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
-        let engine = unsafe {
-            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
-        };
-
-        let w = sail::u32_get(_args[1]);
-        let h = sail::u32_get(_args[2]);
-
-        engine.state.set_extent(w, h);
-        engine.should_configure_swapchain = true;
-
-        return sail::nil();
-    }
-
-    fn add_line(
-        _reg: *mut sail::memmgt::Region,
-        _tbl: *mut SlHead,
-        _env: *mut SlHead,
-        _args: &[*mut SlHead],
-    ) -> *mut SlHead {
-        let eng_ptr = _args[0];
-        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
-        let engine = unsafe {
-            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
-        };
-
-        let points = _args[1];
-        assert_eq!(sail::core_type(points), Some(sail::CoreType::VecArr));
-        assert_eq!(sail::core_read_field::<u32>(points, 0), sail::T_F32.0);
-
-        let colors = _args[2];
-        assert_eq!(sail::core_type(points), Some(sail::CoreType::VecArr));
-        assert_eq!(sail::core_read_field::<u32>(points, 0), sail::T_F32.0);
-
-        unsafe {
-            let ln = std::ptr::read_unaligned::<[f32; 4]>(sail::value_ptr(points).add(8) as *mut _);
-            engine.lines.push(ln);
-
-            let cl = std::ptr::read_unaligned::<[f32; 3]>(sail::value_ptr(colors).add(8) as *mut _);
-            engine.colors.push(cl);
+            return sail::nil();
         }
 
-        engine.buffer_size_check();
+        "frame-size" 3 [eng_ptr, w, h] {
+            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            let engine = unsafe {
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+            };
 
-        return sail::nil();
+            let w = sail::u32_get(w);
+            let h = sail::u32_get(h);
+
+            engine.state.set_extent(w, h);
+            engine.should_configure_swapchain = true;
+
+            return sail::nil();
+        }
+
+        "add-line" 3 [eng_ptr, points, colors] {
+            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            let engine = unsafe {
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+            };
+
+            assert_eq!(sail::core_type(points), Some(sail::CoreType::VecArr));
+            assert_eq!(sail::core_read_field::<u32>(points, 0), sail::T_F32.0);
+
+            assert_eq!(sail::core_type(colors), Some(sail::CoreType::VecArr));
+            assert_eq!(sail::core_read_field::<u32>(colors, 0), sail::T_F32.0);
+
+            unsafe {
+                let ln = std::ptr::read_unaligned::<[f32; 4]>(sail::value_ptr(points).add(8) as *mut _);
+                engine.lines.push(ln);
+
+                let cl = std::ptr::read_unaligned::<[f32; 3]>(sail::value_ptr(colors).add(8) as *mut _);
+                engine.colors.push(cl);
+            }
+
+            engine.buffer_size_check();
+
+            return sail::nil();
+        }
+
+        "pop-line" 1 [eng_ptr] {
+            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            let engine = unsafe {
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+            };
+
+            engine.lines.pop();
+            engine.colors.pop();
+
+            return sail::nil();
+        }
+
+        "bg-col" 4 [eng_ptr, r, g, b] {
+            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            let engine = unsafe {
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+            };
+
+            engine.set_clear([
+                sail::f32_get(r),
+                sail::f32_get(g),
+                sail::f32_get(b),
+                1.0,
+            ]);
+
+            return sail::nil();
+        }
+
+        "clear" 1 [eng_ptr] {
+            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            let engine = unsafe {
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
+            };
+
+            engine.empty_lines();
+
+            return sail::nil();
+        }
     }
 
-    fn pop_line(
-        _reg: *mut sail::memmgt::Region,
-        _tbl: *mut SlHead,
-        _env: *mut SlHead,
-        _args: &[*mut SlHead],
-    ) -> *mut SlHead {
-        let eng_ptr = _args[0];
-        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
-        let engine = unsafe {
-            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
-        };
-
-        engine.lines.pop();
-        engine.colors.pop();
-
-        return sail::nil();
-    }
-
-    fn bg_col(
-        _reg: *mut sail::memmgt::Region,
-        _tbl: *mut SlHead,
-        _env: *mut SlHead,
-        _args: &[*mut SlHead],
-    ) -> *mut SlHead {
-        let eng_ptr = _args[0];
-        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
-        let engine = unsafe {
-            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
-        };
-
-        engine.set_clear([
-            sail::f32_get(_args[1]),
-            sail::f32_get(_args[2]),
-            sail::f32_get(_args[3]),
-            1.0,
-        ]);
-
-        return sail::nil();
-    }
-
-    fn clear(
-        _reg: *mut sail::memmgt::Region,
-        _tbl: *mut SlHead,
-        _env: *mut SlHead,
-        _args: &[*mut SlHead],
-    ) -> *mut SlHead {
-        let eng_ptr = _args[0];
-        assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
-        let engine = unsafe {
-            &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine<backend::Backend>)
-        };
-
-        engine.empty_lines();
-
-        return sail::nil();
-    }
-
-    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "redraw", redraw, 1);
-    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "frame-size", frame_size, 3);
-    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "add-line", add_line, 3);
-    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "pop-line", pop_line, 1);
-    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "bg-col", bg_col, 4);
-    sail::insert_native_proc(sl_reg, sl_tbl, sl_env, "clear", clear, 1);
+    sail::insert_native_procs(sl_reg, sl_tbl, sl_env, rndr_fns);
 
     engine.setup();
     engine.set_clear([1.0, 1.0, 1.0, 1.0]);
