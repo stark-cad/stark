@@ -174,7 +174,6 @@ pub fn arrvec_rplc<T: SizedBase + Copy>(loc: *mut SlHead, val: &[T]) {
 }
 
 /// TODO: remember types that are parents / children of others
-/// TODO: types with children cannot be a self type
 /// TODO: these items must be added to the symtab and env on every run
 /// TODO: remember to have a bitvec type
 /// TODO: use a script to automatically generate a Rust "env" file
@@ -252,23 +251,10 @@ incl_symbols! {
     60 K_CX_KEY_B    "cx-kb-b" Keyword;
     61 K_CX_KEY_L    "cx-kb-l" Keyword;
     62 K_CX_KEY_S    "cx-kb-s" Keyword;
-    63 K_CX_KEY_E    "cx-kb-e" Keyword
-    64
-}
-
-/// Set a symbol to one of the four symbol modes
-const fn modeize_sym(sym: u32, mode: SymbolMode) -> u32 {
-    (sym & 0x3FFFFFFF) + ((mode as u32) << 30)
-}
-
-/// Returns a symbol set to the default, basic mode
-const fn demodes_sym(sym: u32) -> u32 {
-    sym & 0x3FFFFFFF
-}
-
-/// Get the mode of a symbol
-const fn mode_of_sym(sym: u32) -> SymbolMode {
-    unsafe { mem::transmute::<u8, SymbolMode>((sym >> 30) as u8) }
+    63 K_CX_KEY_E    "cx-kb-e" Keyword;
+    64 K_CX_KEY_K    "cx-kb-k" Keyword;
+    65 K_CX_KEY_M    "cx-kb-m" Keyword
+    66
 }
 
 // TODO: MINIMIZE the use of *pub* and *unsafe* functions
@@ -341,18 +327,7 @@ fn get_pred_type(loc: *mut SlHead) -> u32 {
 //         B16 => 16,
 //         _ => match core_type(loc) {
 //             Some(_) => core_size(loc),
-//             None => {
-//                 let entry = env_lookup_by_id(reg, env, get_self_type(loc));
-//                 let entry_type = get_self_type(entry);
-
-//                 if entry_type == T_U64.0 {
-//                     return u64_get(entry) as usize;
-//                 } else if entry_type == T_PROC_LAMBDA.0 || entry_type == T_PROC_NATIVE.0 {
-//                     u64_get(apply(reg, tbl, env, entry, loc).unwrap()) as usize
-//                 } else {
-//                     panic!("wrong type in type entry")
-//                 }
-//             }
+//             None => {}
 //         },
 //     }
 // }
@@ -553,7 +528,7 @@ pub fn repl(stream_in: std::io::Stdin) {
         let expr = match parser::parse(region, tbl, &input) {
             Ok(out) => out,
             Err(err) => {
-                println!("{:?}", err);
+                println!("{:?}\n", err);
                 continue;
             }
         };

@@ -71,8 +71,6 @@ pub fn run_loop<Ij: 'static>(
                 buffer.clear();
                 std::io::stdin().read_line(&mut buffer).unwrap();
 
-                // println!("Got: {}", buffer);
-
                 let strin = sail::string_init(sl_reg, &buffer);
                 let shell = sail::sym_init(sl_reg, sail::K_CX_SHELL.0);
 
@@ -98,7 +96,8 @@ pub fn run_loop<Ij: 'static>(
     // much simpler
 
     let mut frame_dims: [u32; 2] = [0, 0];
-    let mut vk_cursor_pos: [f32; 2] = [0.0, 0.0];
+
+    let mut focus = false;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -113,18 +112,26 @@ pub fn run_loop<Ij: 'static>(
                 sail::queue::queue_tx(rndr_tx, redrw);
             }
 
+            Event::RedrawEventsCleared => {
+                // let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
+                // sail::queue::queue_tx(rndr_tx, redrw);
+            }
+
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
                     *control_flow = ControlFlow::Exit;
 
                     let destr = sail::sym_init(sl_reg, sail::K_CX_DESTR.0);
 
-                    sail::queue::queue_tx(main_tx, destr);
                     sail::queue::queue_tx(rndr_tx, destr);
+                    sail::queue::queue_tx(main_tx, destr);
+                }
+                WindowEvent::Focused(f) => {
+                    focus = f;
                 }
                 WindowEvent::Resized(dims) => {
                     frame_dims = [dims.width, dims.height];
-                    sail::arrvec_rplc(fr_dims, &frame_dims[..]);
+                    sail::arrvec_rplc(fr_dims, &[dims.width, dims.height]);
 
                     let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
                     sail::queue::queue_tx(rndr_tx, resiz);
@@ -134,7 +141,7 @@ pub fn run_loop<Ij: 'static>(
                     ..
                 } => {
                     frame_dims = [dims.width, dims.height];
-                    sail::arrvec_rplc(fr_dims, &frame_dims[..]);
+                    sail::arrvec_rplc(fr_dims, &[dims.width, dims.height]);
 
                     let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
                     sail::queue::queue_tx(rndr_tx, resiz);
@@ -149,14 +156,10 @@ pub fn run_loop<Ij: 'static>(
                     position: dpi::PhysicalPosition { x, y },
                     ..
                 } => {
-                    // TODO: add tracking line that shows next line position
-
-                    vk_cursor_pos = [
+                    sail::arrvec_rplc(cur_pos, &[
                         (x / (frame_dims[0] / 2) as f64 - 1.0) as f32,
                         (y / (frame_dims[1] / 2) as f64 - 1.0) as f32,
-                    ];
-
-                    sail::arrvec_rplc(cur_pos, &vk_cursor_pos[..]);
+                    ]);
 
                     let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
                     sail::queue::queue_tx(rndr_tx, redrw);
@@ -171,9 +174,7 @@ pub fn run_loop<Ij: 'static>(
                     virtual_keycode,
                     ..
                 }) => {
-                    // TODO: full keyboard input based line drawing
-
-                    if state == ElementState::Pressed {
+                    if focus && state == ElementState::Pressed {
                         match virtual_keycode {
                             Some(VirtualKeyCode::U) => {
                                 // move up
@@ -209,6 +210,16 @@ pub fn run_loop<Ij: 'static>(
                                 // escape line in progress
                                 let key_e = sail::sym_init(sl_reg, sail::K_CX_KEY_E.0);
                                 sail::queue::queue_tx(main_tx, key_e);
+                            }
+                            Some(VirtualKeyCode::K) => {
+                                // kill last line drawn
+                                let key_k = sail::sym_init(sl_reg, sail::K_CX_KEY_K.0);
+                                sail::queue::queue_tx(main_tx, key_k);
+                            }
+                            Some(VirtualKeyCode::M) => {
+                                // switch drawing mode
+                                let key_m = sail::sym_init(sl_reg, sail::K_CX_KEY_M.0);
+                                sail::queue::queue_tx(main_tx, key_m);
                             }
                             Some(VirtualKeyCode::Space) => {
                                 // enter the point

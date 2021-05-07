@@ -129,7 +129,7 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_env: usize) {
         stack.iter_once(sl_reg, sl_tbl);
 
         if stack.is_empty() {
-            println!("manager thread broke");
+            println!("manager thread ended");
             break;
         }
     }

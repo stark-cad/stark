@@ -279,13 +279,27 @@ pub fn nil_p(loc: *mut SlHead) -> bool {
     loc.is_null()
 }
 
-// #[inline(always)]
 // pub fn atom_p(loc: *mut SlHead) -> bool {
 //     match core_type(loc) {
 //         Some(t) if t != CoreType::Ref => true,
 //         _ => false,
 //     }
 // }
+
+/// Set a symbol to one of the four symbol modes
+pub const fn modeize_sym(sym: u32, mode: SymbolMode) -> u32 {
+    (sym & 0x3FFFFFFF) + ((mode as u32) << 30)
+}
+
+/// Returns a symbol set to the default, basic mode
+pub const fn demodes_sym(sym: u32) -> u32 {
+    sym & 0x3FFFFFFF
+}
+
+/// Get the mode of a symbol
+pub const fn mode_of_sym(sym: u32) -> SymbolMode {
+    unsafe { mem::transmute::<u8, SymbolMode>((sym >> 30) as u8) }
+}
 
 /// Checks whether a Sail value is a reference to another non-nil value
 #[inline(always)]
@@ -307,8 +321,8 @@ pub fn nnil_ref_p(loc: *mut SlHead) -> bool {
 pub fn basic_sym_p(loc: *mut SlHead) -> bool {
     match core_type(loc) {
         Some(t) if t == CoreType::Symbol => {
-            if super::mode_of_sym(sym_get_id(loc)) == SymbolMode::Basic {
-                true
+            if mode_of_sym(sym_get_id(loc)) == SymbolMode::Basic {
+               true
             } else {
                 false
             }
@@ -327,7 +341,6 @@ pub fn proc_p(loc: *mut SlHead) -> bool {
 }
 
 // no longer relevant
-// #[inline(always)]
 // pub fn list_elt_p(loc: *mut SlHead) -> bool {
 //     (get_cfg_all(loc) & 0b00000010) != 0
 // }
@@ -615,7 +628,6 @@ pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(
 }
 
 // irrelevant
-// #[inline(always)]
 // fn set_list_elt_bit(loc: *mut SlHead, elt: bool) {
 //     let old = get_cfg_all(loc);
 //     let new = if elt {
@@ -789,7 +801,6 @@ pub fn proc_native_make(reg: *mut Region, argct: u16) -> *mut SlHead {
     }
 }
 
-// TODO: should functions like this check for correct type?
 /// TODO: this implementation will **easily** cause memory leaks
 /// TODO: decrement the reference count of previously held value
 #[inline(always)]
@@ -989,11 +1000,9 @@ pub fn hash_map_insert(reg: *mut Region, loc: *mut SlHead, key: *mut SlHead, val
 // fn alist_map_insert(reg: *mut Region, loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
 //     let entry = core_cons_copy(reg, key, val);
 //     let next = core_read_field(loc, 0);
-
 //     if !nil_p(next) {
 //         set_next_list_elt(entry, next);
 //     }
-
 //     core_write_field(loc, 0, entry)
 // }
 
@@ -1012,7 +1021,6 @@ pub fn hash_map_insert(reg: *mut Region, loc: *mut SlHead, key: *mut SlHead, val
 
 // fn alist_search(head: *mut SlHead, target: *mut SlHead) -> *mut SlHead {
 //     let mut pos = head;
-
 //     loop {
 //         if nil_p(pos) {
 //             return nil();
@@ -1110,7 +1118,6 @@ fn core_cons_copy(reg: *mut Region, car: *mut SlHead, cdr: *mut SlHead) -> *mut 
 // **********************************************************
 
 // /// Returns the first element of the provided list
-// #[inline(always)]
 // pub fn car(loc: *mut SlHead) -> *mut SlHead {
 //     if nil_p(loc) {
 //         nil()
@@ -1121,8 +1128,7 @@ fn core_cons_copy(reg: *mut Region, car: *mut SlHead, cdr: *mut SlHead) -> *mut 
 //     }
 // }
 
-// /// Returns the list of elements following the first element of the provided list
-// #[inline(always)]
+// /// Returns list of elements following the first element of the provided list
 // pub fn cdr(loc: *mut SlHead) -> *mut SlHead {
 //     if coretypp!(loc ; Ref) {
 //         get_next_list_elt(ref_get(loc))

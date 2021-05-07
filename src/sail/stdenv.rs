@@ -171,6 +171,18 @@ sail_fn! {
         return out;
     }
 
+    "neg" 1 [val] {
+        match core_type(val).expect("type invalid") {
+            CoreType::I64 => {
+                return i64_init(_reg, -i64_get(val));
+            }
+            CoreType::F32 => {
+                return f32_init(_reg, -f32_get(val));
+            }
+            _ => panic!("type invalid for div"),
+        }
+    }
+
     "=" 2 [fst, snd] {
         // let out = init_bool(reg);
         let result = i64_get(fst) == i64_get(snd);

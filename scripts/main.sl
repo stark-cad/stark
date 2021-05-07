@@ -49,14 +49,23 @@
 
 (def lines-clear (fn [] (qtx mr-send :clear)))
 
-(def line-add-f32 (fn [x1 y1 x2 y2]
-                      (qtx mr-send :line)
+(def line-f32 (fn [x1 y1 x2 y2]
+                      (qtx mr-send :line-add)
                       (qtx mr-send x1) (qtx mr-send y1)
                       (qtx mr-send x2) (qtx mr-send y2)))
 
-(def line-add (fn [x1 y1 x2 y2]
-                  (line-add-f32 (as-f32 x1) (as-f32 y1)
-                                (as-f32 x2) (as-f32 y2))))
+(def rect-f32 (fn [x1 y1 x2 y2]
+                  (line-f32 x1 y1 x2 y1)
+                  (line-f32 x1 y1 x1 y2)
+                  (line-f32 x2 y2 x1 y2)
+                  (line-f32 x2 y2 x2 y1)))
+
+(def draw-fn line-f32)
+
+; Draw function for REPL use
+(def draw (fn [x1 y1 x2 y2]
+              (draw-fn (as-f32 x1) (as-f32 y1)
+                       (as-f32 x2) (as-f32 y2))))
 
 (def step (as-f32 0.0625))
 
@@ -72,8 +81,8 @@
        (if (eq input :cx-rcrd) (do
            (if drawing (do
                (set drawing #F)
-               (line-add-f32 (arr-vec-get point 0) (arr-vec-get point 1)
-                             (arr-vec-get cur-pos 0) (arr-vec-get cur-pos 1)))
+               (draw-fn (arr-vec-get point 0) (arr-vec-get point 1)
+                        (arr-vec-get cur-pos 0) (arr-vec-get cur-pos 1)))
            (do (set drawing #T)
                (arr-vec-set point 0 (arr-vec-get cur-pos 0))
                (arr-vec-set point 1 (arr-vec-get cur-pos 1)))))
@@ -82,16 +91,20 @@
            (do (print (eval (parse (get-q-next cm-recv)))))
 
        (if (eq input :cx-kb-u)
-           (do (cur-pos-mod - (as-f32 0.0) step))
+           (do (cur-pos-mod - (as-f32 0.0) step)
+               (qtx mr-send :redraw))
 
        (if (eq input :cx-kb-d)
-           (do (cur-pos-mod + (as-f32 0.0) step))
+           (do (cur-pos-mod + (as-f32 0.0) step)
+               (qtx mr-send :redraw))
 
        (if (eq input :cx-kb-f)
-           (do (cur-pos-mod + step (as-f32 0.0)))
+           (do (cur-pos-mod + step (as-f32 0.0))
+               (qtx mr-send :redraw))
 
        (if (eq input :cx-kb-b)
-           (do (cur-pos-mod - step (as-f32 0.0)))
+           (do (cur-pos-mod - step (as-f32 0.0))
+               (qtx mr-send :redraw))
 
        (if (eq input :cx-kb-l)
            (do (set step (* step (as-f32 2.0))))
@@ -105,7 +118,15 @@
                (qtx mr-send :redraw)
                (qtx mr-send :redraw))
 
-       ())))))))))))
+       (if (eq input :cx-kb-k)
+           (do (qtx mr-send :line-pop))
+
+       (if (eq input :cx-kb-m)
+           (do (if (eq draw-fn line-f32)
+                   (set draw-fn rect-f32)
+                   (set draw-fn line-f32)))
+
+       ())))))))))))))
 
 (print "main end")
 

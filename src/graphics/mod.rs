@@ -52,8 +52,6 @@ use gfx_hal::{
     Instance, MemoryTypeId,
 };
 
-use log::debug;
-
 use std::borrow::Borrow;
 use std::iter;
 use std::mem::size_of;
@@ -131,15 +129,14 @@ pub fn render_loop(
             assert_eq!(sail::core_type(colors), Some(sail::CoreType::VecArr));
             assert_eq!(sail::core_read_field::<u32>(colors, 0), sail::T_F32.0);
 
-            unsafe {
-                let ln = std::ptr::read_unaligned::<[f32; 4]>(sail::value_ptr(points).add(8) as *mut _);
-                engine.lines.push(ln);
+            let (ln, cl) = unsafe {
+                (
+                    std::ptr::read_unaligned::<[f32; 4]>(sail::value_ptr(points).add(8) as *mut _),
+                    std::ptr::read_unaligned::<[f32; 3]>(sail::value_ptr(colors).add(8) as *mut _)
+                )
+            };
 
-                let cl = std::ptr::read_unaligned::<[f32; 3]>(sail::value_ptr(colors).add(8) as *mut _);
-                engine.colors.push(cl);
-            }
-
-            engine.buffer_size_check();
+            engine.add_line(ln, cl);
 
             return sail::nil();
         }
@@ -220,7 +217,7 @@ pub fn render_loop(
         stack.iter_once(sl_reg, sl_tbl);
 
         if stack.is_empty() {
-            println!("render thread broke");
+            println!("render thread ended");
             break;
         }
     }
@@ -358,10 +355,14 @@ impl<B: gfx_hal::Backend> Engine<B> {
             {
                 Ok((image, _)) => image,
                 Err(gfx_hal::window::AcquireError::OutOfDate(_)) => {
-                    // TODO: this error is common and must be handled
-                    panic!("swapchain out of date again")
+                    self.should_configure_swapchain = true;
+                    return;
                 }
-                Err(_) => panic!("could not acquire image"),
+                Err(_) => {
+                    return;
+                }
+                // TODO: these errors must be handled
+                // Err(err) => panic!("{:?}", err),
             }
         };
 
@@ -372,14 +373,7 @@ impl<B: gfx_hal::Backend> Engine<B> {
                 let mapped_memory = self
                     .state
                     .device
-                    .map_memory(
-                        &mut self.state.vertex_memory[0],
-                        Segment::ALL,
-                        // Segment {
-                        //     offset: 0,
-                        //     size: Some(line_vec_size as u64),
-                        // },
-                    )
+                    .map_memory(&mut self.state.vertex_memory[0], Segment::ALL)
                     .unwrap();
 
                 std::ptr::copy_nonoverlapping(
@@ -393,10 +387,6 @@ impl<B: gfx_hal::Backend> Engine<B> {
                     .flush_mapped_memory_ranges(iter::once((
                         &self.state.vertex_memory[0],
                         Segment::ALL,
-                        // Segment {
-                        //     offset: 0,
-                        //     size: Some(line_vec_size as u64),
-                        // },
                     )))
                     .unwrap();
 
@@ -476,14 +466,19 @@ impl<B: gfx_hal::Backend> Engine<B> {
                 self.state.submission_complete_fence.as_mut(),
             );
 
-            // TODO: out of date errors are appearing here too
-            self.state.queue_group.queues[0]
-                .present(
-                    self.state.surface.as_mut().unwrap(),
-                    surface_image,
-                    self.state.rendering_complete_semaphore.as_mut(),
-                )
-                .unwrap();
+            // TODO: handle possible errors here
+            match self.state.queue_group.queues[0].present(
+                self.state.surface.as_mut().unwrap(),
+                surface_image,
+                self.state.rendering_complete_semaphore.as_mut(),
+            ) {
+                Ok(_) => (),
+                Err(gfx_hal::window::PresentError::OutOfDate(_)) => {
+                    self.should_configure_swapchain = true;
+                    return;
+                }
+                Err(err) => panic!("{:?}", err),
+            }
         }
     }
 }
@@ -632,7 +627,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
     pub fn draw_triangle_frame(&mut self, triangle: Triangle) -> Result<(), &str> {
         let timeout_ns = 1_000_000_000;
 
-        // debug!("Drawing triangle frame with points: {:?}", triangle);
+        // log::debug!("Drawing triangle frame with points: {:?}", triangle);
 
         unsafe {
             self.device
@@ -642,7 +637,6 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
                 .reset_fence(self.submission_complete_fence.as_mut().unwrap())
                 .unwrap();
 
-            // TODO: just reset command buffer instead?
             self.command_pool.as_mut().unwrap().reset(false);
         }
 
@@ -656,7 +650,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         unsafe {
             const XY_TRI_SIZE: usize = (size_of::<f32>() * 2 * 3) as usize;
 
-            // debug!("Mem size: {}", XY_TRI_SIZE);
+            // log::debug!("Mem size: {}", XY_TRI_SIZE);
 
             let mapped_memory = self
                 .device
@@ -665,7 +659,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
 
             let points = triangle.points_flat();
 
-            // debug!("Points: {:?}", points);
+            // log::debug!("Points: {:?}", points);
 
             std::ptr::copy_nonoverlapping(points.as_ptr() as *const u8, mapped_memory, XY_TRI_SIZE);
 
@@ -899,7 +893,7 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
             .map(|(id, _ty)| MemoryTypeId(id))
             .unwrap();
 
-        debug!("Buffer size: {}", req.size);
+        // log::debug!("Buffer size: {}", req.size);
 
         let buffer_memory = self.device.allocate_memory(memory_type, req.size).unwrap();
 
@@ -1012,13 +1006,6 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
             mask: ColorMask::ALL,
             blend: Some(BlendState::ALPHA),
         });
-
-        // pipeline_desc.baked_states.viewport = Some(Viewport {
-        //     rect: self.surface_extent.to_extent().rect(),
-        //     depth: 0.0..1.0,
-        // });
-
-        // pipeline_desc.baked_states.scissor = Some(self.surface_extent.to_extent().rect());
 
         let pipeline = self
             .device

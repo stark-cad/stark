@@ -17,7 +17,6 @@
 use super::{core::*, memmgt, SlHead};
 
 // TODO: global identifiers for queues?
-
 // TODO: take action to avoid the "ABA problem"
 
 // TODO: repurpose refcount as ABA problem avoidance count while in
@@ -120,9 +119,15 @@ pub fn queue_rx(loc: *mut SlHead) -> *mut SlHead {
                     // if the head isn't nil, shift the tail down the queue
                     write_field_cmpxcg_unchecked(sender, 0, tail, head);
                 } else {
+                    if nil_p(head) {
+                        log::debug!("a queue head was nil");
+                        write_field_cmpxcg_unchecked(loc, 0, head, tail);
+                        continue;
+                    }
+
                     let next = get_next_list_elt(head);
 
-                    // if next element up is not null, just attempt to advance to the next node
+                    // if next element up is not nil, just attempt to advance to the next node
                     // otherwise, try to make the receiver the list tail, then attempt to advance
                     if (!nil_p(next) || write_field_cmpxcg_unchecked(sender, 0, tail, loc))
                         && write_field_cmpxcg_unchecked(loc, 0, head, next)

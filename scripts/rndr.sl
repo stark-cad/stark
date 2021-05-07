@@ -48,22 +48,8 @@
 
                    (if track (do (pop-line engine) (set track #F)) ()))
 
-       (set c-input (qrx cr-recv))
-       (if (eq c-input :cx-dstr)
-       (do
-           (print "destroying render")
-           (set alive #F))
-
-       (if (eq c-input :cx-resz)
-           (do (frame-size engine (arr-vec-get fr-dims 0) (arr-vec-get fr-dims 1)))
-
-       (if (eq c-input :cx-rdrw)
-           (do (redraw engine))
-
-       ())))
-
        (set m-input (qrx mr-recv))
-       (if (eq m-input :line)
+       (if (eq m-input :line-add)
            (do (if track (do (pop-line engine) (set track #F)) ())
                (arr-vec-set line 0 (get-q-next mr-recv))
                (arr-vec-set line 1 (get-q-next mr-recv))
@@ -71,6 +57,9 @@
                (arr-vec-set line 3 (get-q-next mr-recv))
                (add-line engine line line-col)
                (redraw engine))
+
+       (if (eq m-input :line-pop)
+           (do (pop-line engine) (redraw engine))
 
        (if (eq m-input :line-col)
            (do (arr-vec-set line-col 0 (get-q-next mr-recv))
@@ -92,6 +81,21 @@
            (do (redraw engine))
 
        ()))))))
+
+       (set c-input (qrx cr-recv))
+       (if (eq c-input :cx-dstr)
+       (do
+           (print "destroying render")
+           (set alive #F))
+
+       (if (eq c-input :cx-resz)
+           (do (frame-size engine (arr-vec-get fr-dims 0) (arr-vec-get fr-dims 1)))
+
+       (if (eq c-input :cx-rdrw)
+           (do (redraw engine))
+
+       ())))
+       )
 
 (print "render end")
 
