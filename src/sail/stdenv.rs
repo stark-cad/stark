@@ -17,6 +17,14 @@
 
 use super::{core::*, memmgt};
 
+/// Generates a slice of native Sail function pointers along with
+/// names and argument counts
+///
+/// This may be a constant or may be local to a Rust scope. The syntax
+/// used is quite similar to that of regular functions but eases
+/// access to arguments in the body. All native functions must return
+/// a valid Sail object.
+///
 /// TODO: type checks and variable length arglists for native functions
 /// TODO: generate these functions somehow else if macros won't cut it
 #[macro_export]

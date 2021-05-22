@@ -39,6 +39,7 @@ pub struct EvalStack {
 }
 
 impl EvalStack {
+    /// Create and initialize a new Sail stack and associated memory
     pub fn new(size: usize) -> Self {
         let size_bytes = size * 8;
         unsafe {
@@ -55,6 +56,7 @@ impl EvalStack {
         }
     }
 
+    /// Resize the stack, acquiring new memory if necessary
     fn resize(&mut self, size: usize) {
         let size_bytes = size * 8;
         let old_start = self.stack_start as usize;
@@ -101,6 +103,8 @@ impl EvalStack {
         self.frame_start = new_frame;
     }
 
+    /// Pushes a single word to the stack, which will always be a
+    /// pointer to a Sail object
     #[inline(always)]
     pub fn push(&mut self, word: *mut SlHead) {
         if cfg!(feature = "stkdbg") {
@@ -124,6 +128,7 @@ impl EvalStack {
         }
     }
 
+    /// Pops a single word off the stack
     #[inline(always)]
     fn pop(&mut self) {
         if cfg!(feature = "stkdbg") {
@@ -142,6 +147,12 @@ impl EvalStack {
         }
     }
 
+    /// Push a complete frame head onto the stack
+    ///
+    /// Components:
+    /// - `ret`: return address for this frame's result
+    /// - `opc`: opcode which dictates this frame's format & behavior
+    /// - `env`: environment containing bindings for this frame
     #[inline(always)]
     pub fn push_frame_head(&mut self, mut ret: *mut *mut SlHead, opc: Opcode, env: *mut SlHead) {
         if cfg!(feature = "stkdbg") {
@@ -178,6 +189,7 @@ impl EvalStack {
         }
     }
 
+    /// Pop a full frame off of the stack
     #[inline(always)]
     fn pop_frame(&mut self) {
         if cfg!(feature = "stkdbg") {
@@ -199,6 +211,7 @@ impl EvalStack {
     }
 
     /// Starts evaluating a Sail expression with an external return location
+    ///
     /// Returns false and does nothing if the stack is already in use
     pub fn start(&mut self, ret: *mut *mut SlHead, env: *mut SlHead, expr: *mut SlHead) -> bool {
         if !self.is_empty() {
@@ -210,6 +223,7 @@ impl EvalStack {
     }
 
     /// Starts evaluating a Sail expression that will not return outside the stack
+    ///
     /// Works even when other expressions are evaluating on the stack
     ///
     /// **Warning**:
@@ -226,7 +240,6 @@ impl EvalStack {
     // TODO: use more of a condition system than an exception system eventually
     fn unwind(&mut self, error: *mut SlHead) {
         // destroy stack frames until reaching an error catch or the bottom
-
         while self.frame_start > self.stack_start {
             self.pop_frame();
         }
@@ -236,11 +249,13 @@ impl EvalStack {
         }
     }
 
+    /// Determines whether the stack is currently empty
     #[inline(always)]
     pub fn is_empty(&mut self) -> bool {
         self.stack_start == self.stack_top
     }
 
+    /// Gets the return address of the current top frame
     #[inline(always)]
     fn frame_ret(&mut self) -> *mut *mut SlHead {
         unsafe {
@@ -248,6 +263,7 @@ impl EvalStack {
         }
     }
 
+    /// Gets the opcode of the current top frame
     #[inline(always)]
     fn frame_opc(&mut self) -> Opcode {
         unsafe {
@@ -258,6 +274,7 @@ impl EvalStack {
         }
     }
 
+    /// Returns all frame head components of the current top frame
     #[inline(always)]
     fn frame_top(&mut self) -> (*mut *mut SlHead, *mut SlHead, Opcode) {
         let env_and_opc = unsafe { ptr::read(self.frame_start.add(FrameOffset::EnvOpc as usize)) };
@@ -270,16 +287,22 @@ impl EvalStack {
         )
     }
 
+    /// Returns the address of a location offset into the current top
+    /// frame
     #[inline(always)]
     fn frame_addr(&mut self, offset: usize) -> *mut *mut SlHead {
         unsafe { self.frame_start.add(FrameOffset::ArgZero as usize + offset) as *mut *mut SlHead }
     }
 
+    /// Returns the pointer stored in a location offset into the
+    /// current top frame
     #[inline(always)]
     fn frame_obj(&mut self, offset: usize) -> *mut SlHead {
         unsafe { ptr::read(self.frame_addr(offset)) as *mut SlHead }
     }
 
+    /// Evaluates any Sail expression in object form, using the given
+    /// environment and returning to the given location
     #[inline(always)]
     fn eval_expr(&mut self, ret: *mut *mut SlHead, env: *mut SlHead, expr: *mut SlHead) {
         if nnil_ref_p(expr) {
@@ -295,6 +318,13 @@ impl EvalStack {
         }
     }
 
+    /// Consumes one frame off the top of the stack and executes it
+    ///
+    /// This is the core of Sail evaluation logic. In the absence of
+    /// code with infinite loops, executing this function repeatedly
+    /// will evaluate any Sail expression. It handles all defined
+    /// opcodes and adds more frames to the stack as necessary, but
+    /// never uses recursion.
     pub fn iter_once(&mut self, reg: *mut memmgt::Region, tbl: *mut SlHead) {
         // ***********************************
         // * Sail stack-based evaluation logic
@@ -326,7 +356,7 @@ impl EvalStack {
                 if basic_sym_p(raw_op) {
                     match sym_get_id(raw_op) {
                         id if id == SP_DEF.0 => {
-                            // needs: symbol to bind, value to bind to it
+                            // needs: symbol to bind, object to bind to it
                             self.push_frame_head(ret, Opcode::Bind, env);
                             self.push(raw_args);
                             self.push(nil());
@@ -387,7 +417,7 @@ impl EvalStack {
                             return;
                         }
                         id if id == SP_SET.0 => {
-                            // needs: symbol to bind, value to bind to it
+                            // needs: symbol to bind, object to bind to it
                             self.push_frame_head(ret, Opcode::Mutate, env);
                             self.push(raw_args);
                             self.push(nil());
@@ -583,6 +613,7 @@ impl EvalStack {
     }
 }
 
+/// Evaluates a Sail expression in a freshly created stack
 pub fn eval(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
@@ -616,10 +647,10 @@ enum_and_tryfrom! {
         /// List to be evaluated
         Eval,
 
-        /// Symbol, value
+        /// Symbol, object
         Bind,
 
-        /// Symbol, value
+        /// Symbol, object
         Mutate,
 
         /// Remainder of list to do
@@ -657,11 +688,16 @@ struct _Frame {
     env_and_opcode: usize,
 }
 
+/// Offsets into an evaluation stack frame (header included)
 #[repr(u8)]
 enum FrameOffset {
+    /// Top of the last frame
     LastTop = 0,
+    /// Return address
     Return = 1,
+    /// Environment and opcode (tagged pointer)
     EnvOpc = 2,
+    /// First body word
     ArgZero = 3,
 }
 

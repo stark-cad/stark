@@ -28,6 +28,7 @@
 // <>
 
 //! The Structured Augmentation Interchange Language
+//!
 //! A custom Lisp dialect for writing STARK
 
 use std::convert::TryFrom;
@@ -45,6 +46,7 @@ pub mod parser;
 pub mod queue;
 pub mod stdenv;
 
+/// Basic error codes for Sail faults
 #[derive(Debug)]
 #[repr(u16)]
 pub enum SlErrCode {
@@ -173,8 +175,9 @@ pub fn arrvec_rplc<T: SizedBase + Copy>(loc: *mut SlHead, val: &[T]) {
     }
 }
 
+/// Symbols that must be added to the symbol table while the runtime is being set up
+///
 /// TODO: remember types that are parents / children of others
-/// TODO: these items must be added to the symtab and env on every run
 /// TODO: remember to have a bitvec type
 /// TODO: use a script to automatically generate a Rust "env" file
 macro_rules! incl_symbols {
@@ -259,6 +262,7 @@ incl_symbols! {
 
 // TODO: MINIMIZE the use of *pub* and *unsafe* functions
 
+/// Returns the type specifier for a Sail object
 fn get_self_type(loc: *mut SlHead) -> u32 {
     if nil_p(loc) {
         return T_NIL.0;
@@ -310,7 +314,7 @@ fn get_pred_type(loc: *mut SlHead) -> u32 {
     }
 }
 
-// /// Returns the size of a valid Sail value
+// /// Returns the size of a valid Sail object
 // fn get_size(
 //     reg: *mut memmgt::Region,
 //     tbl: *mut SlHead,
@@ -332,6 +336,9 @@ fn get_pred_type(loc: *mut SlHead) -> u32 {
 //     }
 // }
 
+/// Set the type specifier for a Sail object not of a core type
+///
+/// **Avoid use.** Type specifiers should be set once and not altered.
 fn set_self_type(loc: *mut SlHead, typ: u32) {
     assert!(self_type_p(loc));
     unsafe { ptr::write_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *mut u32, typ) }
@@ -382,26 +389,29 @@ fn set_pred_type(loc: *mut SlHead, typ: u32) {
 //     }
 // }
 
-union _SlSend {
-    ptr: *mut SlHead,
-    num: usize,
-}
+// TODO: use this as the standard Sail object handle?
+// union _SlSend {
+//     ptr: *mut SlHead,
+//     num: usize,
+// }
 
-/// Bundles together a value and associated symbol table for display
+/// Bundles together an object and associated symbol table for display
 pub struct SlContextVal {
     tbl: *mut SlHead,
-    val: *mut SlHead,
+    obj: *mut SlHead,
 }
 
-pub fn context(tbl: *mut SlHead, val: *mut SlHead) -> SlContextVal {
-    SlContextVal { tbl, val }
+/// Create a SlContextVal for display
+pub fn context(tbl: *mut SlHead, obj: *mut SlHead) -> SlContextVal {
+    SlContextVal { tbl, obj }
 }
 
+// TODO: this is a mess; need Sail native display functions
 // TODO: just push characters into a byte vector (string) for display
 impl fmt::Display for SlContextVal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let table = self.tbl;
-        let value = self.val;
+        let value = self.obj;
 
         use CoreType::*;
         match core_type(value) {
@@ -479,6 +489,8 @@ impl fmt::Display for SlContextVal {
                         while !nil_p(pos) {
                             if !fst {
                                 write!(f, " ").unwrap()
+                                // TODO: keep commas / parse them in maps?
+                                // write!(f, ", ").unwrap()
                             }
                             write!(f, "{} ", context(table, ref_get(pos)).to_string()).unwrap();
                             write!(
@@ -545,6 +557,7 @@ pub fn repl(stream_in: std::io::Stdin) {
     }
 }
 
+/// Runs a Sail file in its own context
 pub fn run_file(filename: &str) -> Result<String, SlErrCode> {
     let file = match std::fs::read_to_string(filename) {
         Ok(s) => s,
@@ -553,7 +566,7 @@ pub fn run_file(filename: &str) -> Result<String, SlErrCode> {
     interpret(&file)
 }
 
-/// Interprets a Sail expression, returning the result
+/// Interprets a Sail expression, returning the formatted result
 pub fn interpret(code: &str) -> Result<String, SlErrCode> {
     let region = unsafe { memmgt::acquire_mem_region(1000000) };
 
@@ -567,7 +580,7 @@ pub fn interpret(code: &str) -> Result<String, SlErrCode> {
     Ok(context(tbl, result).to_string())
 }
 
-/// TODO: make it easier to add native functions to the environment
+/// Set up the symbol table and environment before interpreting Sail code
 pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut SlHead) {
     for s in SYM_ARRAY.iter() {
         sym_tab_get_id(reg, tbl, s);
@@ -579,6 +592,7 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut S
     insert_native_procs(reg, tbl, env, stdenv::ENVFNS);
 }
 
+/// Insert a slice of native procedures into the symbol table and environment
 pub fn insert_native_procs(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,

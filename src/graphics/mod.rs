@@ -56,18 +56,7 @@ use std::borrow::Borrow;
 use std::iter;
 use std::mem::size_of;
 
-#[derive(Debug)]
-pub struct Triangle {
-    pub points: [[f32; 2]; 3],
-}
-
-impl Triangle {
-    pub fn points_flat(self) -> [f32; 6] {
-        let [[a, b], [c, d], [e, f]] = self.points;
-        [a, b, c, d, e, f]
-    }
-}
-
+/// Sail interpreter loop for the render thread (holds graphics state)
 pub fn render_loop(
     name: &'static str,
     size: [u32; 2],
@@ -226,6 +215,7 @@ pub fn render_loop(
     drop(engine);
 }
 
+/// Sail-specific graphics engine state
 pub struct Engine<B: gfx_hal::Backend> {
     clear: [f32; 4],
     lines: Vec<[f32; 4]>,
@@ -236,6 +226,7 @@ pub struct Engine<B: gfx_hal::Backend> {
 }
 
 impl<B: gfx_hal::Backend> Engine<B> {
+    /// Initialize the graphics engine
     fn new(state: GraphicsState<B>) -> Self {
         Self {
             clear: [0.0, 0.0, 0.0, 1.0],
@@ -246,18 +237,22 @@ impl<B: gfx_hal::Backend> Engine<B> {
             should_configure_swapchain: true,
         }
     }
+    /// Set the clear (background) color
     fn set_clear(&mut self, clear: [f32; 4]) {
         self.clear = clear;
     }
+    /// Add a line, with two endpoints and a color
     fn add_line(&mut self, points: [f32; 4], color: [f32; 3]) {
         self.lines.push(points);
         self.colors.push(color);
         self.buffer_size_check();
     }
+    /// Empty the engine of all lines
     fn empty_lines(&mut self) {
         self.lines.clear();
         self.colors.clear();
     }
+    /// Set up an appropriate graphics pipeline for the engine
     fn state_pipeline_setup(&mut self) {
         let pipeline_layout = unsafe {
             self.state
@@ -284,6 +279,7 @@ impl<B: gfx_hal::Backend> Engine<B> {
         self.state.pipeline_layouts.push(pipeline_layout);
         self.state.pipelines.push(pipeline);
     }
+    /// Acquire memory and create buffer for vertex data
     fn state_buffer_setup(&mut self) {
         unsafe {
             self.state
@@ -314,6 +310,7 @@ impl<B: gfx_hal::Backend> Engine<B> {
         self.state.vertex_memory.push(memory);
         self.state.vertex_buffers.push(buffer);
     }
+    /// Check whether the buffer has enough space for all vertices
     fn buffer_size_check(&mut self) {
         let line_vec_size = size_of::<[f32; 4]>() * self.lines.len();
 
@@ -322,10 +319,12 @@ impl<B: gfx_hal::Backend> Engine<B> {
             self.state_buffer_setup();
         }
     }
+    /// Prepare the engine to accept draw calls
     fn setup(&mut self) {
         self.state_buffer_setup();
         self.state_pipeline_setup();
     }
+    /// Draw a single frame according to the engine state
     fn draw_frame(&mut self) {
         let timeout_ns = 1_000_000_000;
 
@@ -483,7 +482,7 @@ impl<B: gfx_hal::Backend> Engine<B> {
     }
 }
 
-/// Stores all persistent `gfx-hal` objects
+/// Stores all persistent `gfx-hal` (Vulkan) objects
 pub struct GraphicsState<B: gfx_hal::Backend> {
     surface_extent: Extent2D,
     instance: B::Instance,
@@ -504,8 +503,8 @@ pub struct GraphicsState<B: gfx_hal::Backend> {
     rendering_complete_semaphore: Option<B::Semaphore>,
 }
 
-/// Initialize the graphics system and track necessary state
 impl<B: gfx_hal::Backend> GraphicsState<B> {
+    /// Initialize the graphics system and track necessary state
     pub fn new(window: &FrameHandle, name: &str, width: u32, height: u32) -> Self {
         let surface_extent = Extent2D { width, height };
         let instance = B::Instance::create(name, 1).unwrap();
@@ -597,147 +596,147 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         }
     }
 
-    /// This implementation is bespoke and temporary
-    pub fn setup(&mut self) {
-        self.add_tri_buffer();
+    // /// This implementation is bespoke and temporary
+    // pub fn setup(&mut self) {
+    //     self.add_tri_buffer();
 
-        let pipeline_layout = unsafe {
-            self.device
-                .create_pipeline_layout(iter::empty(), iter::empty())
-                .expect("Out of memory")
-        };
+    //     let pipeline_layout = unsafe {
+    //         self.device
+    //             .create_pipeline_layout(iter::empty(), iter::empty())
+    //             .expect("Out of memory")
+    //     };
 
-        let vertex_shader = include_str!("shaders/test.vert");
-        let fragment_shader = include_str!("shaders/test.frag");
+    //     let vertex_shader = include_str!("shaders/test.vert");
+    //     let fragment_shader = include_str!("shaders/test.frag");
 
-        let pipeline = unsafe {
-            self.make_pipeline(
-                &pipeline_layout,
-                vertex_shader,
-                fragment_shader,
-                Primitive::TriangleList,
-            )
-        };
+    //     let pipeline = unsafe {
+    //         self.make_pipeline(
+    //             &pipeline_layout,
+    //             vertex_shader,
+    //             fragment_shader,
+    //             Primitive::TriangleList,
+    //         )
+    //     };
 
-        self.pipeline_layouts.push(pipeline_layout);
-        self.pipelines.push(pipeline);
-    }
+    //     self.pipeline_layouts.push(pipeline_layout);
+    //     self.pipelines.push(pipeline);
+    // }
 
-    /// Temporary function to draw a single triangle
-    pub fn draw_triangle_frame(&mut self, triangle: Triangle) -> Result<(), &str> {
-        let timeout_ns = 1_000_000_000;
+    // /// Temporary function to draw a single triangle
+    // pub fn draw_triangle_frame(&mut self, triangle: Triangle) -> Result<(), &str> {
+    //     let timeout_ns = 1_000_000_000;
 
-        // log::debug!("Drawing triangle frame with points: {:?}", triangle);
+    //     // log::debug!("Drawing triangle frame with points: {:?}", triangle);
 
-        unsafe {
-            self.device
-                .wait_for_fence(self.submission_complete_fence.as_ref().unwrap(), timeout_ns)
-                .unwrap();
-            self.device
-                .reset_fence(self.submission_complete_fence.as_mut().unwrap())
-                .unwrap();
+    //     unsafe {
+    //         self.device
+    //             .wait_for_fence(self.submission_complete_fence.as_ref().unwrap(), timeout_ns)
+    //             .unwrap();
+    //         self.device
+    //             .reset_fence(self.submission_complete_fence.as_mut().unwrap())
+    //             .unwrap();
 
-            self.command_pool.as_mut().unwrap().reset(false);
-        }
+    //         self.command_pool.as_mut().unwrap().reset(false);
+    //     }
 
-        let surface_image = unsafe {
-            match self.surface.as_mut().unwrap().acquire_image(timeout_ns) {
-                Ok((image, _)) => image,
-                Err(_) => return Err("Could not acquire image"),
-            }
-        };
+    //     let surface_image = unsafe {
+    //         match self.surface.as_mut().unwrap().acquire_image(timeout_ns) {
+    //             Ok((image, _)) => image,
+    //             Err(_) => return Err("Could not acquire image"),
+    //         }
+    //     };
 
-        unsafe {
-            const XY_TRI_SIZE: usize = (size_of::<f32>() * 2 * 3) as usize;
+    //     unsafe {
+    //         const XY_TRI_SIZE: usize = (size_of::<f32>() * 2 * 3) as usize;
 
-            // log::debug!("Mem size: {}", XY_TRI_SIZE);
+    //         // log::debug!("Mem size: {}", XY_TRI_SIZE);
 
-            let mapped_memory = self
-                .device
-                .map_memory(&mut self.vertex_memory[0], gfx_hal::memory::Segment::ALL)
-                .unwrap();
+    //         let mapped_memory = self
+    //             .device
+    //             .map_memory(&mut self.vertex_memory[0], gfx_hal::memory::Segment::ALL)
+    //             .unwrap();
 
-            let points = triangle.points_flat();
+    //         let points = triangle.points_flat();
 
-            // log::debug!("Points: {:?}", points);
+    //         // log::debug!("Points: {:?}", points);
 
-            std::ptr::copy_nonoverlapping(points.as_ptr() as *const u8, mapped_memory, XY_TRI_SIZE);
+    //         std::ptr::copy_nonoverlapping(points.as_ptr() as *const u8, mapped_memory, XY_TRI_SIZE);
 
-            self.device
-                .flush_mapped_memory_ranges(iter::once((
-                    &self.vertex_memory[0],
-                    gfx_hal::memory::Segment::ALL,
-                )))
-                .unwrap();
+    //         self.device
+    //             .flush_mapped_memory_ranges(iter::once((
+    //                 &self.vertex_memory[0],
+    //                 gfx_hal::memory::Segment::ALL,
+    //             )))
+    //             .unwrap();
 
-            self.device.unmap_memory(&mut self.vertex_memory[0]);
-        }
+    //         self.device.unmap_memory(&mut self.vertex_memory[0]);
+    //     }
 
-        unsafe {
-            let buffer = &mut self.command_buffers[0];
+    //     unsafe {
+    //         let buffer = &mut self.command_buffers[0];
 
-            let viewport = Viewport {
-                rect: Rect {
-                    x: 0,
-                    y: 0,
-                    w: self.surface_extent.width as i16,
-                    h: self.surface_extent.height as i16,
-                },
-                depth: 0.0..1.0,
-            };
+    //         let viewport = Viewport {
+    //             rect: Rect {
+    //                 x: 0,
+    //                 y: 0,
+    //                 w: self.surface_extent.width as i16,
+    //                 h: self.surface_extent.height as i16,
+    //             },
+    //             depth: 0.0..1.0,
+    //         };
 
-            buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
+    //         buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
 
-            buffer.set_viewports(0, iter::once(viewport.clone()));
-            buffer.set_scissors(0, iter::once(viewport.rect));
+    //         buffer.set_viewports(0, iter::once(viewport.clone()));
+    //         buffer.set_scissors(0, iter::once(viewport.rect));
 
-            buffer.begin_render_pass(
-                &self.render_passes[0],
-                &self.framebuffer.as_ref().unwrap(),
-                viewport.rect,
-                iter::once(RenderAttachmentInfo {
-                    image_view: surface_image.borrow(),
-                    clear_value: ClearValue {
-                        color: ClearColor {
-                            float32: [0.0, 0.0, 0.0, 1.0],
-                        },
-                    },
-                }),
-                SubpassContents::Inline,
-            );
+    //         buffer.begin_render_pass(
+    //             &self.render_passes[0],
+    //             &self.framebuffer.as_ref().unwrap(),
+    //             viewport.rect,
+    //             iter::once(RenderAttachmentInfo {
+    //                 image_view: surface_image.borrow(),
+    //                 clear_value: ClearValue {
+    //                     color: ClearColor {
+    //                         float32: [0.0, 0.0, 0.0, 1.0],
+    //                     },
+    //                 },
+    //             }),
+    //             SubpassContents::Inline,
+    //         );
 
-            buffer.bind_graphics_pipeline(&self.pipelines[0]);
+    //         buffer.bind_graphics_pipeline(&self.pipelines[0]);
 
-            buffer.bind_vertex_buffers(
-                0,
-                vec![(&self.vertex_buffers[0], gfx_hal::buffer::SubRange::WHOLE)].into_iter(),
-            );
+    //         buffer.bind_vertex_buffers(
+    //             0,
+    //             vec![(&self.vertex_buffers[0], gfx_hal::buffer::SubRange::WHOLE)].into_iter(),
+    //         );
 
-            buffer.draw(0..3, 0..1);
+    //         buffer.draw(0..3, 0..1);
 
-            buffer.end_render_pass();
-            buffer.finish();
-        }
+    //         buffer.end_render_pass();
+    //         buffer.finish();
+    //     }
 
-        unsafe {
-            self.queue_group.queues[0].submit(
-                vec![&self.command_buffers[0]].into_iter(),
-                vec![].into_iter(),
-                vec![self.rendering_complete_semaphore.as_ref().unwrap()].into_iter(),
-                self.submission_complete_fence.as_mut(),
-            );
+    //     unsafe {
+    //         self.queue_group.queues[0].submit(
+    //             vec![&self.command_buffers[0]].into_iter(),
+    //             vec![].into_iter(),
+    //             vec![self.rendering_complete_semaphore.as_ref().unwrap()].into_iter(),
+    //             self.submission_complete_fence.as_mut(),
+    //         );
 
-            self.queue_group.queues[0]
-                .present(
-                    self.surface.as_mut().unwrap(),
-                    surface_image,
-                    self.rendering_complete_semaphore.as_mut(),
-                )
-                .unwrap();
-        }
+    //         self.queue_group.queues[0]
+    //             .present(
+    //                 self.surface.as_mut().unwrap(),
+    //                 surface_image,
+    //                 self.rendering_complete_semaphore.as_mut(),
+    //             )
+    //             .unwrap();
+    //     }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     /// Draw a frame that is cleared to the specified color
     pub fn draw_clear_frame(&mut self, color: [f32; 4]) -> Result<(), &str> {
@@ -904,21 +903,21 @@ impl<B: gfx_hal::Backend> GraphicsState<B> {
         (buffer_memory, buffer)
     }
 
-    /// Probably temporary
-    fn add_tri_buffer(&mut self) {
-        const XY_TRI_SIZE: u64 = (size_of::<f32>() * 2 * 3) as u64;
+    // /// Temporary
+    // fn add_tri_buffer(&mut self) {
+    //     const XY_TRI_SIZE: u64 = (size_of::<f32>() * 2 * 3) as u64;
 
-        let (memory, buffer) = unsafe {
-            self.make_buffer(
-                XY_TRI_SIZE,
-                gfx_hal::buffer::Usage::VERTEX,
-                gfx_hal::memory::Properties::CPU_VISIBLE,
-            )
-        };
+    //     let (memory, buffer) = unsafe {
+    //         self.make_buffer(
+    //             XY_TRI_SIZE,
+    //             gfx_hal::buffer::Usage::VERTEX,
+    //             gfx_hal::memory::Properties::CPU_VISIBLE,
+    //         )
+    //     };
 
-        self.vertex_memory.push(memory);
-        self.vertex_buffers.push(buffer);
-    }
+    //     self.vertex_memory.push(memory);
+    //     self.vertex_buffers.push(buffer);
+    // }
 
     /// Compile GLSL shader code into SPIR-V
     fn compile_shader(glsl: &str, shader_kind: shaderc::ShaderKind) -> Vec<u32> {
@@ -1063,3 +1062,14 @@ impl<B: gfx_hal::Backend> Drop for GraphicsState<B> {
         }
     }
 }
+
+// pub struct Triangle {
+//     pub points: [[f32; 2]; 3],
+// }
+
+// impl Triangle {
+//     pub fn points_flat(self) -> [f32; 6] {
+//         let [[a, b], [c, d], [e, f]] = self.points;
+//         [a, b, c, d, e, f]
+//     }
+// }

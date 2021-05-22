@@ -11,7 +11,7 @@
 // src/sail/parser.rs
 
 // Recursive descent parser which converts string slices into Sail
-// values, usually for evaluation.
+// objects, usually for evaluation.
 
 // <>
 
@@ -25,7 +25,7 @@ use std::str;
 //     acc: Vec<u8>,
 // }
 
-/// Parses a Sail expression into the internal representation
+/// Parses a textual Sail expression into a structure of Sail objects
 pub fn parse(
     reg: *mut memmgt::Region,
     tbl: *mut SlHead,
@@ -47,8 +47,11 @@ pub fn parse(
 //     read_value(&mut chars, &mut acc, tbl, false)
 // }
 
-/// Returns a contiguous value parsed from the input stream
-/// The appropriate reader can almost always be deduced from the first character
+/// Returns the head of a Sail object structure representing a single
+/// item parsed from the input stream
+///
+/// This is a recursive descent parser; the appropriate reader can
+/// almost always be deduced from the first character
 fn read_value(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -137,6 +140,8 @@ fn read_value(
     Ok(value)
 }
 
+/// Reads a quoted expression off the input stream, into the
+/// appropriate object structure
 fn read_quote(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -152,6 +157,8 @@ fn read_quote(
     Ok(head)
 }
 
+/// Reads a list of values from the input stream and creates a
+/// corresponding list of Sail objects
 fn read_list(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -200,6 +207,9 @@ fn read_list(
 
 // TODO: What about lists, which need to be evaluated even if they appear in a vec or map
 // TODO: Tighter integration between parser and evaluator likely necessary for this & symbols
+
+/// Reads a vector from the input stream and creates the corresponding
+/// Sail object
 fn read_vec(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -223,6 +233,8 @@ fn read_vec(
     Ok(vec)
 }
 
+/// Reads an associative map from the input stream and creates the
+/// corresponding Sail object
 fn read_map(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -250,6 +262,8 @@ fn read_map(
     Ok(map)
 }
 
+/// Reads a basic symbol from the input stream and creates its Sail
+/// object
 fn read_symbol(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -284,6 +298,8 @@ fn read_symbol(
     Ok(sym)
 }
 
+/// Reads a specialized symbol from the input stream and creates its
+/// Sail object
 fn read_spec_sym(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -326,6 +342,7 @@ fn read_spec_sym(
     Ok(sym)
 }
 
+/// Reads a string from the input stream and creates its Sail object
 fn read_string(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -351,6 +368,7 @@ fn read_string(
     Ok(string)
 }
 
+/// Reads a number from the input stream and creates its Sail object
 fn read_number(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -377,6 +395,8 @@ fn read_number(
     process_num(unsafe { str::from_utf8_unchecked(acc) }, reg, tbl)
 }
 
+/// Reads a special item from the input stream and creates a Sail
+/// object if appropriate
 fn read_special(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
@@ -414,6 +434,8 @@ fn read_special(
     }
 }
 
+/// Parses a number and creates an object according to its textual
+/// representation
 fn process_num(
     slice: &str,
     reg: *mut memmgt::Region,

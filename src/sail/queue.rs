@@ -30,6 +30,7 @@ use super::{core::*, memmgt, SlHead};
 //     ((qptr & 0x0000FFFFFFFFFFFF) as *mut SlHead, (qptr >> 48) as u16)
 // }
 
+/// Creates a queue sender and receiver as a linked pair
 pub fn queue_create(
     tx_region: *mut memmgt::Region,
     rx_region: *mut memmgt::Region,
@@ -51,6 +52,7 @@ pub fn queue_create(
     }
 }
 
+/// Transmits a copy of the given Sail object along the queue
 pub fn queue_tx(loc: *mut SlHead, item: *mut SlHead) {
     assert_eq!(super::get_self_type(loc), super::T_QUEUE_TX.0);
     assert_eq!(get_base_size(loc), BaseSize::B16);
@@ -97,6 +99,7 @@ pub fn queue_tx(loc: *mut SlHead, item: *mut SlHead) {
     }
 }
 
+/// Receives and returns the object at the head of the queue
 pub fn queue_rx(loc: *mut SlHead) -> *mut SlHead {
     assert_eq!(super::get_self_type(loc), super::T_QUEUE_RX.0);
     assert_eq!(get_base_size(loc), BaseSize::B16);
@@ -120,7 +123,7 @@ pub fn queue_rx(loc: *mut SlHead) -> *mut SlHead {
                     write_field_cmpxcg_unchecked(sender, 0, tail, head);
                 } else {
                     if nil_p(head) {
-                        log::debug!("a queue head was nil");
+                        // log::debug!("a queue head was nil");
                         write_field_cmpxcg_unchecked(loc, 0, head, tail);
                         continue;
                     }

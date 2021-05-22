@@ -31,6 +31,7 @@
 
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
+/// Graphical frame, provided by the desktop environment
 type Frame = winit::window::Window;
 
 pub mod context;
@@ -39,6 +40,7 @@ pub mod sail;
 
 use sail::SlHead;
 
+/// Handle for a frame (to pass to rendering system)
 pub struct FrameHandle(pub RawWindowHandle);
 
 unsafe impl HasRawWindowHandle for FrameHandle {
@@ -49,6 +51,7 @@ unsafe impl HasRawWindowHandle for FrameHandle {
 
 unsafe impl Send for FrameHandle {}
 
+/// Sail interpreter loop for the manager thread
 pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_env: usize) {
     let (sl_tbl, sl_env) = (sl_tbl as *mut sail::SlHead, sl_env as *mut sail::SlHead);
     let sl_reg = sl_reg as *mut sail::memmgt::Region;
@@ -70,7 +73,6 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_env: usize) {
             frame.set_cursor_visible(sail::bool_get(vis));
 
             return sail::nil();
-
         }
 
         "cursor-pos" 5 [frm_ptr, w, h, x, y] {

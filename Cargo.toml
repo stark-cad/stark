@@ -21,6 +21,9 @@ shaderc = "0.6.3"
 log = "0.4.11"
 simple_logger = "1.11.0"
 
+# TODO: need Makefile to select which of these to compile with /
+# perform other useful tasks
+
 # [target.'cfg(target_os = "macos")'.dependencies.backend]
 # package = "gfx-backend-metal"
 # path = "../gfx/src/backend/metal"

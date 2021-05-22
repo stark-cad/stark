@@ -16,36 +16,38 @@
 
 // <>
 
-use crate::sail;
+use crate::{Frame, sail};
 
 use png;
 use winit::{
     dpi,
     event::{self, DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    window::{self, Window, WindowBuilder},
+    window::{self, WindowBuilder},
 };
 
 use std::fs::File;
 use std::thread;
 
+/// Uses `winit` to acquire a graphical frame and create an event loop for it
 pub fn init_context(
     title: &str,
     icon_file: &str,
     width: u32,
     height: u32,
-) -> (Window, EventLoop<()>) {
+) -> (Frame, EventLoop<()>) {
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
+    let frame = WindowBuilder::new()
         .with_title(title)
         .with_window_icon(get_icon(icon_file))
         .with_inner_size(dpi::Size::Physical(dpi::PhysicalSize { width, height }))
         .build(&event_loop)
         .unwrap();
 
-    (window, event_loop)
+    (frame, event_loop)
 }
 
+/// Serves as the main loop for the context thread; occupies a `winit` event loop
 pub fn run_loop<Ij: 'static>(
     event_loop: EventLoop<()>,
     threads: Ij,
@@ -89,7 +91,7 @@ pub fn run_loop<Ij: 'static>(
     let cur_pos = cur_pos as *mut sail::SlHead;
 
     // TODO: use a small region with space for a queue sender;
-    // allocate values to send in region, send them, and then
+    // allocate objects to send in region, send them, and then
     // deallocate them to leave space for more
 
     // TODO: this will allow this thread and the stdin thread to be
@@ -244,7 +246,7 @@ pub fn run_loop<Ij: 'static>(
     });
 }
 
-/// Retrieves an icon from a PNG file and outputs it in the format desired by Winit
+/// Retrieves an icon from a PNG file and outputs it in the format desired by `winit`
 fn get_icon(filename: &str) -> Option<window::Icon> {
     let decoder = png::Decoder::new(File::open(filename).unwrap());
     let (info, mut reader) = decoder.read_info().unwrap();
