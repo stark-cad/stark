@@ -57,10 +57,12 @@ If you cannot install the =shaderc= package, you will need =cmake= and
 
 **** Building
 At the command line, navigate to an appropriate directory and run =git
-clone https://github.com/stark-cad/stark.git=. Alternatively, you can
-clone via SSH.
+clone https://github.com/stark-cad/stark.git=, =git clone
+https://github.com/stark-cad/gfx.git=, and =git clone
+https://github.com/stark-cad/winit.git=. Alternatively, you can clone
+via SSH.
 
-Navigate to the repository's base directory and open
+Navigate to the =stark= repository's base directory and open
 =Cargo.toml=. Check that "vulkan" appears twice near the end of the
 file. If not, run =/tools/set-backend.sh vulkan=.
 
@@ -93,12 +95,15 @@ through the Advanced System Settings dialog.
 
 Open Git Bash, the shell emulator that comes with Git for
 Windows. Navigate to an appropriate directory and run =git clone
-https://github.com/stark-cad/stark.git=. Alternatively, you can clone
+https://github.com/stark-cad/stark.git=, =git clone
+https://github.com/stark-cad/gfx.git=, and =git clone
+https://github.com/stark-cad/winit.git=. Alternatively, you can clone
 via SSH.
 
 Assuming that you will use DirectX 12 as the graphics API, run
-=/tools/set-backend.sh dx12= from the repository's base directory. If
-your system does not support DX12, you need a driver update.
+=/tools/set-backend.sh dx12= from the =stark= repository's base
+directory. If your system does not support DX12, you need a driver
+update.
 
 Run =rustup update= to ensure that an up-to-date Rust toolchain is
 present. Compile STARK by running =cargo build=.
@@ -167,6 +172,12 @@ program):
 - =(draw x1 y1 x2 y2)= Takes four float coordinates between -1.0 and 1.0,
   specifying two points; adds a line or rectangle to the canvas
   according to the current mode
+
+*** Issues
+- On Windows, it may be necessary to resize the frame and press enter
+  at the REPL before input is accepted in graphical mode
+- On Windows, a rare queue problem, handled successfully on Linux,
+  seems to crash the program
 
 ** Sail
 Sail is a scripting language used to define most of STARK's

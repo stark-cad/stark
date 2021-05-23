@@ -1,7 +1,7 @@
 ![img](icons/logo.png)
 
 
-<a id="org64ef47f"></a>
+<a id="org82d2260"></a>
 
 # STARK
 
@@ -26,7 +26,7 @@ demonstrates the feasibility and interoperability of its core systems
 mouse or keyboard alone, both in combination, or with Sail code.
 
 
-<a id="org440e468"></a>
+<a id="org462a293"></a>
 
 ## Caution
 
@@ -38,7 +38,7 @@ much appreciated. If you do choose to install STARK and try it out,
 thank you!
 
 
-<a id="orgbf7e4d9"></a>
+<a id="org85c146c"></a>
 
 ## Installation
 
@@ -49,7 +49,7 @@ will be distributed in the future, but for now you must compile the
 program yourself.
 
 
-<a id="org33b9325"></a>
+<a id="org9cee929"></a>
 
 ### Linux
 
@@ -72,10 +72,12 @@ and run STARK.
 2.  Building
 
     At the command line, navigate to an appropriate directory and run `git
-    clone https://github.com/stark-cad/stark.git`. Alternatively, you can
-    clone via SSH.
+    clone https://github.com/stark-cad/stark.git`, `git clone
+    https://github.com/stark-cad/gfx.git`, and `git clone
+    https://github.com/stark-cad/winit.git`. Alternatively, you can clone
+    via SSH.
     
-    Navigate to the repository's base directory and open
+    Navigate to the `stark` repository's base directory and open
     `Cargo.toml`. Check that "vulkan" appears twice near the end of the
     file. If not, run `/tools/set-backend.sh vulkan`.
     
@@ -89,7 +91,7 @@ and run STARK.
     white background appear. Success!
 
 
-<a id="org52315c4"></a>
+<a id="org8304a57"></a>
 
 ### Windows
 
@@ -114,12 +116,15 @@ and run STARK.
     
     Open Git Bash, the shell emulator that comes with Git for
     Windows. Navigate to an appropriate directory and run `git clone
-    https://github.com/stark-cad/stark.git`. Alternatively, you can clone
+    https://github.com/stark-cad/stark.git`, `git clone
+    https://github.com/stark-cad/gfx.git`, and `git clone
+    https://github.com/stark-cad/winit.git`. Alternatively, you can clone
     via SSH.
     
     Assuming that you will use DirectX 12 as the graphics API, run
-    `/tools/set-backend.sh dx12` from the repository's base directory. If
-    your system does not support DX12, you need a driver update.
+    `/tools/set-backend.sh dx12` from the `stark` repository's base
+    directory. If your system does not support DX12, you need a driver
+    update.
     
     Run `rustup update` to ensure that an up-to-date Rust toolchain is
     present. Compile STARK by running `cargo build`.
@@ -128,7 +133,7 @@ and run STARK.
     white background appear. Success!
 
 
-<a id="org12929ab"></a>
+<a id="org5398398"></a>
 
 ### Other
 
@@ -138,7 +143,7 @@ system and want to try building STARK, try it and let me know how it
 goes.
 
 
-<a id="org654ec54"></a>
+<a id="orga337360"></a>
 
 ## Usage
 
@@ -198,7 +203,17 @@ program):
     according to the current mode
 
 
-<a id="orga517d1e"></a>
+<a id="orgce6c372"></a>
+
+### Issues
+
+-   On Windows, it may be necessary to resize the frame and press enter
+    at the REPL before input is accepted in graphical mode
+-   On Windows, a rare queue problem, handled successfully on Linux,
+    seems to crash the program
+
+
+<a id="org06d5e34"></a>
 
 ## Sail
 
@@ -260,7 +275,7 @@ improvements to be made, so, like the rest of STARK, this language
 will change at all levels as development continues.
 
 
-<a id="org531775c"></a>
+<a id="org7e58ec5"></a>
 
 ## Roadmap
 
@@ -274,7 +289,7 @@ STARK has a long way to go. Some upcoming improvements:
 -   3D chunk rendering
 
 
-<a id="org5eec16c"></a>
+<a id="org87e93a8"></a>
 
 ## License
 
