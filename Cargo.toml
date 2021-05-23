@@ -4,8 +4,6 @@ version = "0.1.0"
 authors = ["Matthew Rothlisberger <mattjrothlis@gmail.com>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [features]
 memdbg = []
 stkdbg = []
@@ -21,17 +19,11 @@ shaderc = "0.6.3"
 log = "0.4.11"
 simple_logger = "1.11.0"
 
-# TODO: need Makefile to select which of these to compile with /
-# perform other useful tasks
+# Change graphics backend with
+# tools/set-backend.sh <backend>
 
-# [target.'cfg(target_os = "macos")'.dependencies.backend]
-# package = "gfx-backend-metal"
-# path = "../gfx/src/backend/metal"
-
-# [target.'cfg(windows)'.dependencies.backend]
-# package = "gfx-backend-dx12"
-# path = "../gfx/src/backend/dx12"
-
-[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.backend]
+# DO NOT ALTER BY HAND
+[dependencies.backend]
 package = "gfx-backend-vulkan"
 path = "../gfx/src/backend/vulkan"
+# KEEP AT END OF FILE
