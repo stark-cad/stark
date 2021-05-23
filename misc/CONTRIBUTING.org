@@ -1,0 +1,4 @@
+#+EXPORT_FILE_NAME: ../CONTRIBUTING.md
+#+OPTIONS: toc:nil
+
+* Contributing to STARK
