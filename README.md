@@ -1,32 +1,30 @@
 ![img](icons/logo.png)
 
 
-<a id="org82d2260"></a>
+<a id="orge4c7e4b"></a>
 
 # STARK
 
-STARK is a prototype system for computer augmented design. It is
-intended to offer designers powerful capabilities that are not
-currently available, and it will serve as a malleable substrate for
-work in many domains. The first target use cases are mechanical and
-electrical engineering.
+STARK is a system for computer augmented design, meant to offer
+designers capabilities that are not currently available. It will serve
+as a malleable tool for creative work in many domains. The first
+target use cases are mechanical and electrical engineering.
 
-Much of STARK's behavior is defined in a custom scripting language
-called Sail, which is a purpose-built Lisp dialect. In its current
-state, STARK consists of a Sail interpreter coupled with a rendering
-engine built directly out of Vulkan primitives using `gfx-hal`. At
-runtime, multiple interpreter stacks run in parallel to execute the
-main scripts, get user input, and send draw calls to be rendered.
+Much of STARK's behavior is defined in a purpose-built Lisp dialect
+called Sail. STARK consists of a Sail interpreter coupled with a low
+level rendering engine. At runtime, interpreter components run in
+parallel to execute the main scripts, get user input, and send draw
+calls to be rendered.
 
-At its first public release, STARK can be used as a Sail REPL and / or
-a 2D line drawing and diagramming application. This is only the
-beginning of the graphical capabilities STARK will offer, but it
-demonstrates the feasibility and interoperability of its core systems
-(context, interpreter, and renderer). Diagrams may be drawn using the
-mouse or keyboard alone, both in combination, or with Sail code.
+At its first public release, STARK is a line drawing and diagramming
+application with a Sail REPL built in. This is the first of many
+graphical capabilities STARK will offer, and it demonstrates
+interoperability between its core systems (context, interpreter, and
+renderer). Diagrams may be drawn using Sail code, the mouse or
+keyboard alone, or both together.
 
 
-<a id="org462a293"></a>
+<a id="orgc141864"></a>
 
 ## Caution
 
@@ -38,7 +36,7 @@ much appreciated. If you do choose to install STARK and try it out,
 thank you!
 
 
-<a id="org85c146c"></a>
+<a id="orgbf4a385"></a>
 
 ## Installation
 
@@ -49,7 +47,7 @@ will be distributed in the future, but for now you must compile the
 program yourself.
 
 
-<a id="org9cee929"></a>
+<a id="org1080db5"></a>
 
 ### Linux
 
@@ -59,27 +57,36 @@ and run STARK.
 1.  Required Packages
 
     -   `git`
+    -   `gcc`
     -   `rustup`
     -   `shaderc`
     -   `vulkan-tools`
     
-    Also necessary is a Vulkan driver package; this may be `vulkan-intel`,
-    `vulkan-radeon`, `amdvlk`, an appropriate Nvidia driver, or similar.
+    You need a Vulkan driver package, which is probably already installed;
+    this may be `vulkan-intel`, `vulkan-radeon`, `amdvlk`, an Nvidia
+    driver, or similar, depending on the manufacturer and model of your
+    graphics processor.
+    
+    No optional dependencies for any of the above packages are needed.
     
     If you cannot install the `shaderc` package, you will need `cmake` and
     `python` so the library can be built from source.
 
 2.  Building
 
-    At the command line, navigate to an appropriate directory and run `git
-    clone https://github.com/stark-cad/stark.git`, `git clone
-    https://github.com/stark-cad/gfx.git`, and `git clone
-    https://github.com/stark-cad/winit.git`. Alternatively, you can clone
-    via SSH.
+    At the command line, use the `cd` command to navigate to the directory
+    where you want to keep the source code, likely in your home folder,
+    and run
     
-    Navigate to the `stark` repository's base directory and open
-    `Cargo.toml`. Check that "vulkan" appears twice near the end of the
-    file. If not, run `/tools/set-backend.sh vulkan`.
+        git clone https://github.com/stark-cad/stark.git
+        git clone https://github.com/stark-cad/gfx.git
+        git clone https://github.com/stark-cad/winit.git
+    
+    Alternatively, you can clone via SSH.
+    
+    Navigate to the `stark` repository's base directory and run
+    `tools/g-api.sh`. Check that there are two lines of output, both
+    ending in "vulkan". If not, run `tools/g-api.sh vulkan`.
     
     Run `vulkaninfo | grep 'Version:'`. If the version shown is below 1.2,
     you need an updated graphics driver to continue.
@@ -91,7 +98,7 @@ and run STARK.
     white background appear. Success!
 
 
-<a id="org8304a57"></a>
+<a id="orgd12f046"></a>
 
 ### Windows
 
@@ -114,17 +121,19 @@ and run STARK.
     choice, then add that directory to the system PATH. This can be done
     through the Advanced System Settings dialog.
     
-    Open Git Bash, the shell emulator that comes with Git for
-    Windows. Navigate to an appropriate directory and run `git clone
-    https://github.com/stark-cad/stark.git`, `git clone
-    https://github.com/stark-cad/gfx.git`, and `git clone
-    https://github.com/stark-cad/winit.git`. Alternatively, you can clone
-    via SSH.
+    Open Git Bash, the shell emulator that comes with Git for Windows. Use
+    the `cd` command to navigate to the directory where you want to keep
+    the source code, likely in your home folder, and run
+    
+        git clone https://github.com/stark-cad/stark.git
+        git clone https://github.com/stark-cad/gfx.git
+        git clone https://github.com/stark-cad/winit.git
+    
+    Alternatively, you can clone via SSH.
     
     Assuming that you will use DirectX 12 as the graphics API, run
-    `/tools/set-backend.sh dx12` from the `stark` repository's base
-    directory. If your system does not support DX12, you need a driver
-    update.
+    `tools/g-api.sh dx12` from the `stark` repository's base directory. If
+    your system does not support DX12, you need a driver update.
     
     Run `rustup update` to ensure that an up-to-date Rust toolchain is
     present. Compile STARK by running `cargo build`.
@@ -133,42 +142,37 @@ and run STARK.
     white background appear. Success!
 
 
-<a id="org5398398"></a>
+<a id="org9240f5e"></a>
 
 ### Other
 
-The core components required to build STARK are Git, Rust, `shaderc`,
-and a supported graphics API. If you have access to another type of
-system and want to try building STARK, try it and let me know how it
-goes.
+Core components required to build STARK are Git, Rust, `shaderc`, and
+a supported graphics API. If you have access to another type of system
+and want to try building STARK, try it and let me know how it goes.
 
 
-<a id="orga337360"></a>
+<a id="orgb32a833"></a>
 
 ## Usage
 
-There are three main modes available to run STARK in, specified by
-command line arguments. With no arguments (`cargo run`), the
-application runs in the standard graphical mode. With a single
-argument (`cargo run repl`), only a Sail REPL at the command line
-runs. With two arguments (`cargo file examples/mult-while.sl`), the
-second argument is taken as the path to a Sail file, which is
-executed.
+Three modes are available to run STARK in, specified by command line
+arguments. With no arguments (`cargo run`), the application runs in
+the standard graphical mode. With a single argument (`cargo run
+repl`), only a Sail REPL at the command line runs. With two arguments
+(`cargo file examples/mult-while.sl`), the second argument is taken as
+the path to a Sail file, which is executed.
 
-Here we will discuss use of the graphical mode; more information about
-Sail is given in the next section. Currently STARK presents a simple
-canvas occupying the entire frame. You can alter it directly by
-drawing lines with your mouse and keyboard, or indirectly by running
-functions at the provided REPL.
+Here we will discuss the graphical mode; more information about Sail
+is given in the next section. Currently STARK presents a simple canvas
+occupying the entire frame. You can alter it directly by drawing lines
+with your mouse and keyboard, or indirectly by running functions at
+the provided REPL.
 
 Inside the frame, your cursor is a crosshair. Click once to begin
 drawing a line; a preview will appear. Move the cursor and click again
 to place the second point, completing the line. You can draw as many
-lines as you like in this way.
-
-Keyboard controls are also provided for more precise diagramming and
-situations when you lack a mouse. The current keybindings are as
-follows.
+lines as you like in this way. Keyboard controls are also provided for
+more precise diagramming. The current keybindings are as follows.
 
 -   **Space**: Place a point here
 -   **U**: Move cursor up
@@ -203,7 +207,7 @@ program):
     according to the current mode
 
 
-<a id="orgce6c372"></a>
+<a id="org0431286"></a>
 
 ### Issues
 
@@ -213,15 +217,14 @@ program):
     seems to crash the program
 
 
-<a id="org06d5e34"></a>
+<a id="orgb99bd3a"></a>
 
 ## Sail
 
-Sail is a scripting language used to define most of STARK's
-behavior. Since it is interpreted, the code underlying STARK can be
-altered while the program is running. This gives the system a great
-deal of malleability: a user can change the software as easily as use
-it.
+Sail is a scripting language used to define STARK's behavior. Since it
+is interpreted, the code underlying STARK can be altered while the
+program is running. This makes the system quite flexible: a user can
+change the software as easily as use it.
 
 A Lisp dialect, Sail takes cues from Common Lisp, Clojure, and
 Scheme. The language is unique, and it will grow and change with STARK
@@ -268,14 +271,16 @@ More example lines:
     (eval (parse "(+ 2 2)"))
     ; evaluates to 4
 
-Sail currently uses an iterative stack-based evaluator which walks a
+Sail currently uses a stack-based iterative evaluator which walks a
 structure of Sail objects in memory. It evaluates lists containing
-special forms or functions along with their arguments. There are many
-improvements to be made, so, like the rest of STARK, this language
-will change at all levels as development continues.
+special forms or functions along with their arguments, and binds
+symbols in a set of special environment structures.
+
+There are many improvements to be made throughout Sail, and it will
+change frequently.
 
 
-<a id="org7e58ec5"></a>
+<a id="orga432015"></a>
 
 ## Roadmap
 
@@ -289,7 +294,7 @@ STARK has a long way to go. Some upcoming improvements:
 -   3D chunk rendering
 
 
-<a id="org87e93a8"></a>
+<a id="org98accf9"></a>
 
 ## License
 

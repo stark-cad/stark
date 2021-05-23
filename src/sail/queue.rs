@@ -122,9 +122,15 @@ pub fn queue_rx(loc: *mut SlHead) -> *mut SlHead {
                     // if the head isn't nil, shift the tail down the queue
                     write_field_cmpxcg_unchecked(sender, 0, tail, head);
                 } else {
+                    // TODO: this handler needs to work on windows
                     if nil_p(head) {
-                        // log::debug!("a queue head was nil");
-                        write_field_cmpxcg_unchecked(loc, 0, head, tail);
+                        log::debug!("a queue head was nil");
+                        write_field_cmpxcg_unchecked(
+                            loc,
+                            0,
+                            head,
+                            read_field_atomic_unchecked(sender, 0),
+                        );
                         continue;
                     }
 
