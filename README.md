@@ -1,7 +1,7 @@
 ![img](icons/logo.png)
 
 
-<a id="orge4c7e4b"></a>
+<a id="orgb11a5ed"></a>
 
 # STARK
 
@@ -24,7 +24,7 @@ renderer). Diagrams may be drawn using Sail code, the mouse or
 keyboard alone, or both together.
 
 
-<a id="orgc141864"></a>
+<a id="orgd14803a"></a>
 
 ## Caution
 
@@ -36,7 +36,7 @@ much appreciated. If you do choose to install STARK and try it out,
 thank you!
 
 
-<a id="orgbf4a385"></a>
+<a id="org3dc57a4"></a>
 
 ## Installation
 
@@ -47,7 +47,7 @@ will be distributed in the future, but for now you must compile the
 program yourself.
 
 
-<a id="org1080db5"></a>
+<a id="org0d1866a"></a>
 
 ### Linux
 
@@ -67,16 +67,23 @@ and run STARK.
     driver, or similar, depending on the manufacturer and model of your
     graphics processor.
     
-    No optional dependencies for any of the above packages are needed.
-    
     If you cannot install the `shaderc` package, you will need `cmake` and
     `python` so the library can be built from source.
+    
+    No optional dependencies are needed for any of the above packages.
 
 2.  Building
 
-    At the command line, use the `cd` command to navigate to the directory
-    where you want to keep the source code, likely in your home folder,
-    and run
+    At the command line, run `vulkaninfo | grep 'Version:'`. If the
+    version shown is below 1.2, or if the command fails, you need an
+    updated driver for your graphics processor.
+    
+    If your graphics processor itself is incompatible with Vulkan 1.2, you
+    may still be able to continue by installing the `vulkan-swrast`
+    package.
+    
+    Use the `cd` command to navigate to the directory where you want to
+    keep the source code, likely in your home folder, and run
     
         git clone https://github.com/stark-cad/stark.git
         git clone https://github.com/stark-cad/gfx.git
@@ -88,9 +95,6 @@ and run STARK.
     `tools/g-api.sh`. Check that there are two lines of output, both
     ending in "vulkan". If not, run `tools/g-api.sh vulkan`.
     
-    Run `vulkaninfo | grep 'Version:'`. If the version shown is below 1.2,
-    you need an updated graphics driver to continue.
-    
     Run `rustup update` to ensure that an up-to-date Rust toolchain is
     present. Compile STARK by running `cargo build`.
     
@@ -98,29 +102,47 @@ and run STARK.
     white background appear. Success!
 
 
-<a id="orgd12f046"></a>
+<a id="org705f64f"></a>
 
 ### Windows
 
 1.  Required Software
 
-    -   Git for Windows: <https://git-scm.com/download/windows>
-    -   Rustup: <https://rustup.rs>
     -   Microsoft C++ Build Tools: <https://visualstudio.microsoft.com/visual-cpp-build-tools/>
+    -   Rustup: <https://rustup.rs>
+    -   Git for Windows: <https://git-scm.com/download/windows>
     -   CMake: <https://cmake.org/download/>
     -   Python 3: <https://www.python.org/downloads/windows/>
     -   Ninja: <https://github.com/ninja-build/ninja/releases>
-
-2.  Building
-
-    Run the downloaded executable files for all the above programs except
-    for Ninja, which does not have an installer. If the installers inquire
-    about changing the PATH, approve the changes.
+    
+    Install the above programs in order by running their downloaded
+    executable files, except for Ninja, which does not have an
+    installer. In particular, the C++ Build Tools should be installed
+    before Rustup.
+    
+    When installing the C++ Build Tools, you must select the "Desktop
+    Development with C++" workload in the Visual Studio Installer before
+    choosing to install. All of the automatically selected "optional
+    components" are required. Restart after installing the tools.
+    
+    You need to explicitly choose to add CMake and Python to the system
+    PATH in their respective installers. If other installers inquire about
+    adding to the PATH, approve those changes as well.
+    
+    It is recommended to select the option to increase the PATH length
+    limit if it appears at the end of the Python installer.
     
     Extract the Ninja archive into `C:/Ninja` or a directory of your
     choice, then add that directory to the system PATH. This can be done
     through the Advanced System Settings dialog.
     
+    To do so, search for and select "Advanced system settings" in the
+    Start menu. Select the "Environment Variables&#x2026;" button. Double click
+    the "Path" entry under the "System Variables" header. Select "New",
+    enter the directory path containing `ninja.exe`, and select "OK".
+
+2.  Building
+
     Open Git Bash, the shell emulator that comes with Git for Windows. Use
     the `cd` command to navigate to the directory where you want to keep
     the source code, likely in your home folder, and run
@@ -131,9 +153,12 @@ and run STARK.
     
     Alternatively, you can clone via SSH.
     
-    Assuming that you will use DirectX 12 as the graphics API, run
+    It is simplest to use DirectX 12 as the backend graphics API, so run
     `tools/g-api.sh dx12` from the `stark` repository's base directory. If
     your system does not support DX12, you need a driver update.
+    
+    You can use Vulkan instead of DX12, but this may require a more
+    involved driver update if version 1.2 is not supported.
     
     Run `rustup update` to ensure that an up-to-date Rust toolchain is
     present. Compile STARK by running `cargo build`.
@@ -142,7 +167,7 @@ and run STARK.
     white background appear. Success!
 
 
-<a id="org9240f5e"></a>
+<a id="org603b7f7"></a>
 
 ### Other
 
@@ -151,7 +176,7 @@ a supported graphics API. If you have access to another type of system
 and want to try building STARK, try it and let me know how it goes.
 
 
-<a id="orgb32a833"></a>
+<a id="org0feb903"></a>
 
 ## Usage
 
@@ -185,9 +210,9 @@ more precise diagramming. The current keybindings are as follows.
 -   **K**: Kill the last drawn line
 -   **M**: Switch drawing modes
 
-These are all hardcoded at the moment, and selected to be agnostic
-with respect to keyboard layout, but users will soon be free to rebind
-all these functions at runtime.
+These are all hardcoded at the moment, and selected to be independent
+of keyboard layout, but users will soon be free to rebind all these
+functions at runtime.
 
 As the final binding indicates, there are two drawing modes. The
 default is drawing a line segment between two points. When you switch
@@ -197,7 +222,7 @@ Certain functions are available at the REPL for changing the graphical
 state (caution: for now, entering an invalid function crashes the
 program):
 
--   `(clear-lines)`: Clears all lines currently on canvas
+-   `(lines-clear)`: Clears all lines currently on canvas
 -   `(back-col-set r g b)` Takes three float color values between 0.0
     and 1.0; sets the background color of the canvas
 -   `(line-col-set r g b)` Takes three float color values between 0.0
@@ -207,17 +232,17 @@ program):
     according to the current mode
 
 
-<a id="org0431286"></a>
+<a id="org36cdbfc"></a>
 
 ### Issues
 
 -   On Windows, it may be necessary to resize the frame and press enter
     at the REPL before input is accepted in graphical mode
--   On Windows, a rare queue problem, handled successfully on Linux,
-    seems to crash the program
+-   On Windows, a rare queue problem, handled successfully on Linux, may
+    crash the program
 
 
-<a id="orgb99bd3a"></a>
+<a id="org9fc33e9"></a>
 
 ## Sail
 
@@ -280,7 +305,7 @@ There are many improvements to be made throughout Sail, and it will
 change frequently.
 
 
-<a id="orga432015"></a>
+<a id="orge17a607"></a>
 
 ## Roadmap
 
@@ -294,7 +319,7 @@ STARK has a long way to go. Some upcoming improvements:
 -   3D chunk rendering
 
 
-<a id="org98accf9"></a>
+<a id="org57a5a8e"></a>
 
 ## License
 
