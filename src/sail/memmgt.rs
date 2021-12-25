@@ -136,6 +136,28 @@ impl RegionTable {
     }
 }
 
+impl Drop for RegionTable {
+    fn drop(&mut self) {
+        println!("dropping region table");
+        let mut last_reg = ptr::null_mut();
+        unsafe {
+            for i in 0..self.len {
+                let cur_reg = ptr::read(self.region_array.add(i));
+                if cur_reg != last_reg {
+                    destroy_mem_region(cur_reg);
+                    last_reg = cur_reg;
+                }
+            }
+
+            let layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
+            alloc::dealloc(self.low_array as *mut u8, layout);
+            alloc::dealloc(self.high_array as *mut u8, layout);
+            alloc::dealloc(self.zone_array as *mut u8, layout);
+            alloc::dealloc(self.region_array as *mut u8, layout);
+        }
+    }
+}
+
 // TODO: *garbage collection*
 // TODO: separate zones for objects with static size and those with variable size?
 // TODO: implement the freelist in alloc, realloc, and dealloc
@@ -263,6 +285,22 @@ pub unsafe fn acquire_mem_region(zone_size: usize) -> *mut Region {
     new_mem_zone(out);
 
     out
+}
+
+pub unsafe fn destroy_mem_region(reg: *mut Region) {
+    let layout = alloc::Layout::from_size_align_unchecked((*reg).zone_size + MEM_ZONE_HEAD_SIZE, 1);
+    let mut next = (*reg).head;
+    loop {
+        let cur = next;
+        next = (*cur).next;
+        if next == ptr::null_mut() {
+            break;
+        }
+        alloc::dealloc(cur as *mut u8, layout);
+    }
+
+    let reg = Box::from_raw(reg);
+    drop(reg);
 }
 
 /// Returns the region and zone in which a given Sail object is stored

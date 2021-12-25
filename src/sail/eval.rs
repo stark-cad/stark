@@ -34,8 +34,6 @@ pub struct EvalStack {
     stack_top: *mut usize,
     /// Start of the stack's top frame
     frame_start: *mut usize,
-    /// Location to write discarded return values
-    pub null_loc: *mut usize,
 }
 
 impl EvalStack {
@@ -51,7 +49,6 @@ impl EvalStack {
                 stack_max: stack.add(size_bytes) as *mut usize,
                 stack_top: stack as *mut usize,
                 frame_start: stack as *mut usize,
-                null_loc: Box::into_raw(Box::from(0)),
             }
         }
     }
@@ -112,7 +109,7 @@ impl EvalStack {
         }
 
         unsafe {
-            if self.stack_top as usize + 8 >= self.stack_max as usize {
+            if self.stack_top as usize + 8 >= self.stack_max as usize - 8 {
                 self.resize((self.stack_max as usize - self.stack_start as usize) / 4)
             }
             let new_top = self.stack_top.add(1);
@@ -160,7 +157,7 @@ impl EvalStack {
         }
 
         unsafe {
-            if self.stack_top as usize + 24 >= self.stack_max as usize {
+            if self.stack_top as usize + 24 >= self.stack_max as usize - 8 {
                 let old_top = self.stack_top as usize;
                 self.resize((self.stack_max as usize - self.stack_start as usize) / 4);
                 ret = ((ret as usize - old_top) + self.stack_top as usize) as *mut *mut SlHead;
@@ -210,7 +207,19 @@ impl EvalStack {
         }
     }
 
-    /// Starts evaluating a Sail expression with an external return location
+    // TODO: use more of a condition system than an exception system eventually
+    fn unwind(&mut self, error: *mut SlHead) {
+        // destroy stack frames until reaching an error catch or the bottom
+        while self.frame_start > self.stack_start {
+            self.pop_frame();
+        }
+
+        unsafe {
+            ptr::write(self.frame_ret(), error);
+        }
+    }
+
+    /// Starts evaluating a Sail expression with the provided return location
     ///
     /// Returns false and does nothing if the stack is already in use
     pub fn start(&mut self, ret: *mut *mut SlHead, env: *mut SlHead, expr: *mut SlHead) -> bool {
@@ -232,20 +241,8 @@ impl EvalStack {
     /// - This function is temporary and using it is a bad idea
     pub fn start_no_ret(&mut self, env: *mut SlHead, expr: *mut SlHead) {
         if nnil_ref_p(expr) {
-            self.push_frame_head(self.null_loc as *mut *mut SlHead, Opcode::Eval, env);
+            self.push_frame_head(self.stack_max as *mut *mut SlHead, Opcode::Eval, env);
             self.push(ref_get(expr));
-        }
-    }
-
-    // TODO: use more of a condition system than an exception system eventually
-    fn unwind(&mut self, error: *mut SlHead) {
-        // destroy stack frames until reaching an error catch or the bottom
-        while self.frame_start > self.stack_start {
-            self.pop_frame();
-        }
-
-        unsafe {
-            ptr::write(self.frame_ret(), error);
         }
     }
 
@@ -513,7 +510,7 @@ impl EvalStack {
                     self.pop();
                     self.push(get_next_list_elt(remainder));
                     if nnil_ref_p(remainder) {
-                        self.push_frame_head(self.null_loc as *mut *mut SlHead, Opcode::Eval, env);
+                        self.push_frame_head(self.stack_max as *mut *mut SlHead, Opcode::Eval, env);
                         self.push(ref_get(remainder));
                     }
                 }
@@ -527,7 +524,7 @@ impl EvalStack {
                     let return_to = self.frame_addr(1);
                     self.eval_expr(return_to, env, pred);
 
-                    self.push_frame_head(self.null_loc as *mut *mut SlHead, Opcode::DoSeq, env);
+                    self.push_frame_head(self.stack_max as *mut *mut SlHead, Opcode::DoSeq, env);
                     self.push(body);
                 } else {
                     self.pop_frame();
@@ -609,6 +606,20 @@ impl EvalStack {
                     self.pop_frame();
                 }
             }
+        }
+
+        return true;
+    }
+}
+
+impl Drop for EvalStack {
+    fn drop(&mut self) {
+        unsafe {
+            let layout = alloc::Layout::from_size_align_unchecked(
+                (self.stack_max as usize - self.stack_start as usize) + 8,
+                8,
+            );
+            alloc::dealloc(self.stack_start as *mut u8, layout);
         }
     }
 }
