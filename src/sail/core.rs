@@ -85,9 +85,11 @@ pub struct SlHead {
 // TODO: potential change: add a "shared" bit to indicate that an object
 // may be read and / or written by other threads
 
+// TODO / NOTE: There is currently one spare, unused bit in the Sail head: the second lowest bit
+
 /// ALL Sail objects that may be independently referenced, begin with bytes of this format
 ///
-/// size: 4 bits - base type: 3 bit - list elt: 1 bit - type pred: 1 bit - rc: 8 bits
+/// size: 3 bits - base type: 3 bits - list elt: 1 bit - type pred: 1 bit - rc: 8 bits
 /// The first eight bits determine the subsequent memory layout
 const _MIN_HEAD: u16 = 0b1110001011111111;
 
@@ -270,8 +272,6 @@ impl TryFrom<Cfg> for CoreType {
 /// - Slice containing all Sail arguments
 pub type NativeFn = fn(*mut Region, *mut SlHead, *mut SlHead, &[*mut SlHead]) -> *mut SlHead;
 
-// TODO / NOTE: There is currently one spare, unused bit in the Sail head: the second lowest bit
-
 /// Creates a nil Sail object
 #[inline(always)]
 pub fn nil() -> *mut SlHead {
@@ -284,6 +284,7 @@ pub fn nil_p(loc: *mut SlHead) -> bool {
     loc.is_null()
 }
 
+// With current value representation, nothing is really an atom
 // pub fn atom_p(loc: *mut SlHead) -> bool {
 //     match core_type(loc) {
 //         Some(t) if t != CoreType::Ref => true,
@@ -1351,7 +1352,7 @@ pub fn env_arg_layer_ins(reg: *mut Region, layer: *mut SlHead, key: *mut SlHead,
 /// and vice versa
 ///
 /// This should take the form of a bimap, a 1 to 1 association between strings and IDs.
-/// Two maps, one for each direction, pointing to the same set of cons cells (id . string).
+/// Two maps, one for each direction, pointing to the same set of cells: (id string).
 /// Must keep track of id to assign (counter) and reclaim unused slots if counter reaches max.
 fn sym_tab_create(reg: *mut Region, size: u32) -> *mut SlHead {
     let tbl = stdvec_make(reg, 3);

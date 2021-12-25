@@ -325,13 +325,13 @@ impl EvalStack {
     /// will evaluate any Sail expression. It handles all defined
     /// opcodes and adds more frames to the stack as necessary, but
     /// never uses recursion.
-    pub fn iter_once(&mut self, reg: *mut memmgt::Region, tbl: *mut SlHead) {
+    pub fn iter_once(&mut self, reg: *mut memmgt::Region, tbl: *mut SlHead) -> bool {
         // ***********************************
         // * Sail stack-based evaluation logic
         // ***********************************
 
         if self.is_empty() {
-            return;
+            return false;
         }
 
         let (ret, env, opc) = self.frame_top();
@@ -365,13 +365,13 @@ impl EvalStack {
                             let return_to = self.frame_addr(1);
 
                             self.eval_expr(return_to, env, value);
-                            return;
+                            return true;
                         }
                         id if id == SP_DO.0 => {
                             // needs: current remaining list of expressions
                             self.push_frame_head(ret, Opcode::DoSeq, env);
                             self.push(raw_args);
-                            return;
+                            return true;
                         }
                         id if id == SP_EVAL.0 => {
                             self.push_frame_head(ret, Opcode::PreEval, env);
@@ -380,7 +380,7 @@ impl EvalStack {
                             let return_to = self.frame_addr(0);
 
                             self.eval_expr(return_to, env, raw_args);
-                            return;
+                            return true;
                         }
                         id if id == SP_FN.0 => {
                             // needs: nothing else evaluated
@@ -397,7 +397,7 @@ impl EvalStack {
                             }
                             proc_lambda_set_body(out, get_next_list_elt(raw_args));
                             unsafe { ptr::write(ret, out) };
-                            return;
+                            return true;
                         }
                         id if id == SP_IF.0 => {
                             // needs: evaluated test and both branches
@@ -409,12 +409,12 @@ impl EvalStack {
                             let return_to = self.frame_addr(0);
 
                             self.eval_expr(return_to, env, raw_args);
-                            return;
+                            return true;
                         }
                         id if id == SP_QUOTE.0 => {
                             // needs: nothing else evaluated
                             unsafe { ptr::write(ret, raw_args) };
-                            return;
+                            return true;
                         }
                         id if id == SP_SET.0 => {
                             // needs: symbol to bind, object to bind to it
@@ -426,7 +426,7 @@ impl EvalStack {
                             let return_to = self.frame_addr(1);
 
                             self.eval_expr(return_to, env, value);
-                            return;
+                            return true;
                         }
                         id if id == SP_WHILE.0 => {
                             self.push_frame_head(ret, Opcode::While, env);
@@ -437,7 +437,7 @@ impl EvalStack {
                             let return_to = self.frame_addr(1);
 
                             self.eval_expr(return_to, env, raw_args);
-                            return;
+                            return true;
                         }
                         _ => {}
                     }
@@ -620,18 +620,14 @@ pub fn eval(
     env: *mut SlHead,
     expr: *mut SlHead,
 ) -> *mut SlHead {
-    let sigil = 1 as *mut SlHead;
-
-    let mut result = sigil;
-    let ret_addr: *mut *mut SlHead = &mut result;
+    let mut result: *mut SlHead = ptr::null_mut();
+    let ret_addr: *mut *mut SlHead = &mut result as *mut *mut SlHead;
 
     let mut stack = EvalStack::new(10000);
 
     stack.start(ret_addr, env, expr);
 
-    while result == sigil {
-        stack.iter_once(reg, tbl);
-    }
+    while stack.iter_once(reg, tbl) {}
 
     result
 }

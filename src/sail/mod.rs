@@ -27,7 +27,7 @@
 
 // <>
 
-//! The Structured Augmentation Interchange Language
+//! Then Structured Augmentation Interchange Language
 //!
 //! A custom Lisp dialect for writing STARK
 
@@ -528,10 +528,8 @@ pub fn repl(stream_in: std::io::Stdin) {
 
     let mut stack = eval::EvalStack::new(10000);
 
-    let sigil = 1 as *mut SlHead;
-
-    let mut ret_slot = sigil;
-    let ret_addr: *mut *mut SlHead = &mut ret_slot;
+    let mut ret_slot: *mut SlHead = ptr::null_mut();
+    let ret_addr: *mut *mut SlHead = &mut ret_slot as *mut *mut SlHead;
 
     loop {
         let mut input = String::new();
@@ -547,13 +545,9 @@ pub fn repl(stream_in: std::io::Stdin) {
 
         stack.start(ret_addr, env, expr);
 
-        while ret_slot == sigil {
-            stack.iter_once(region, tbl);
-        }
+        while stack.iter_once(region, tbl) {}
 
         println!("{}\n", context(tbl, ret_slot).to_string());
-
-        ret_slot = sigil;
     }
 }
 

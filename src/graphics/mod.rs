@@ -23,12 +23,16 @@
 
 // Graphics rendering system for STARK. Relies on gfx-hal for low
 // level access to Vulkan and other graphics APIs. Contains code for a
-// dedicate rendering thread.
+// dedicated rendering thread.
 
 // <>
 
 use crate::sail::{self, SlHead};
 use crate::FrameHandle;
+
+// TODO: rewrite graphics backend to use ash instead of gfx
+
+use ash::vk;
 
 use gfx_hal::{
     adapter::{Adapter, PhysicalDevice},
@@ -60,7 +64,7 @@ use std::mem::size_of;
 pub fn render_loop(
     name: &'static str,
     size: [u32; 2],
-    window: &FrameHandle,
+    frame: &FrameHandle,
     sl_reg: usize,
     sl_tbl: usize,
     sl_env: usize,
@@ -69,8 +73,7 @@ pub fn render_loop(
     let sl_tbl = sl_tbl as *mut SlHead;
     let sl_env = sl_env as *mut SlHead;
 
-    let mut engine: Engine<backend::Backend> =
-        Engine::new(GraphicsState::new(window, name, size[0], size[1]));
+    let mut engine: Engine<backend::Backend> = Engine::new(frame, name, size[0], size[1]);
 
     let eng_obj = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::Cfg::B8Other as u8) };
     unsafe { sail::write_field_unchecked(eng_obj, 0, (&mut engine as *mut _) as u64) };
@@ -180,16 +183,12 @@ pub fn render_loop(
 
     let mut stack = sail::eval::EvalStack::new(10000);
 
-    let sigil = 1 as *mut SlHead;
-
-    let mut ret_slot = sigil;
-    let ret_addr: *mut *mut SlHead = &mut ret_slot;
+    let mut ret_slot: usize = 0;
+    let ret_addr: *mut *mut SlHead = (&mut ret_slot as *mut usize) as *mut *mut SlHead;
 
     stack.start(ret_addr, sl_env, prog_expr);
 
-    while ret_slot == sigil {
-        stack.iter_once(sl_reg, sl_tbl);
-    }
+    while stack.iter_once(sl_reg, sl_tbl) {}
 
     let rndr = sail::env_lookup_by_id(sl_env, sail::S_RNDR.0);
 
@@ -203,9 +202,7 @@ pub fn render_loop(
             engine.should_configure_swapchain = false;
         }
 
-        stack.iter_once(sl_reg, sl_tbl);
-
-        if stack.is_empty() {
+        if !stack.iter_once(sl_reg, sl_tbl) {
             println!("render thread ended");
             break;
         }
@@ -505,10 +502,10 @@ pub struct GraphicsState<B: gfx_hal::Backend> {
 
 impl<B: gfx_hal::Backend> GraphicsState<B> {
     /// Initialize the graphics system and track necessary state
-    pub fn new(window: &FrameHandle, name: &str, width: u32, height: u32) -> Self {
+    pub fn new(frame: &FrameHandle, name: &str, width: u32, height: u32) -> Self {
         let surface_extent = Extent2D { width, height };
         let instance = B::Instance::create(name, 1).unwrap();
-        let surface = unsafe { instance.create_surface(window).unwrap() };
+        let surface = unsafe { instance.create_surface(frame).unwrap() };
         let adapter = instance
             .enumerate_adapters()
             .into_iter()

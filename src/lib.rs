@@ -27,7 +27,6 @@
 // <>
 
 #![feature(core_intrinsics)]
-#![feature(const_fn_transmute)]
 
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
@@ -111,16 +110,12 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_env: usize) {
 
     let mut stack = sail::eval::EvalStack::new(10000);
 
-    let sigil = 1 as *mut SlHead;
-
-    let mut ret_slot = sigil;
-    let ret_addr: *mut *mut SlHead = &mut ret_slot;
+    let mut _slot: usize  = 0;
+    let ret_addr = (&mut _slot as *mut usize) as *mut *mut SlHead;
 
     stack.start(ret_addr, sl_env, prog_expr);
 
-    while ret_slot == sigil {
-        stack.iter_once(sl_reg, sl_tbl);
-    }
+    while stack.iter_once(sl_reg, sl_tbl) {}
 
     let main = sail::env_lookup_by_id(sl_env, sail::S_MAIN.0);
 
@@ -128,9 +123,7 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_env: usize) {
     stack.push(main);
 
     loop {
-        stack.iter_once(sl_reg, sl_tbl);
-
-        if stack.is_empty() {
+        if !stack.iter_once(sl_reg, sl_tbl) {
             println!("manager thread ended");
             break;
         }

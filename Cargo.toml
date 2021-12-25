@@ -1,6 +1,6 @@
 [package]
 name = "stark"
-version = "0.1.0"
+version = "0.2.0-dev"
 authors = ["Matthew Rothlisberger <mattjrothlis@gmail.com>"]
 edition = "2018"
 
