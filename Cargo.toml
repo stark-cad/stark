@@ -20,7 +20,7 @@ log = "0.4.11"
 simple_logger = "1.11.0"
 
 # Change graphics backend with
-# tools/set-backend.sh <backend>
+# tools/g-api.sh <backend>
 
 # DO NOT ALTER BY HAND
 [dependencies.backend]
