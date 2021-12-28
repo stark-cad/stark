@@ -1,25 +1,30 @@
 * STARK
+This overview applies to v0.1.0 of STARK.
+
 ** Video Demo
+
+
 ** Explanation
+A prototype of a malleable tool for computer augmented design.
+
 ** Files
 All the files I have written for STARK are in this repository; I may
-move some dependencies in as git submodules in the future.
+move some dependencies in as Git submodules in the future.
 
 *** =Cargo.toml=
 This file configures Cargo, the Rust build system, for this
 project. It gives the package name, current version, and a listing of
-libraries that STARK depends on. This listing is used by Cargo to
-compile and link the resulting program with all the necessary code. At
-the end of the file is an entry describing the graphics backend
-dependency, which may be different between compilation targets. This
-can be changed using a shell script included in the repository.
+libraries that STARK depends on. Cargo uses this listing to compile
+and link the resulting program with all the necessary code. At the end
+of the file is an entry describing the graphics backend dependency,
+which may vary between compilation targets. This can be altered using
+a shell script included in the repository.
 
 *** =Makefile=
 For use with GNU Make, this file is meant to contain command sequences
 I run frequently, and abbreviate them to a simple =make=
-command. Currently it contains only a command to document STARK's Rust
-code and copy the documentation pages to the source used to generate
-the STARK website.
+command. Currently it contains only a recipe to document STARK's Rust
+code and copy the documentation pages to the STARK website source.
 
 *** =examples=
 Sail example programs go in this folder; for the moment there are only
@@ -35,9 +40,9 @@ environment is built up, and will be rectified in the future.
 **** =mult-while.sl=
 This has exactly the same behavior as the program mentioned above, but
 uses a while loop instead of tail recursion, and consequently is much
-faster. These programs also point to some convenient capabilities,
-like macros and good garbage collection, that will be added to Sail
-shortly.
+faster. These programs also indicate the utility of certain
+capabilities, like macros and good garbage collection, which will be
+added to Sail shortly.
 
 *** =scripts=
 In this folder are Sail scripts that are important to STARK; they
@@ -47,7 +52,7 @@ respectively, and communicate through queues.
 
 **** =main.sl=
 This script defines the behavior STARK exhibits upon receiving various
-user inputs. There are several convenience functions, followed by a
+user inputs. There are assorted convenience functions, followed by a
 main loop which checks a queue for user input. Signals are sent along
 this queue from the context thread, which directly receives input from
 the operating system. There are several keybindings, most of which
@@ -55,8 +60,8 @@ move the cursor around the canvas. The mode may be switched between
 drawing lines and rectangles; the cursor step length may be modified;
 and other keybindings change the drawing state, such as canceling or
 deleting lines. Several of these behaviors involve sending signals
-along another queue, to the rendering thread, where they change the
-graphics engine state.
+along another queue, to the rendering thread, where the graphics
+engine state changes.
 
 A couple of items are defined before the main function, because they
 are used across threads. That kind of simplification is possible
@@ -75,7 +80,7 @@ This program runs in the rendering engine's thread. It receives draw
 calls from the manager thread describing geometry to add to, or remove
 from, the canvas. It also receives information from the context thread
 on changes to the graphical frame that require action by the
-engine. When new information arrives, Rust native functions are run to
+engine. When new information arrives, Rust native functions run to
 alter the graphics engine. The tracking line that shows the
 prospective position of the next line once one point has been placed,
 is currently also drawn here. This capability uses global data that is
@@ -196,14 +201,14 @@ improved type system is a priority.
 
 Sail objects can vary widely in size and layout, according to their
 type. If the values were simply stored with no additional data, it
-would be impossible to tell where the boundaries are between objects
-or their contained values. To prevent this issue, all Sail objects
-begin with an eight byte header of the same format. The header
-specifies the size and type, provides a reference count for garbage
-collection, and contains a pointer to the next list element. Since the
-type of an object is always given in a known format at its start, Sail
-objects that vary in size and content can be safely handled through
-pointers, with all value accesses conforming to the type layout.
+would be impossible to discern the boundaries between objects or their
+contained values. To prevent this issue, all Sail objects begin with
+an eight byte header of the same format. The header specifies the size
+and type, provides a reference count for garbage collection, and
+contains a pointer to the next list element. Since an object's type is
+always given in a known format at its start, Sail objects that vary in
+size and content can be safely handled through pointers, with all
+value accesses conforming to the type layout.
 
 All Sail objects contain a pointer for a subsequent list element. This
 is a departure from most Lisp dialects, which have a distinct cons
@@ -233,9 +238,9 @@ and writes, especially when a compiler will be used. I am yet to
 devise tests of this, but I believe that the positive qualities of
 this format outweigh those of the classic Lisp list format. They seem
 to be equivalent in what they can express, so Sail is quite likely to
-feel similar to other Lisps. Nevertheless it would be interesting to
-see whether improvements to syntax or behavior can stem from the
-unique layout.
+feel similar to other Lisps. Nevertheless, I am interested to discover
+whether improvements to syntax or behavior can stem from the unique
+layout.
 
 A portion of this core file is devoted to utility functions for
 handling Sail objects: type testing, truth testing, retrieving size,
@@ -250,14 +255,14 @@ packed following the header.
 
 There are functions for equality tests and hashing. The equality test
 is somewhat convoluted to handle comparing nil values to empty
-references; this may point to a need for improvement to the way these
+references; this points to a need for improvement in the way these
 types work together. Equality tests and hashing are important to hash
 maps, which are used to implement the Sail environment. This is the
 structure that relates unique symbols to objects. Symbols are
-important to Lisp systems: they provide values that are accessible by
+essential to Lisp systems: they provide values that are accessible by
 name even at runtime. My current environment implementation is naive;
 it takes too many steps to look up symbols and the data is not closely
-packed. I will improve it, but it is workable for now.
+packed. I will improve this, but it works for now.
 
 Using the current design, a Sail environment is a list of associative
 maps. Each map relates keys to values: the keys are always symbols and
@@ -307,14 +312,14 @@ structure in memory, but it is required to interface with a user.
 
 ***** =eval.rs=
 Sail programs are parsed from text into a structure of Sail objects in
-memory. This file contains the mechanisms required to evaluate these
+memory. This file contains the mechanisms required to evaluate such
 structures and return the resulting objects. The evaluation system has
 changed over time perhaps more than any other aspect of Sail. As it is
 now, evaluation uses a custom stack structure that executes frames
 each containing a return address, an environment, an opcode describing
 the nature of the computation, and one or more pointers to Sail
 objects. Based on the opcode, the evaluator uses the Sail objects and
-the environment to produce a result; a pointer to this is placed at
+the environment to produce a result, a pointer to which is placed at
 the return address.
 
 A Sail stack is a contiguous region of memory tracked with a group of
@@ -328,16 +333,16 @@ stack's memory since no frames exist yet. A stack can also be resized,
 which may allocate new memory. If this occurs, any pointers to memory
 within the stack are modified for consistency with the new location.
 
-Since this is a stack, the simple operations push and pop are
+Similar to any stack, the simple push and pop operations are
 present. Pushing a value, which in this case is always a pointer to a
 Sail object, increments the stack top pointer and writes the value to
 the newly available space. It also checks whether the stack needs to
-be resized, which adds some operations; including an option for fixed
-size stacks may be prudent. Popping a value does nothing but decrement
-the stack top pointer. The memory will be overwritten by the next
-push, so it does not need to be altered. Pushing a value makes it part
-of the top frame, or current frame. Adding a new frame to the stack
-uses a function that pushes a frame head.
+be resized, which adds some operations; including optional fixed size
+stacks may be prudent. Popping a value does nothing but decrement the
+stack top pointer. The memory will be overwritten by the next push, so
+it does not need to be altered. Pushing a value makes it part of the
+top frame, or current frame. Adding a new frame to the stack uses a
+function that pushes a frame head.
 
 All stack frames start with a frame head. This is three words long,
 always of a standard format, and built according to certain rules. The
@@ -351,15 +356,15 @@ frame except the top one, but if the stack lost track of any frame
 positions, execution would rapidly fall apart.
 
 The second word of a frame head is the return address. Every stack
-frame, when executed, will return a Sail object. The return address
-points to the location where the pointer to that object will be
-written. Most return addresses point to locations within a previous
-stack frame. The utility of the stack, then, is that execution can be
-broken down step by step, spawning new frames which work to fill the
-slots in older frames. A stack of frames builds up as the complexity
-of the program is broken down, then once indivisible units are
-reached, the stack collapses back down, each frame filling a slot
-below itself with the results of its small computation.
+frame, when executed, returns a Sail object. The return address points
+to the location where the pointer to that object will be written. Most
+return addresses point to locations within a previous stack frame. The
+stack's utility, then, is that execution can be broken down step by
+step, spawning new frames which work to fill the slots in older
+frames. A stack of frames builds up as the program's complexity is
+broken down, then once indivisible units are reached, the stack
+collapses back down, each frame filling a slot below itself with the
+results of its small computation.
 
 A frame head's final word is a tagged pointer containing two important
 pieces of information. The first is a pointer to an environment. As
@@ -410,11 +415,11 @@ evaluator schemes used recursive descent, in which the evaluation
 function calls itself with new target expressions in order to break a
 computation down into small pieces. This can create a chain hundreds
 or thousands of recursive calls deep. These calls use the call stack
-provided by the operating system, which has a set size that does not
-change. Issues arise when Sail evaluation fills the stack, triggering
-an overflow and crash. The standard call stack is also a poor fit for
-Sail execution, because frames are created and destroyed inefficiently
-and must contain far more data than is necessary.
+provided by the operating system, which has an unchanging size. Issues
+arise when Sail evaluation fills the stack, triggering an overflow and
+crash. The standard call stack is also a poor fit for Sail execution,
+because frames are created and destroyed inefficiently and must
+contain far more data than is necessary.
 
 The current Sail evaluator, with its customized stack model, takes
 less memory overall and always uses a small, bounded number of frames
@@ -422,12 +427,12 @@ on the application call stack. The Sail stack, stored in allocated
 heap memory, is able to grow as necessary. It also uses a format and
 algorithm optimized for the needs of Sail. Switching to this evaluator
 from the old recursive design led to well over tenfold improvements in
-test program run time. This model has enormous room for new
+test program run time. This model has enormous potential for new
 capabilities, particularly error handling logic and debugging
 tools. Future Sail evaluation models, including a forthcoming bytecode
 interpreter, will take cues from this design as well.
 
-One iteration of stack evaluation begins by extracting the return
+An iteration of stack evaluation begins by extracting the return
 address, environment, and opcode from the top frame. Then the function
 branches on the opcode value to select which operation to
 perform. Currently there are nine opcodes. The pre evaluation opcode
@@ -481,20 +486,20 @@ application logic, similar to the rest of the evaluation system, has
 been in flux since the beginning of Sail. It has been improving
 through time, but it is still subject to a great deal of change and
 optimization. Part of the difficulty comes from interfacing my own
-language (Sail) with the language (Rust) I'm writing STARK in.
+language (Sail) with the language (Rust) I am writing STARK in.
 
 The next opcode binds a given symbol to a given object in the
 environment's top level. This inserts a new entry, whether or not a
 previous entry for that symbol exists. The subsequent opcode mutates
 an existing entry by changing the object it points to. Using mutation
 for symbols that are already bound is much more efficient than
-creating new entries every time a variable's value changes. In this
-situation, in the current design, the entire program crashes if there
-is no entry for the given symbol. Of course such a failure is
+creating new entries every time a variable's value changes. When
+mutating, in the current design, the entire program crashes if no
+entry exists for the given symbol. Of course such a failure is
 unacceptable and will be rectified with a broader error handling
 system in the near future.
 
-The opcode after these tracks a sequence of expressions to be
+The opcode following these tracks a sequence of expressions to be
 evaluated in order. The sequence frame persists on the stack until the
 last expression is reached; then it is replaced with an evaluation
 frame whose result is returned. In this way, only the final
@@ -550,7 +555,7 @@ necessary, with length and capacity tracked. There is also a write
 lock to make sure that thread contention does not invalidate the
 contents of the table.
 
-The central function for memory management allocates a given number of
+The central memory management function allocates a given number of
 bytes from a given region, with a given configuration byte for the
 block. The total block size will be larger than the given size, as
 there must be room for the Sail object header. The head size ranges
@@ -566,11 +571,11 @@ pointer to the end of the used portion, a pointer to the start of an
 internal freelist (for future use), a pointer to the next zone in the
 region, and a lock that prevents multiple threads from attempting to
 allocate objects simultaneously. Since a region is made up of multiple
-fixed size zones, it can grow to any size without frequent and costly
-length checks on every allocation. Following the zone head structure
-is a span of memory into which blocks can be allocated. Blocks, of
-course, can vary wildly in size; the only requirement is that each
-object's size be discernible from the first few bytes.
+fixed size zones, it can grow to any size without costly reallocation
+copies. Following the zone head structure is a span of memory into
+which blocks can be allocated. Blocks, of course, can vary wildly in
+size; the only requirement is that each object's size be discernible
+from the first few bytes.
 
 ***** =mod.rs=
 This file contains general functions and other definitions for
@@ -595,19 +600,19 @@ an early prototype for a more flexible Sail type system. For the
 moment all types are predefined, but a programmer should be able to
 create and use their own types efficiently in the future.
 
-An important aspect of this file is the collection of important Sail
-symbols that the Sail runtime needs to be aware of at a low
-level. These few dozen symbols are defined with specific symbol IDs
-and names, so that they can be efficiently referenced from Sail or
-Rust code. They also each have a defined symbol type, which for now
-indicates whether they are basic symbols, keywords, or denote Sail
-types. These symbols include those for basic Sail types, every special
-operator, along with important names and keywords for the STARK
-system. It took some time to work out how to make Sail symbols
-available to the low level Rust code, and the method may change.
+An important aspect of this file is the collection of Sail symbols
+that the Sail runtime needs to be aware of at a low level. These few
+dozen symbols are defined with specific symbol IDs and names, so that
+they can be efficiently referenced from Sail or Rust code. They also
+each have a defined symbol type, which for now indicates whether they
+are basic symbols, keywords, or denote Sail types. These symbols
+include those for basic Sail types, every special operator, along with
+important names and keywords for the STARK system. It took some time
+to work out how to make Sail symbols available to the low level Rust
+code, and the method may change.
 
 Some functions here, mostly unused, deal with object type specifiers
-that are part of advanced type system prototyping. These type
+that are part of enhanced type system prototyping. These type
 specifiers would be particular type symbols, and reference some kind
 of entry describing the type. More design is necessary, and there are
 trade offs to be made at various levels. Following this are functions
@@ -631,13 +636,13 @@ are added to the environment for use at runtime.
 ***** =parser.rs=
 Like nearly every other programming language, Sail has a textual form
 for people to write and read. The parser, described in this file,
-reads the text of Sail code and builds up a corresponding structure
-of Sail objects for evaluation. It uses a recursive descent algorithm,
-in which a collection of functions, each for parsing a different part
-of the grammar, call each other. Thus the system stack is used to
-track chains of nested elements, usually lists. Function frames build
-up until the innermost part of the program is reached, then collapse
-back down, returning one by one. The parser will not crash, instead
+reads the text of Sail code and builds up a corresponding Sail object
+structure for evaluation. It uses a recursive descent algorithm, in
+which a collection of functions, each for parsing a different part of
+the grammar, call each other. Thus the system stack is used to track
+chains of nested elements, usually lists. Function frames build up
+until the innermost part of the program is reached, then collapse back
+down, returning one by one. The parser will not crash, instead
 returning error codes for invalid input.
 
 All of the parsing functions that are part of the recursive chain have
@@ -675,12 +680,12 @@ support for parser customization may be added.
 
 Perhaps the most used reader function is for lists, which are the core
 of all Lisp code. Lists are represented as space separated chains of
-values between parentheses. The reader tracks the list's head and
-tail, calling the value reader to get each element before appending it
-to the tail. Upon encountering the closing parenthesis, the head is
+values between parentheses. The reader tracks a list's head and tail,
+calling the value reader to get each element before appending it to
+the tail. Upon encountering the closing parenthesis, the head is
 returned to the calling function. Sail, unlike many Lisp dialects, has
 no syntax for malformed lists. Such syntax is useless because Sail
-lists are not made up of standard cons cells. The Sail list structure
+lists are not made from standard cons cells. The Sail list structure
 is unique, consisting of objects chained together directly, each
 carrying a pointer to the next object or a nil pointer.
 
@@ -707,10 +712,10 @@ character, and their IDs have one or both high bits set to indicate
 the symbol type.
 
 Strings and numbers are read in a similar way to symbols. Their
-characters are read into the accumulator until a close quote or a
+characters are appended to the accumulator until a close quote or a
 space is encountered, then an object is created. Strings are
 initialized from the accumulator directly. Numbers have an additional
-parsing step. The Sail number system, like many other parts, is in a
+parsing step. The Sail number system, like many other aspects, is in a
 prototype state. For now only 64 bit integers and floats can be
 entered in code. In time, the language is intended to possess an
 arbitrary precision number system capable of being mostly transparent
@@ -721,8 +726,8 @@ A final reader function handles special values, which are preceded
 with a pound sign. For now there are only two accepted special values:
 true and false. Some Lisp dialects simply use certain symbols as
 boolean values, but it seems clearer to have distinct true and false
-values available. The special value system is likely to be expanded in
-the future; it could be useful for syntax extensions such as the
+values available. The special value system will likely see expansion
+in the future; it could be useful for syntax extensions such as the
 reader macros mentioned above. The special value syntax may also be
 used for directives to the parser, evaluator, a future compiler, or
 other parts of the STARK system, to change their behavior in clearly
@@ -731,43 +736,43 @@ delineated ways.
 ***** =queue.rs=
 Sail and STARK are designed from the beginning to use multiple threads
 on multiple processing cores in order to work faster. An essential way
-of facilitating cooperation between different computation threads is
-transferring data using queues. This file defines functions for
-sending and receiving Sail objects with a custom queue
-structure. Queues are created as pairs of a sender and a receiver,
-which may occupy different memory regions. Threads must use different
-evaluation stacks, and when they use different regions as well they
-are as independent as they can be. Connecting threads only by queues
-means there is only one way they could block each other.
+to facilitate cooperation between computational threads is by
+transferring data via queues. This file defines functions for sending
+and receiving Sail objects along a custom queue structure. Queues are
+created as pairs of a sender and a receiver, which may occupy
+different memory regions. Threads must use different evaluation
+stacks, and when they use different regions as well they are as
+independent as they can be. Threads connected only by queues have just
+one way to block each other.
 
 To create a queue, two memory region pointers are provided; these may
 be to the same region. Two Sail objects, a sender and a receiver, are
 then created. If the given pointers are to different regions, one
 allocation is made in each. The sender contains a pointer to the queue
 tail, which initially is the receiver, and to the region containing
-the receiver. The receiver contains a pointer to the queue tail, which
+the receiver. The receiver contains a pointer to the queue head, which
 is initially nil, and to the sender. These links between the queue
-ends are used by the enqueue and dequeue algorithms to facilitate
+ends are used by the enqueue and dequeue algorithms to ensure
 consistent information passing between threads, without locks or other
 synchronization. Atomic operations from the x86-64 instruction set see
 extensive use to avoid undesirable overwrites.
 
-Sail objects can be sent along a queue for transmission between
-threads. The queue transmit function takes two pointers: one to a
-queue sender, and one to any Sail object. The target Sail object is
-copied into the memory region of the sender's linked receiver. This
-copy operation currently copies only the target object, not any other
-objects it may point to. To send the item, several actions are
-performed in a loop. In the ideal case, this loop runs only once,
-appending the new item to the queue and exiting. Since the queue
-structure may be modified by multiple threads, the loop includes
-invariant checks. If these fail, the transmission is tried again.
+Sail objects can be sent along queues between threads. The queue
+transmit function takes two pointers: one to a queue sender, and one
+to any Sail object. The target Sail object is copied into the memory
+region of the sender's linked receiver. This copy operation currently
+copies only the target object, not any other objects it may point
+to. To send the item, several actions are performed in a loop. In the
+ideal case, this loop runs only once, appending the new item to the
+queue and exiting. Since the queue structure may be modified by
+multiple threads, the loop includes invariant checks. If these fail,
+the transmission is tried again.
 
 First the current list tail is retrieved from the sender. Its type is
 checked; if it is a queue receiver, it must be this sender's linked
 receiver, which is the head of the queue list. In both cases, the
 pointer to the next element is retrieved from the tail; this should be
-nil. A check determines whether the tail has changed since the
+nil. A check determines whether the tail has changed since
 transmission began, and proceeds if not. If the pointer to the next
 element is not nil, the sender's tail pointer is not pointed to the
 actual tail, so it is advanced and the loop resets. If the pointer to
@@ -786,17 +791,17 @@ currently contains a known value. The check and the optional write are
 completed such that no intermediate state is visible to other
 instructions. Checking state before changing it avoids invalid states.
 
-Objects sent along a queue must be received at the other end. Like the
-transmit function, the receive function runs a loop that, if all goes
-well, will only execute once. From the receiver contents, pointers to
-the queue head, sender, and queue tail are found. After an invariant
+Objects sent along a queue are received at the other end. Like the
+transmit function, the receive function has a loop that, if all goes
+well, only executes once. From the receiver contents, pointers to the
+queue head, sender, and queue tail are found. After an invariant
 check, structure corrections are attempted if the queue is in an
 incorrect state. Once the queue head has been found, the receiver's
-head pointer is changed to point to the element subsequent to the
-queue head. If the queue is empty following removal of the received
-item, the queue structure is set correctly for this situation. Once
-all is finished, the next list element field for the received object
-is set to nil, and it is returned from the function.
+head pointer is changed to point to the element subsequent to the old
+head. If the queue is empty following removal of the received item,
+the queue structure is set correctly for this situation. Once all is
+finished, the received object has its next list element field set to
+nil, and is returned from the function.
 
 This design is likely to change in the future, especially as the
 details of Sail threading and memory management become clearer. One
@@ -811,39 +816,114 @@ be when it occurs, but there may be a way to prevent it
 entirely. Finally, the region system may change significantly.
 
 ***** =stdenv.rs=
-For Sail to be useful, functions must be available in the default
+For Sail to be useful, procedures must be available in the default
 environment. This file contains definitions, written in Rust, for
-several functions which may be used in interpreted Sail code. Each of
-these has been added out of necessity, and all the logic is
-temporary. I expect to overhaul the standard functions and the Sail
-environment in the future. There is a Rust calling convention for
-functions usable from Sail; the interpreter expects every native Rust
-function used in Sail code to have a certain signature. This consists
-of a pointer to a memory region, a symbol table, an environment, and a
-slice of pointers to arguments, which are Sail objects.
+several procedures to use in interpreted Sail code. Each of these has
+been added out of necessity, and all the logic is temporary. I expect
+to overhaul the standard procedures and the Sail environment in the
+future. There is a Rust calling convention for functions usable from
+Sail; the interpreter expects every native Rust procedure in Sail code
+to have a certain signature. This consists of a pointer to a memory
+region, a symbol table, an environment, and a slice of pointers to
+arguments, which are Sail objects.
 
-There is a Rust macro to ease the writing of functions with the
+There is a Rust macro to ease the writing of procedures with the
 appropriate signature. It reduces the code that must be repeated for
 every function, and collects many functions together into a structure
-that can easily be processed into a Sail environment. Every function
+that can easily be processed into a Sail environment. Every procedure
 here in the standard environment is given a name and an argument
-list. The Rust code comprising the function can use the arguments, and
-always returns a Sail object. Currently there are functions for
+list. The Rust code comprising the procedure can use the arguments,
+and always returns a Sail object. Currently there are procedures for
 arithmetic, equality tests, logic, queue sending and receiving,
 collection management, output, and debugging. Besides this file, the
-macro is used for thread specific functions elsewhere in the code.
+same macro defines thread specific functions elsewhere.
 
 **** =context.rs=
+A graphical user interface must exist within a graphical context: a
+location to draw to. In the case of today's desktop operating systems,
+this is a frame, or window, managed by the system's window manager
+software. This file contains functions to create such a frame and get
+user input from it, using the =winit= library. The main context
+initialization function creates an event loop, which will receive user
+input from the window manager. Then a frame is established with the
+manager and linked to the event loop. The frame and event loop are
+returned, to be used for drawing graphics and getting input,
+respectively.
 
+The core context function is the input loop, which takes over the main
+thread and provides handling logic for the event loop. This logic will
+be run every time an event arrives from the window manager until the
+program ends. Before running the event loop, the input loop function
+spawns an additional thread, which takes lines of text input from the
+shell. These are sent to the interpreter thread and executed as Sail
+code. This mechanism permits code execution at runtime to modify the
+prototype's behavior. It is also likely temporary, as all input should
+come from the graphical frame.
+
+Within the event loop, =winit= code runs a handler, provided in this
+function, for each event. Almost every event prompts a message to be
+sent along a Sail queue to either the main interpreter thread or the
+rendering thread. Some events also mutate shared state, like the frame
+dimensions or the cursor position. The current message passing scheme
+is quite inefficient, as Sail objects are created in a region specific
+to the context thread, then copied by the queue logic. Since there is
+not yet a garbage collector, this contributes to general memory
+leakage along with the unnecessary copies. The arrangement works in
+the current prototype state, and it will be improved in time.
 
 **** =lib.rs=
+Here is STARK's main library file, the top level for all the modules
+that make it up. All these modules have been discussed, but there is
+still some useful code here that does not currently fit anywhere
+else. There is a type definition that refers to a =winit= window as a
+frame, following the Emacs convention. There is also a type for a
+frame handle, a wrapper around the =raw-window-handle= library's
+format. This is defined to permit sending the contained data to the
+graphics thread without complaint from the compiler.
 
+Central to this file is the manager loop, the core of the main Sail
+interpreter thread. The Sail script that defines almost all STARK
+behavior runs in this loop. It also sends commands to the window
+manager for actions like changing the cursor icon, visibility, or
+position. Some Sail procedures to test these capabilities are defined
+using the appropriate macro. To actually start the manager loop, the
+main script is parsed, an evaluation stack is created, the environment
+is loaded, and the main Sail procedure is applied.
 
 **** =main.rs=
+Every program must start somewhere; STARK starts with the main
+function defined in this file. In the default mode, it performs the
+top level initialization and spawns the child threads that contain the
+essential logic. When this is completed, it becomes the context
+thread, running the input loop. There are two additional modes for the
+program, which each act as Sail interpreters. A file containing Sail
+code may be parsed and run; this is useful for testing and
+benchmarking the language. A perpetual Sail REPL in the shell may be
+run instead; this is best for interactive language testing where the
+graphical systems are not necessary.
 
+In the default mode, the main function creates Sail memory regions for
+the main thread, render thread, and context thread. It creates a
+global symbol table, and Sail environments for the main thread and
+render thread. It creates a battery of Sail queue channels for
+communication between threads. It creates shared Sail objects for
+frequently changing values. After all this, the appropriate pointers
+are passed to the render loop and the manager loop as their respective
+threads are initialized. All setup completed, the input loop gets its
+own Sail pointers and the program begins to behave as designed while
+its constituent threads interact.
 
 *** =tools=
-
+Tools for working with STARK code go in this folder. These will likely
+be mostly for building and debugging. There is only one such tool at
+this time.
 
 **** =g-api.sh=
-
+This small shell script modifies the Cargo configuration file to
+choose which graphics backend STARK will be compiled with. It takes
+one argument, a string representing an acceptable backend. It then
+uses a =sed= command to change the configuration. This tool will
+likely be removed soon, as I plan to replace =gfx-hal= with =ash=, a
+direct translation of the Vulkan API into Rust. Once this is done,
+STARK will exclusively use Vulkan as its graphics processing API and
+no platform specific changes will be necessary.
