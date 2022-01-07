@@ -1,9 +1,6 @@
 * STARK
 This overview applies to v0.1.0 of STARK.
 
-** Video Demo
-
-
 ** Explanation
 A prototype of a malleable tool for computer augmented design.
 
@@ -28,7 +25,8 @@ code and copy the documentation pages to the STARK website source.
 
 *** =examples=
 Sail example programs go in this folder; for the moment there are only
-two. They compare two different iteration strategies Sail supports.
+two. They compare two different iteration strategies that Sail
+supports.
 
 **** =mult-tail.sl=
 This program calculates the sum of all the multiples of 3 or 5 up to

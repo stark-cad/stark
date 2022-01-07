@@ -1,7 +1,7 @@
 ![img](icons/logo.png)
 
 
-<a id="orgb11a5ed"></a>
+<a id="org2f3e409"></a>
 
 # STARK
 
@@ -24,19 +24,19 @@ renderer). Diagrams may be drawn using Sail code, the mouse or
 keyboard alone, or both together.
 
 
-<a id="orgd14803a"></a>
+<a id="org9331628"></a>
 
 ## Caution
 
 **STARK is still an early prototype.** It is in active development and
 is not yet useful for most design tasks. Please be aware that the
-application is not ready for broad usage, has numerous bugs, and is
+software is not ready for broad usage, has numerous bugs, and is
 subject to great ongoing change. That said, testing and feedback is
 much appreciated. If you do choose to install STARK and try it out,
 thank you!
 
 
-<a id="org3dc57a4"></a>
+<a id="orgeac3938"></a>
 
 ## Installation
 
@@ -47,11 +47,11 @@ will be distributed in the future, but for now you must compile the
 program yourself.
 
 
-<a id="org0d1866a"></a>
+<a id="orgb9c8b7d"></a>
 
 ### Linux
 
-Several packages need to be installed on your system in order to build
+Several packages must be installed on your system in order to build
 and run STARK.
 
 1.  Required Packages
@@ -85,9 +85,9 @@ and run STARK.
     Use the `cd` command to navigate to the directory where you want to
     keep the source code, likely in your home folder, and run
     
-        git clone https://github.com/stark-cad/stark.git
-        git clone https://github.com/stark-cad/gfx.git
-        git clone https://github.com/stark-cad/winit.git
+        git clone --depth 1 --branch v0.1.0 https://github.com/stark-cad/stark.git
+        git clone --depth 1 https://github.com/stark-cad/gfx.git
+        git clone --depth 1 https://github.com/stark-cad/winit.git
     
     Alternatively, you can clone via SSH.
     
@@ -102,7 +102,7 @@ and run STARK.
     white background appear. Success!
 
 
-<a id="org705f64f"></a>
+<a id="org28dc871"></a>
 
 ### Windows
 
@@ -147,9 +147,9 @@ and run STARK.
     the `cd` command to navigate to the directory where you want to keep
     the source code, likely in your home folder, and run
     
-        git clone https://github.com/stark-cad/stark.git
-        git clone https://github.com/stark-cad/gfx.git
-        git clone https://github.com/stark-cad/winit.git
+        git clone --depth 1 --branch v0.1.0 https://github.com/stark-cad/stark.git
+        git clone --depth 1 https://github.com/stark-cad/gfx.git
+        git clone --depth 1 https://github.com/stark-cad/winit.git
     
     Alternatively, you can clone via SSH.
     
@@ -167,7 +167,7 @@ and run STARK.
     white background appear. Success!
 
 
-<a id="org603b7f7"></a>
+<a id="org5497488"></a>
 
 ### Other
 
@@ -176,7 +176,7 @@ a supported graphics API. If you have access to another type of system
 and want to try building STARK, try it and let me know how it goes.
 
 
-<a id="org0feb903"></a>
+<a id="org3adff55"></a>
 
 ## Usage
 
@@ -223,16 +223,16 @@ state (caution: for now, entering an invalid function crashes the
 program):
 
 -   `(lines-clear)`: Clears all lines currently on canvas
--   `(back-col-set r g b)` Takes three float color values between 0.0
+-   `(back-col-set r g b)`: Takes three float color values between 0.0
     and 1.0; sets the background color of the canvas
--   `(line-col-set r g b)` Takes three float color values between 0.0
+-   `(line-col-set r g b)`: Takes three float color values between 0.0
     and 1.0; sets the color for all lines until it is changed
--   `(draw x1 y1 x2 y2)` Takes four float coordinates between -1.0 and 1.0,
-    specifying two points; adds a line or rectangle to the canvas
+-   `(draw x1 y1 x2 y2)`: Takes four float coordinates between -1.0 and
+    1.0, specifying two points; adds a line or rectangle to the canvas
     according to the current mode
 
 
-<a id="org36cdbfc"></a>
+<a id="org286df97"></a>
 
 ### Issues
 
@@ -242,7 +242,7 @@ program):
     crash the program
 
 
-<a id="org9fc33e9"></a>
+<a id="org69fe064"></a>
 
 ## Sail
 
@@ -305,7 +305,14 @@ There are many improvements to be made throughout Sail, and it will
 change frequently.
 
 
-<a id="orge17a607"></a>
+<a id="orge5f5faa"></a>
+
+## Other
+
+[Full overview of all files comprising STARK.](docs/overview.md)
+
+
+<a id="org7f7c7a9"></a>
 
 ## Roadmap
 
@@ -319,7 +326,7 @@ STARK has a long way to go. Some upcoming improvements:
 -   3D chunk rendering
 
 
-<a id="org57a5a8e"></a>
+<a id="orgb0be57e"></a>
 
 ## License
 
