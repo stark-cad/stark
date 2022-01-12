@@ -71,7 +71,7 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_env: usize) {
 
             frame.set_cursor_visible(sail::bool_get(vis));
 
-            return sail::nil();
+            sail::nil()
         }
 
         "cursor-pos" 5 [frm_ptr, w, h, x, y] {
@@ -99,7 +99,7 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_env: usize) {
                 ))
                 .unwrap();
 
-            return sail::nil();
+            sail::nil()
         }
     }
 

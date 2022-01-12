@@ -163,8 +163,8 @@ pub fn run_loop<Ij: 'static>(
                         (y / (frame_dims[1] / 2) as f64 - 1.0) as f32,
                     ]);
 
-                    let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
-                    sail::queue::queue_tx(rndr_tx, redrw);
+                    let moved = sail::sym_init(sl_reg, sail::K_CX_CURMV.0);
+                    sail::queue::queue_tx(rndr_tx, moved);
                 }
                 _ => {}
             },
@@ -249,11 +249,11 @@ pub fn run_loop<Ij: 'static>(
 /// Retrieves an icon from a PNG file and outputs it in the format desired by `winit`
 fn get_icon(filename: &str) -> Option<window::Icon> {
     let decoder = png::Decoder::new(File::open(filename).unwrap());
-    let (info, mut reader) = decoder.read_info().unwrap();
-
-    let mut buf = vec![0; info.buffer_size()];
+    let mut reader = decoder.read_info().unwrap();
+    let (w, h) = (reader.info().width, reader.info().height);
+    let mut buf = vec![0; reader.output_buffer_size()];
 
     reader.next_frame(&mut buf).unwrap();
 
-    Some(window::Icon::from_rgba(buf, info.width, info.height).unwrap())
+    Some(window::Icon::from_rgba(buf, w, h).unwrap())
 }

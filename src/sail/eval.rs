@@ -608,7 +608,7 @@ impl EvalStack {
             }
         }
 
-        return true;
+        true
     }
 }
 

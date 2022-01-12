@@ -325,7 +325,7 @@ fn read_spec_sym(
         }
     }
 
-    if acc.len() == 0 {
+    if acc.is_empty() {
         return Err(SlErrCode::ParseUnexpectedEnd);
     }
 
@@ -359,7 +359,7 @@ fn read_string(
 
     let string = string_init(
         reg,
-        match str::from_utf8(&acc) {
+        match str::from_utf8(acc) {
             Ok(s) => s,
             _ => return Err(SlErrCode::ParseInvalidString),
         },
@@ -421,7 +421,7 @@ fn read_special(
         }
     }
 
-    if acc.len() == 0 {
+    if acc.is_empty() {
         return Err(SlErrCode::ParseUnexpectedEnd);
     }
 

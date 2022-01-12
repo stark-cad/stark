@@ -311,13 +311,7 @@ pub const fn mode_of_sym(sym: u32) -> SymbolMode {
 #[inline(always)]
 pub fn nnil_ref_p(loc: *mut SlHead) -> bool {
     match core_type(loc) {
-        Some(t) if t == CoreType::Ref => {
-            if !ref_empty_p(loc) {
-                true
-            } else {
-                false
-            }
-        }
+        Some(t) if t == CoreType::Ref => !ref_empty_p(loc),
         _ => false,
     }
 }
@@ -326,13 +320,7 @@ pub fn nnil_ref_p(loc: *mut SlHead) -> bool {
 #[inline(always)]
 pub fn basic_sym_p(loc: *mut SlHead) -> bool {
     match core_type(loc) {
-        Some(t) if t == CoreType::Symbol => {
-            if mode_of_sym(sym_get_id(loc)) == SymbolMode::Basic {
-                true
-            } else {
-                false
-            }
-        }
+        Some(t) if t == CoreType::Symbol => mode_of_sym(sym_get_id(loc)) == SymbolMode::Basic,
         _ => false,
     }
 }
@@ -361,24 +349,15 @@ pub fn pred_type_p(loc: *mut SlHead) -> bool {
 #[inline(always)]
 pub fn self_type_p(loc: *mut SlHead) -> bool {
     let head = get_cfg_all(loc);
-    if head >> 5 == 7 || (head & 0b00011100) >> 2 == 7 {
-        true
-    } else {
-        false
-    }
+    head >> 5 == 7 || (head & 0b00011100) >> 2 == 7
 }
 
 /// Returns the truthiness of a valid Sail object
 #[inline(always)]
 pub fn truthy(loc: *mut SlHead) -> bool {
-    if nil_p(loc)
+    !(nil_p(loc)
         || (coretypp!(loc ; Bool) && !bool_get(loc))
-        || (coretypp!(loc ; Ref) && ref_empty_p(loc))
-    {
-        false
-    } else {
-        true
-    }
+        || (coretypp!(loc ; Ref) && ref_empty_p(loc)))
 }
 
 /// Gets the full configuration byte from a Sail object
@@ -911,10 +890,8 @@ pub fn string_set(loc: *mut SlHead, val: &str) {
 
     // TODO: copy using a purpose-designed function
     if len <= cap {
-        let mut count = 0;
-        for c in val.bytes() {
+        for (count, c) in val.bytes().enumerate() {
             core_write_field(loc, 4 + 4 + count as usize, c);
-            count += 1;
         }
         string_set_len(loc, len);
     } else {
@@ -945,11 +922,7 @@ pub fn hashvec_get_size(loc: *mut SlHead) -> u32 {
 /// TODO: symbol handling etc
 #[inline(always)]
 fn id(fst: *mut SlHead, lst: *mut SlHead) -> bool {
-    if fst == lst {
-        true
-    } else {
-        false
-    }
+    fst == lst
 }
 
 /// Returns true if both arguments' values are equal

@@ -45,6 +45,7 @@ fn main() {
 
     // TODO: add useful logging throughout the program
     simple_logger::SimpleLogger::new()
+        .with_utc_timestamps()
         .with_level(log::LevelFilter::Debug)
         .init()
         .unwrap();

@@ -94,7 +94,10 @@
        (if (eq c-input :cx-rdrw)
            (do (redraw engine))
 
-       ())))
+       (if (eq c-input :cx-crmv)
+           (do (if track (redraw engine) ()))
+
+       ()))))
        )
 
 (print "render end")

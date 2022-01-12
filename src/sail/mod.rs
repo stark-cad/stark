@@ -247,17 +247,18 @@ incl_symbols! {
     53 K_CX_RESIZ    "cx-resz" Keyword;
     54 K_CX_RECRD    "cx-rcrd" Keyword;
     55 K_CX_REDRW    "cx-rdrw" Keyword;
-    56 K_CX_SHELL    "cx-shel" Keyword;
-    57 K_CX_KEY_U    "cx-kb-u" Keyword;
-    58 K_CX_KEY_D    "cx-kb-d" Keyword;
-    59 K_CX_KEY_F    "cx-kb-f" Keyword;
-    60 K_CX_KEY_B    "cx-kb-b" Keyword;
-    61 K_CX_KEY_L    "cx-kb-l" Keyword;
-    62 K_CX_KEY_S    "cx-kb-s" Keyword;
-    63 K_CX_KEY_E    "cx-kb-e" Keyword;
-    64 K_CX_KEY_K    "cx-kb-k" Keyword;
-    65 K_CX_KEY_M    "cx-kb-m" Keyword
-    66
+    56 K_CX_CURMV    "cx-crmv" Keyword;
+    57 K_CX_SHELL    "cx-shel" Keyword;
+    58 K_CX_KEY_U    "cx-kb-u" Keyword;
+    59 K_CX_KEY_D    "cx-kb-d" Keyword;
+    60 K_CX_KEY_F    "cx-kb-f" Keyword;
+    61 K_CX_KEY_B    "cx-kb-b" Keyword;
+    62 K_CX_KEY_L    "cx-kb-l" Keyword;
+    63 K_CX_KEY_S    "cx-kb-s" Keyword;
+    64 K_CX_KEY_E    "cx-kb-e" Keyword;
+    65 K_CX_KEY_K    "cx-kb-k" Keyword;
+    66 K_CX_KEY_M    "cx-kb-m" Keyword
+    67
 }
 
 // TODO: MINIMIZE the use of *pub* and *unsafe* functions

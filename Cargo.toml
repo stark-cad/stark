@@ -2,7 +2,7 @@
 name = "stark"
 version = "0.2.0-dev"
 authors = ["Matthew Rothlisberger <mattjrothlis@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [features]
 memdbg = []
@@ -12,12 +12,11 @@ stkdbg = []
 winit = { path = "../winit" }
 gfx-hal = { path = "../gfx/src/hal" }
 
-png = "0.16.7"
-raw-window-handle = "0.3.3"
-shaderc = "0.6.3"
+raw-window-handle = "0.3"
+shaderc = "0.7.3"
 
-log = "0.4.11"
-simple_logger = "1.11.0"
+png = "0.17.2"
+ttf-parser = "0.13.3"
 
 # Change graphics backend with
 # tools/g-api.sh <backend>
@@ -27,3 +26,5 @@ simple_logger = "1.11.0"
 package = "gfx-backend-vulkan"
 path = "../gfx/src/backend/vulkan"
 # KEEP AT END OF FILE
+log = "0.4.14"
+simple_logger = "1.16.0"
