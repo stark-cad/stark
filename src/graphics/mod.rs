@@ -21,20 +21,20 @@
 
 // src/graphics/mod.rs
 
-// Graphics rendering system for STARK. Relies on gfx-hal for low
-// level access to Vulkan and other graphics APIs. Contains code for a
-// dedicated rendering thread.
+// Graphics rendering system for STARK. Relies on ash for low level
+// access to the Vulkan API. Contains code for a dedicated rendering
+// thread.
 
 // <>
 
 use crate::sail::{self, SlHead};
 use crate::FrameHandle;
 
-// TODO: rewrite graphics backend to use ash instead of gfx
-
 use ash::vk;
 
 use std::mem::size_of;
+
+mod text;
 
 /// Sail interpreter loop for the render thread (holds graphics state)
 pub fn render_loop(
@@ -50,6 +50,14 @@ pub fn render_loop(
     let sl_env = sl_env as *mut SlHead;
 
     let mut engine = Engine::new(frame, name, size[0], size[1]);
+
+    let mut test_glyph = text::load();
+
+    for _ in 0..test_glyph.len() {
+        engine.colors.push([0.0, 0.0, 0.0]);
+    }
+
+    engine.lines.append(&mut test_glyph);
 
     let eng_obj = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::Cfg::B8Other as u8) };
     unsafe { sail::write_field_unchecked(eng_obj, 0, (&mut engine as *mut _) as u64) };
@@ -253,10 +261,7 @@ impl Engine {
             .collect::<Vec<_>>();
 
         let surface_exts = ash_window::enumerate_required_extensions(frame).unwrap();
-        let mut surface_ext_names_raw = surface_exts
-            .iter()
-            .map(|raw| raw.as_ptr())
-            .collect::<Vec<_>>();
+        let mut surface_ext_names_raw = surface_exts.iter().map(|raw| *raw).collect::<Vec<_>>();
         surface_ext_names_raw.push(ash::extensions::ext::DebugUtils::name().as_ptr());
 
         let create_info = vk::InstanceCreateInfo::builder()
@@ -719,6 +724,68 @@ impl Engine {
         );
     }
 
+    /// Acquire memory and create buffer for vertex data
+    fn state_buffer_setup(&mut self) {
+        unsafe {
+            self.device
+                .wait_for_fences(&[self.fences[1]], true, 1_000_000_000)
+                .unwrap();
+
+            for mem in self.vtx_memory.drain(..) {
+                self.device.free_memory(mem, None);
+            }
+
+            for buf in self.vtx_buffers.drain(..) {
+                self.device.destroy_buffer(buf, None);
+            }
+        }
+
+        let (memory, buffer) = unsafe {
+            self.mk_buffer(
+                self.buflen,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE,
+            )
+        };
+
+        self.vtx_memory.push(memory);
+        self.vtx_buffers.push(buffer);
+    }
+
+    /// Set up an appropriate graphics pipeline for the engine
+    fn state_pipeline_setup(&mut self) {
+        let push_constant_range = vk::PushConstantRange::builder()
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(12);
+
+        let push_constant_ranges = [push_constant_range.build()];
+
+        let layout_create_info =
+            vk::PipelineLayoutCreateInfo::builder().push_constant_ranges(&push_constant_ranges);
+
+        let pipeline_layout = unsafe {
+            self.device
+                .create_pipeline_layout(&layout_create_info, None)
+                .unwrap()
+        };
+
+        let vertex_shader = include_str!("shaders/lines.vert");
+        let fragment_shader = include_str!("shaders/lines.frag");
+
+        let pipeline = unsafe {
+            self.mk_pipeline(
+                pipeline_layout,
+                vertex_shader,
+                fragment_shader,
+                vk::PrimitiveTopology::LINE_LIST,
+            )
+        };
+
+        self.pipeline_layouts.push(pipeline_layout);
+        self.pipelines.push(pipeline);
+    }
+
     /// Create a new buffer for graphics processing and bind its memory
     unsafe fn mk_buffer(
         &self,
@@ -786,16 +853,18 @@ impl Engine {
                 .unwrap()
         };
 
+        let entry_name = std::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0");
+
         let shader_stage_info = [
             vk::PipelineShaderStageCreateInfo::builder()
                 .stage(vk::ShaderStageFlags::VERTEX)
                 .module(vtx_shader_mod)
-                .name(std::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0"))
+                .name(entry_name)
                 .build(),
             vk::PipelineShaderStageCreateInfo::builder()
                 .stage(vk::ShaderStageFlags::FRAGMENT)
                 .module(frag_shader_mod)
-                .name(std::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0"))
+                .name(entry_name)
                 .build(),
         ];
 
@@ -833,7 +902,7 @@ impl Engine {
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
         let attachment_blend = vk::PipelineColorBlendAttachmentState::builder()
-            .blend_enable(true)
+            .blend_enable(false)
             .color_write_mask(
                 vk::ColorComponentFlags::R
                     | vk::ColorComponentFlags::G
@@ -902,68 +971,6 @@ impl Engine {
     fn empty_lines(&mut self) {
         self.lines.clear();
         self.colors.clear();
-    }
-
-    /// Set up an appropriate graphics pipeline for the engine
-    fn state_pipeline_setup(&mut self) {
-        let push_constant_range = vk::PushConstantRange::builder()
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-            .offset(0)
-            .size(12);
-
-        let push_constant_ranges = [push_constant_range.build()];
-
-        let layout_create_info =
-            vk::PipelineLayoutCreateInfo::builder().push_constant_ranges(&push_constant_ranges);
-
-        let pipeline_layout = unsafe {
-            self.device
-                .create_pipeline_layout(&layout_create_info, None)
-                .unwrap()
-        };
-
-        let vertex_shader = include_str!("shaders/lines.vert");
-        let fragment_shader = include_str!("shaders/lines.frag");
-
-        let pipeline = unsafe {
-            self.mk_pipeline(
-                pipeline_layout,
-                vertex_shader,
-                fragment_shader,
-                vk::PrimitiveTopology::LINE_LIST,
-            )
-        };
-
-        self.pipeline_layouts.push(pipeline_layout);
-        self.pipelines.push(pipeline);
-    }
-
-    /// Acquire memory and create buffer for vertex data
-    fn state_buffer_setup(&mut self) {
-        unsafe {
-            self.device
-                .wait_for_fences(&[self.fences[1]], true, 1_000_000_000)
-                .unwrap();
-
-            for mem in self.vtx_memory.drain(..) {
-                self.device.free_memory(mem, None);
-            }
-
-            for buf in self.vtx_buffers.drain(..) {
-                self.device.destroy_buffer(buf, None);
-            }
-        }
-
-        let (memory, buffer) = unsafe {
-            self.mk_buffer(
-                self.buflen,
-                vk::BufferUsageFlags::VERTEX_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE,
-            )
-        };
-
-        self.vtx_memory.push(memory);
-        self.vtx_buffers.push(buffer);
     }
 
     /// Check whether the buffer has enough space for all vertices
@@ -1050,10 +1057,10 @@ impl Engine {
                 .view_type(vk::ImageViewType::TYPE_2D)
                 .format(self.surface_fmt.format)
                 .components(vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::R,
-                    g: vk::ComponentSwizzle::G,
-                    b: vk::ComponentSwizzle::B,
-                    a: vk::ComponentSwizzle::A,
+                    r: vk::ComponentSwizzle::IDENTITY,
+                    g: vk::ComponentSwizzle::IDENTITY,
+                    b: vk::ComponentSwizzle::IDENTITY,
+                    a: vk::ComponentSwizzle::IDENTITY,
                 })
                 .subresource_range(vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -1119,18 +1126,15 @@ impl Engine {
                 &[0],
             );
 
-            for l in 0..self.lines.len() as u32 {
+            for l in 0..self.lines.len() {
                 self.device.cmd_push_constants(
                     self.cmd_buffers[1],
                     self.pipeline_layouts[0],
                     vk::ShaderStageFlags::FRAGMENT,
                     0,
-                    std::slice::from_raw_parts(
-                        (&self.colors[l as usize]).as_ptr() as *const u8,
-                        12,
-                    ),
+                    std::slice::from_raw_parts((&self.colors[l]).as_ptr() as *const u8, 12),
                 );
-                let ind = 2 * l;
+                let ind = (2 * l) as u32;
                 self.device.cmd_draw(self.cmd_buffers[1], 2, 1, ind, 0);
             }
 
@@ -1169,8 +1173,6 @@ impl Engine {
 
             self.device.destroy_image_view(image_view, None);
         }
-
-        println!("DREW A FRAME");
     }
 }
 
@@ -1201,7 +1203,8 @@ impl Drop for Engine {
             self.swap_loader.destroy_swapchain(self.swapchain, None);
             self.device.destroy_device(None);
             self.surf_loader.destroy_surface(self.surface, None);
-            self.debug_utils_loader.destroy_debug_utils_messenger(self.debug_callback, None);
+            self.debug_utils_loader
+                .destroy_debug_utils_messenger(self.debug_callback, None);
             self.instance.destroy_instance(None);
         }
     }

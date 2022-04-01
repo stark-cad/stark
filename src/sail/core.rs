@@ -85,7 +85,8 @@ pub struct SlHead {
 // TODO: potential change: add a "shared" bit to indicate that an object
 // may be read and / or written by other threads
 
-// TODO / NOTE: There is currently one spare, unused bit in the Sail head: the second lowest bit
+// TODO / NOTE: There are now two spare, unused bits in the Sail head:
+// the lowest two bits
 
 /// ALL Sail objects that may be independently referenced, begin with bytes of this format
 ///
@@ -339,12 +340,6 @@ pub fn proc_p(loc: *mut SlHead) -> bool {
 //     (get_cfg_all(loc) & 0b00000010) != 0
 // }
 
-/// Checks whether a valid Sail object has a type specifier with a predicate
-#[inline(always)]
-pub fn pred_type_p(loc: *mut SlHead) -> bool {
-    (get_cfg_all(loc) & 0b00000001) != 0
-}
-
 /// Checks whether a valid Sail object has a type specifier for itself alone
 #[inline(always)]
 pub fn self_type_p(loc: *mut SlHead) -> bool {
@@ -395,14 +390,7 @@ fn get_base_spec(loc: *mut SlHead) -> u8 {
 /// (After the header and type specifiers, if they exist)
 #[inline(always)]
 pub fn value_ptr(loc: *mut SlHead) -> *mut u8 {
-    let offset = if self_type_p(loc) && pred_type_p(loc) {
-        HEAD_LEN + SYMBOL_LEN + SYMBOL_LEN
-    } else if self_type_p(loc) || pred_type_p(loc) {
-        HEAD_LEN + SYMBOL_LEN
-    } else {
-        HEAD_LEN
-    } as usize;
-
+    let offset = (HEAD_LEN + (self_type_p(loc) as u8 * SYMBOL_LEN)) as usize;
     unsafe { (loc as *mut u8).add(offset) }
 }
 

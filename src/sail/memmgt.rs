@@ -170,16 +170,8 @@ pub unsafe fn alloc(region: *mut Region, size: usize, cfg: u8) -> *mut SlHead {
 
     let ptr = {
         let size_type = cfg >> 5 == 7 || (cfg & 0b00011100) >> 2 == 7;
-        let pred_type = cfg & 0b00000001 != 0;
 
-        let length = if size_type && pred_type {
-            HEAD_LEN + SYMBOL_LEN + SYMBOL_LEN
-        } else if size_type || pred_type {
-            HEAD_LEN + SYMBOL_LEN
-        } else {
-            HEAD_LEN
-        } as usize
-            + size;
+        let length = (HEAD_LEN + (size_type as u8 * SYMBOL_LEN)) as usize + size;
 
         if cfg!(feature = "memdbg") {
             log::debug!("Allocating {} bytes with cfg: {:#010b}", length, cfg);

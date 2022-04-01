@@ -298,23 +298,6 @@ fn get_self_type(loc: *mut SlHead) -> u32 {
     }
 }
 
-fn get_pred_type(loc: *mut SlHead) -> u32 {
-    if nil_p(loc) {
-        T_NIL.0
-    } else if pred_type_p(loc) {
-        unsafe {
-            ptr::read_unaligned((loc as *const u8).add(if !self_type_p(loc) {
-                HEAD_LEN
-            } else {
-                HEAD_LEN + SYMBOL_LEN
-            } as usize) as *const u32)
-        }
-    } else {
-        // return $t, true for all types
-        T_T.0
-    }
-}
-
 // /// Returns the size of a valid Sail object
 // fn get_size(
 //     reg: *mut memmgt::Region,
@@ -343,20 +326,6 @@ fn get_pred_type(loc: *mut SlHead) -> u32 {
 fn set_self_type(loc: *mut SlHead, typ: u32) {
     assert!(self_type_p(loc));
     unsafe { ptr::write_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *mut u32, typ) }
-}
-
-fn set_pred_type(loc: *mut SlHead, typ: u32) {
-    assert!(pred_type_p(loc));
-    unsafe {
-        ptr::write_unaligned(
-            (loc as *mut u8).add(if self_type_p(loc) {
-                HEAD_LEN + SYMBOL_LEN
-            } else {
-                HEAD_LEN
-            } as usize) as *mut u32,
-            typ,
-        )
-    }
 }
 
 // /// TODO: eliminate as much write_unaligned as possible
