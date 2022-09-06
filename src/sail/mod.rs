@@ -546,9 +546,11 @@ pub fn interpret(code: &str) -> Result<String, SlErrCode> {
 
 /// Set up the symbol table and environment before interpreting Sail code
 pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut SlHead) {
-    for s in SYM_ARRAY.iter() {
-        sym_tab_get_id(reg, tbl, s);
+    for (n, s) in SYM_ARRAY.into_iter().enumerate() {
+        sym_tab_add_with_id(reg, tbl, s, n as u32);
     }
+
+    sym_tab_set_next_id(tbl, SYM_ARRAY.len() as u32);
 
     let true_intern = bool_init(reg, true);
     env_layer_ins_by_id(reg, env, S_T_INTERN.0, true_intern);

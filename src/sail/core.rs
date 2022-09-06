@@ -1322,7 +1322,7 @@ fn sym_tab_create(reg: *mut Region, size: u32) -> *mut SlHead {
     let id_to_str = hashvec_make(reg, size);
     let str_to_id = hashvec_make(reg, size);
 
-    let id_count = sym_init(reg, 0);
+    let id_count = sym_init(reg, 0xC0000000);
 
     stdvec_push(tbl, id_to_str);
     stdvec_push(tbl, str_to_id);
@@ -1331,16 +1331,25 @@ fn sym_tab_create(reg: *mut Region, size: u32) -> *mut SlHead {
     tbl
 }
 
-/// Takes the symbol table and a string object to insert, returning
-/// the symbol's unique ID
-fn sym_tab_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
-    let next_id = stdvec_idx(tbl, 2);
-    let id_num = sym_get_id(next_id);
+// TODO: change the symtab structure to use purpose-specific types
 
-    // println!("unique symbol id: {}", id_num);
 
+// TODO: I probably need to switch the system to lexical binding,
+// which prevents "spooky action from within", or procedures changing
+// variables in the calling scope; procedures should always either be
+// pure (no environment besides arguments), or closures (carrying
+// their creation environment with them)
+
+pub fn sym_tab_set_next_id(tbl: *mut SlHead, id: u32) {
+    let id_slot = stdvec_idx(tbl, 2);
+    sym_set_id(id_slot, id | 0xC0000000);
+}
+
+/// Inserts a string object into the symbol table with a particular
+/// ID; initialization and helper function only
+fn sym_tab_direct_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead, idn: u32) {
     let entry = {
-        let id = core_copy_val(reg, next_id);
+        let id = sym_init(reg, idn);
         set_next_list_elt(id, sym);
         id
     };
@@ -1351,11 +1360,11 @@ fn sym_tab_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
     let id_size = hashvec_get_size(id_to_str);
     let str_size = hashvec_get_size(str_to_id);
 
-    let id_hash = id_num % id_size;
+    let id_hash = idn % id_size;
     let str_hash = core_hash(sym) % str_size;
 
-    let id_idx = 4 + 4 + (id_hash as usize * PTR_LEN as usize);
-    let str_idx = 4 + 4 + (str_hash as usize * PTR_LEN as usize);
+    let id_idx = (NUM_32_LEN + NUM_32_LEN) as usize + (id_hash as usize * PTR_LEN as usize);
+    let str_idx = (NUM_32_LEN + NUM_32_LEN) as usize + (str_hash as usize * PTR_LEN as usize);
 
     let mut id_pos = core_read_field(id_to_str, id_idx);
     let mut str_pos = core_read_field(str_to_id, str_idx);
@@ -1382,8 +1391,34 @@ fn sym_tab_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
 
         set_next_list_elt(str_pos, str_entry)
     }
+}
 
-    sym_set_id(next_id, id_num + 1);
+/// Takes the symbol table and a string object to insert, returning
+/// the symbol's unique ID
+///
+/// Uses a lock to ensure IDs are globally unique, even when called by
+/// multiple threads
+fn sym_tab_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
+    let id_slot = stdvec_idx(tbl, 2);
+    let lock_id = value_ptr(id_slot) as *mut u32;
+
+    // we set the top two bits of the ID slot low; if they were not
+    // high before this (locked), we try again until they are
+
+    // TODO: give up after a certain number of iterations
+    unsafe { while std::intrinsics::atomic_and_acquire(lock_id, 0x3FFFFFFF) >> 30 != 3 {} }
+
+    // since the ID slot holds only correct IDs while locked, we treat
+    // it normally
+    let id_num = sym_get_id(id_slot);
+    assert!(id_num < 0x3FFFFFFF);
+    sym_tab_direct_insert(reg, tbl, sym, id_num);
+    sym_set_id(id_slot, id_num + 1);
+
+    // we set the top two bits of the ID slot high, releasing the lock
+    unsafe {
+        assert!(std::intrinsics::atomic_or_release(lock_id, 0xC0000000) >> 30 == 0);
+    }
 
     id_num
 }
@@ -1393,24 +1428,6 @@ fn sym_tab_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
 /// Looks up normally, by car, and returns cdr
 pub fn sym_tab_lookup_by_id(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
     sym_tab_lookup_id_num(tbl, sym_get_id(qry))
-
-    // let map = stdvec_idx(tbl, 0);
-    // let size = hashvec_get_size(map);
-    // let hash = core_hash(qry) % size as u32;
-
-    // let mut entry = core_read_field(map, 4 + 4 + (hash as usize * PTR_LEN as usize));
-
-    // loop {
-    //     if nil_p(entry) {
-    //         return nil();
-    //     }
-
-    //     if core_eq(ref_get(entry), qry) {
-    //         return get_next_list_elt(ref_get(entry));
-    //     }
-
-    //     entry = get_next_list_elt(entry);
-    // }
 }
 
 /// Retrieves and returns the symbol referring to the given string
@@ -1481,6 +1498,10 @@ pub fn sym_tab_get_id(reg: *mut Region, tbl: *mut SlHead, sym: &str) -> u32 {
     sym_tab_insert(reg, tbl, record)
 }
 
+pub fn sym_tab_add_with_id(reg: *mut Region, tbl: *mut SlHead, sym: &str, id: u32) {
+    let record = string_init(reg, sym);
+    sym_tab_direct_insert(reg, tbl, record, id);
+}
 /// Prepares a complete Sail runtime environment, including symbol
 /// table and env
 ///
