@@ -46,6 +46,44 @@ pub mod parser;
 pub mod queue;
 pub mod stdenv;
 
+// the below, to make a type manifest for a sized value, takes the
+// region, the type ID counter, and information on all the fields;
+// field info includes length, type symbol, and keyword name
+
+// fn make_val_type_mfst(
+//     reg: *mut Region,
+//     ctr: *mut SlHead,
+//     fields: Vec<(u32, u32, u32)>,
+// ) -> *mut SlHead {
+// }
+
+// Existing Sized Types
+
+// U8
+// I8
+// U16
+// I16
+// U32
+// I32
+// U64
+// I64
+// U128
+// I128
+// F32
+// F64
+// Bool
+// Symbol
+// Ref
+// TyDsc
+// ErrCode
+// ProcNative
+// QueueTx
+// QueueRx
+// <graphics engine object>
+
+// These should have global type IDs, type symbol bindings in the
+// environment tree, and manifests.
+
 /// Basic error codes for Sail faults
 #[derive(Debug)]
 #[repr(u16)]
@@ -292,7 +330,7 @@ fn get_self_type(loc: *mut SlHead) -> u32 {
         ProcLambda => T_PROC_LAMBDA.0,
         ProcNative => T_PROC_NATIVE.0,
         _ => {
-            assert!(self_type_p(loc));
+            assert!(type_id_p(loc));
             unsafe { ptr::read_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *const u32) }
         }
     }
@@ -322,9 +360,9 @@ fn get_self_type(loc: *mut SlHead) -> u32 {
 
 /// Set the type specifier for a Sail object not of a core type
 ///
-/// **Avoid use.** Type specifiers should be set once and not altered.
+/// **Do not use.** Type specifiers should be set once and not altered.
 fn set_self_type(loc: *mut SlHead, typ: u32) {
-    assert!(self_type_p(loc));
+    assert!(type_id_p(loc));
     unsafe { ptr::write_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *mut u32, typ) }
 }
 

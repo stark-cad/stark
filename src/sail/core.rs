@@ -151,6 +151,7 @@ enum_and_tryfrom! {
         B8Other = 0b10011100,
         B16U128 = 0b10100000,
         B16I128 = 0b10100100,
+        B16TyDsc = 0b10101000,
         B16Other = 0b10111100,
         VecStd = 0b11000000,
         VecStr = 0b11000100,
@@ -162,6 +163,7 @@ enum_and_tryfrom! {
         ProcNative = 0b11100100,
         // ProcLbdaCk = 0b11101000,
         // ProcNatvCk = 0b11101100,
+        TyMfst = 0b11110000,
         Other = 0b11111100,
     }
 }
@@ -199,8 +201,8 @@ enum_and_tryfrom! {
 ///
 /// They can be represented in the object head, without an additional type specifier.
 /// Null pointers "point to" Nil objects; the concept is like interning.
-/// The next 15 types have statically known size, and correspond to Rust types.
-/// The last 6 types have variable size, and must be inspected to get a size.
+/// The next 18 types have statically known size, and correspond to Rust types.
+/// The last 7 types have variable size, and must be inspected to get a size.
 #[derive(Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CoreType {
@@ -220,6 +222,8 @@ pub enum CoreType {
     F64,
     Symbol,
     Ref,
+    TyDsc,
+    TyMfst,
     ErrCode,
     VecStd,
     VecStr,
@@ -252,6 +256,7 @@ impl TryFrom<Cfg> for CoreType {
             Cfg::B8Ptr => Ok(Self::Ref),
             Cfg::B16U128 => Ok(Self::U128),
             Cfg::B16I128 => Ok(Self::I128),
+            Cfg::B16TyDsc => Ok(Self::TyDsc),
             Cfg::VecStd => Ok(Self::VecStd),
             Cfg::VecStr => Ok(Self::VecStr),
             Cfg::VecArr => Ok(Self::VecArr),
@@ -259,6 +264,7 @@ impl TryFrom<Cfg> for CoreType {
             Cfg::VecHash => Ok(Self::VecHash),
             Cfg::ProcLambda => Ok(Self::ProcLambda),
             Cfg::ProcNative => Ok(Self::ProcNative),
+            Cfg::TyMfst => Ok(Self::TyMfst),
             _ => Err(()),
         }
     }
@@ -340,9 +346,9 @@ pub fn proc_p(loc: *mut SlHead) -> bool {
 //     (get_cfg_all(loc) & 0b00000010) != 0
 // }
 
-/// Checks whether a valid Sail object has a type specifier for itself alone
+/// Checks whether a valid Sail object contains the type ID field
 #[inline(always)]
-pub fn self_type_p(loc: *mut SlHead) -> bool {
+pub fn type_id_p(loc: *mut SlHead) -> bool {
     let head = get_cfg_all(loc);
     head >> 5 == 7 || (head & 0b00011100) >> 2 == 7
 }
@@ -390,7 +396,7 @@ fn get_base_spec(loc: *mut SlHead) -> u8 {
 /// (After the header and type specifiers, if they exist)
 #[inline(always)]
 pub fn value_ptr(loc: *mut SlHead) -> *mut u8 {
-    let offset = (HEAD_LEN + (self_type_p(loc) as u8 * SYMBOL_LEN)) as usize;
+    let offset = (HEAD_LEN + (type_id_p(loc) as u8 * SYMBOL_LEN)) as usize;
     unsafe { (loc as *mut u8).add(offset) }
 }
 
@@ -417,7 +423,7 @@ pub fn core_size(loc: *mut SlHead) -> usize {
         U16 | I16 | ErrCode => 2,
         U32 | I32 | F32 | Symbol => 4,
         U64 | I64 | F64 | Ref => 8,
-        U128 | I128 => 16,
+        U128 | I128 | TyDsc => 16,
         VecStd => vec_size(8, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }
             as usize),
         VecStr => vec_size(8, 1, unsafe { read_field_unchecked::<u32>(loc, 0) }
@@ -436,6 +442,7 @@ pub fn core_size(loc: *mut SlHead) -> usize {
         ),
         ProcLambda => proc_lambda_size(unsafe { read_field_unchecked::<u16>(loc, 0) }),
         ProcNative => proc_native_size(),
+        TyMfst => ty_manifest_size(unsafe { read_field_unchecked::<u32>(loc, 4) }),
     }
 }
 
@@ -524,6 +531,12 @@ pub fn temp_init_from(reg: *mut Region, typ: u32, ptr: *const u8) -> *mut SlHead
 #[inline(always)]
 pub fn vec_size(head_size: usize, elt_size: usize, capacity: usize) -> usize {
     head_size + (elt_size * capacity)
+}
+
+#[inline(always)]
+fn ty_manifest_size(fldct: u32) -> usize {
+    (NUM_32_LEN + NUM_32_LEN + NUM_32_LEN) as usize
+        + ((NUM_32_LEN + NUM_32_LEN + SYMBOL_LEN + SYMBOL_LEN) as usize * fldct as usize)
 }
 
 /// Gives the overall size of a lambda procedure by argument count
@@ -1502,6 +1515,36 @@ pub fn sym_tab_add_with_id(reg: *mut Region, tbl: *mut SlHead, sym: &str, id: u3
     let record = string_init(reg, sym);
     sym_tab_direct_insert(reg, tbl, record, id);
 }
+
+/// Creates a counter for global type IDs
+fn typ_ctr_create(reg: *mut Region) -> *mut SlHead {
+    u32_init(reg, 0x80000000)
+}
+
+fn typ_ctr_set_next_id(ctr: *mut SlHead, id: u32) {
+    u32_set(ctr, id | 0x80000000)
+}
+
+/// Returns the next globally unique object type ID
+fn typ_ctr_get_id(ctr: *mut SlHead) -> u32 {
+    let lock_id = value_ptr(ctr) as *mut u32;
+
+    // the lock is the first bit of the value: high when available,
+    // low when locked
+
+    unsafe { while std::intrinsics::atomic_and_acquire(lock_id, 0x7FFFFFFF) >> 31 != 1 {} }
+
+    let id = u32_get(ctr);
+    assert!(id < 0x7FFFFFFF);
+    u32_set(ctr, id + 1);
+
+    unsafe {
+        assert!(std::intrinsics::atomic_or_release(lock_id, 0x80000000) >> 31 == 0);
+    }
+
+    id
+}
+
 /// Prepares a complete Sail runtime environment, including symbol
 /// table and env
 ///
@@ -1831,4 +1874,25 @@ pub fn bool_set(loc: *mut SlHead, val: bool) {
 pub fn bool_get(loc: *mut SlHead) -> bool {
     coretypck!(loc ; Bool);
     unsafe { ptr::read_unaligned(loc as *mut u8) & 0b00000100 != 0 }
+}
+
+// TODO: need a sort of "NsPath" type which stores an arbitrary-length
+// path of symbol IDs, used for resolution of "path symbols" (?)
+
+struct _TypeDesc {
+    type_sort_and_sym: u32, // type symbol of the described type (first bit denotes manifest or predicate)
+    parent_type: u32,       // type symbol of parent
+    manifest_or_predicate: *mut SlHead, // pointer to description data
+}
+// objects like this are immutable once created
+struct _TypeManifest {
+    id: u32,    // global ID of this object type
+    fldct: u32, // number of fields
+    size: u32,  // size of a value of this type
+
+    // FIELD ENTRY -- REPEAT THE BELOW AS NECESSARY
+    offset: u32, // offset of this field from value start, in bytes
+    length: u32, // length of the value in this field, in bytes
+    stype: u32,  // type (STATIC SIZED) of this field (symbol)
+    name: u32,   // internally unique keyword symbol: field name
 }
