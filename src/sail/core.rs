@@ -90,9 +90,9 @@ pub struct SlHead {
 
 /// ALL Sail objects that may be independently referenced, begin with bytes of this format
 ///
-/// size: 3 bits - base type: 3 bits - list elt: 1 bit - type pred: 1 bit - rc: 8 bits
+/// size: 3 bits - base type: 3 bits - UNUSED: 2 bits - rc: 8 bits
 /// The first eight bits determine the subsequent memory layout
-const _MIN_HEAD: u16 = 0b1110001011111111;
+const _MIN_HEAD: u16 = 0b0001110011111111;
 
 /// Pointer to the next element of a linked list;
 /// tagged with the SlHead (upper 2 unused bytes)
@@ -563,7 +563,7 @@ pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(
     src: T,
 ) {
     let dst = value_ptr(loc).add(offset) as *mut T;
-    std::intrinsics::atomic_store_rel(dst, src);
+    std::intrinsics::atomic_store_release(dst, src);
 }
 
 /// Write to a field of a Sail object only if the current value is the
@@ -579,7 +579,7 @@ pub unsafe fn write_field_cmpxcg_unchecked<T: SizedBase + Copy>(
     src: T,
 ) -> bool {
     let dst = value_ptr(loc).add(offset) as *mut T;
-    std::intrinsics::atomic_cxchg_acqrel(dst, old, src).1
+    std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, src).1
 }
 
 /// Read from a field of a Sail object of a core type
@@ -606,7 +606,7 @@ pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(
     offset: usize,
 ) -> T {
     let src = value_ptr(loc).add(offset) as *mut T;
-    std::intrinsics::atomic_load_acq(src)
+    std::intrinsics::atomic_load_acquire(src)
 }
 
 // irrelevant
@@ -635,7 +635,7 @@ pub fn set_next_list_elt(loc: *mut SlHead, next: *mut SlHead) {
 pub fn set_next_list_elt_cmpxcg(loc: *mut SlHead, old: *mut SlHead, new: *mut SlHead) -> bool {
     unsafe {
         let head = ptr::read_unaligned(loc as *mut u16);
-        std::intrinsics::atomic_cxchg_acqrel(
+        std::intrinsics::atomic_cxchg_acqrel_acquire(
             loc as *mut u64,
             ((old as u64) << 16) + head as u64,
             ((new as u64) << 16) + head as u64,
@@ -1261,19 +1261,20 @@ pub fn env_new_arg_layer(reg: *mut Region) -> *mut SlHead {
     ref_make(reg)
 }
 
-/// Gets an object from the given argument layer by index
-///
-/// TODO: this should be a vector or something else more suitable
-#[inline(always)]
-pub fn env_arg_layer_get(layer: *mut SlHead, idx: u16) -> *mut SlHead {
-    let mut left = idx;
-    let mut pos = core_read_field(layer, 0);
-    while left > 0 {
-        pos = get_next_list_elt(pos);
-        left -= 1;
-    }
-    get_next_list_elt(ref_get(pos))
-}
+// never used
+// /// Gets an object from the given argument layer by index
+// ///
+// /// TODO: this should be a vector or something else more suitable
+// #[inline(always)]
+// pub fn env_arg_layer_get(layer: *mut SlHead, idx: u16) -> *mut SlHead {
+//     let mut left = idx;
+//     let mut pos = core_read_field(layer, 0);
+//     while left > 0 {
+//         pos = get_next_list_elt(pos);
+//         left -= 1;
+//     }
+//     get_next_list_elt(ref_get(pos))
+// }
 
 /// Inserts the given object into the given argument layer using the
 /// given symbol's ID

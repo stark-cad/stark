@@ -27,7 +27,7 @@
 
 // <>
 
-//! Then Structured Augmentation Interchange Language
+//! The Structured Augmentation Interchange Language
 //!
 //! A custom Lisp dialect for writing STARK
 

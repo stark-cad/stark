@@ -75,7 +75,7 @@ impl RegionTable {
     /// Resize the table, reallocating as necessary
     unsafe fn resize(&mut self, cap: usize) {
         let lock: *mut u8 = &mut self.lock;
-        while !std::intrinsics::atomic_cxchg_acq(lock, false as u8, true as u8).1 {
+        while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
             std::hint::spin_loop();
         }
 
@@ -90,7 +90,7 @@ impl RegionTable {
             as *mut *mut Region;
         self.cap = cap;
 
-        std::intrinsics::atomic_store_rel(lock, false as u8);
+        std::intrinsics::atomic_store_release(lock, false as u8);
     }
 
     /// Add a new entry to the table
@@ -106,7 +106,7 @@ impl RegionTable {
 
         let len_ptr: *mut usize = &mut self.len;
         let mut old_len = *len_ptr;
-        while !std::intrinsics::atomic_cxchg_acqrel(len_ptr, old_len, old_len + 1).1 {
+        while !std::intrinsics::atomic_cxchg_acqrel_acquire(len_ptr, old_len, old_len + 1).1 {
             old_len = *len_ptr;
         }
 
@@ -193,7 +193,7 @@ pub unsafe fn alloc(region: *mut Region, size: usize, cfg: u8) -> *mut SlHead {
         }
 
         let lock: *mut u8 = &mut zone_ref.lock;
-        while !std::intrinsics::atomic_cxchg_acq(lock, false as u8, true as u8).1 {
+        while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
             std::hint::spin_loop();
         }
 
@@ -202,7 +202,7 @@ pub unsafe fn alloc(region: *mut Region, size: usize, cfg: u8) -> *mut SlHead {
         zone_ref.used += length;
         zone_ref.top = out.add(length);
 
-        std::intrinsics::atomic_store_rel(lock, false as u8);
+        std::intrinsics::atomic_store_release(lock, false as u8);
 
         out as *mut SlHead
     };

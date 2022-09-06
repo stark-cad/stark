@@ -29,7 +29,7 @@ pub fn load() -> Vec<[f32; 4]> {
     };
 
     let bbox = face
-        .outline_glyph(ttf_parser::GlyphId(34), &mut builder)
+        .outline_glyph(face.glyph_index('A').unwrap(), &mut builder)
         .unwrap();
 
     let scale = (bbox.x_max - bbox.x_min) as f32;
