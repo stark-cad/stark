@@ -36,8 +36,8 @@ pub fn queue_create(
     rx_region: *mut memmgt::Region,
 ) -> (*mut SlHead, *mut SlHead) {
     unsafe {
-        let sender = memmgt::alloc(tx_region, 16, Cfg::B16Other as u8);
-        let receiver = memmgt::alloc(rx_region, 16, Cfg::B16Other as u8);
+        let sender = memmgt::alloc(tx_region, 16, super::T_QUEUE_TX_ID.0);
+        let receiver = memmgt::alloc(rx_region, 16, super::T_QUEUE_RX_ID.0);
 
         // will not work
         // super::set_self_type(sender, super::T_QUEUE_TX.0);

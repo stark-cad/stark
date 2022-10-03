@@ -61,9 +61,9 @@ pub fn render_loop(
 
     engine.lines.append(&mut test_glyph);
 
-    let eng_obj = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::Cfg::B8Other as u8) };
-    unsafe { sail::write_field_unchecked(eng_obj, 0, (&mut engine as *mut _) as u64) };
-    sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_ENGINE.0, eng_obj);
+    let eng_hdl = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::T_ENG_HDL_ID.0) };
+    unsafe { sail::write_field_unchecked(eng_hdl, 0, (&mut engine as *mut _) as u64) };
+    sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_ENGINE.0, eng_hdl);
 
     crate::sail_fn! {
         let rndr_fns;

@@ -141,7 +141,7 @@ impl TryFrom<u16> for SlErrCode {
 #[inline(always)]
 fn errcode_make(reg: *mut memmgt::Region) -> *mut SlHead {
     unsafe {
-        let ptr = memmgt::alloc(reg, 2, Cfg::B2Err as u8);
+        let ptr = memmgt::alloc(reg, 2, memmgt::cap(Cfg::B2Err));
         write_field_unchecked::<u16>(ptr, 0, 0);
         ptr
     }
@@ -150,7 +150,7 @@ fn errcode_make(reg: *mut memmgt::Region) -> *mut SlHead {
 #[inline(always)]
 fn errcode_init(reg: *mut memmgt::Region, err: SlErrCode) -> *mut SlHead {
     unsafe {
-        let ptr = memmgt::alloc(reg, 2, Cfg::B2Err as u8);
+        let ptr = memmgt::alloc(reg, 2, memmgt::cap(Cfg::B2Err));
         write_field_unchecked::<u16>(ptr, 0, err as u16);
         ptr
     }
@@ -176,8 +176,8 @@ fn arrvec_make<T: SizedBase + Copy>(
 ) -> *mut SlHead {
     assert_eq!(temp_get_size(typ), mem::size_of::<T>() as u32);
     unsafe {
-        let ptr = memmgt::alloc(reg, size, Cfg::VecArr as u8);
         let size = vec_size(8, temp_get_size(typ), len);
+        let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::VecArr));
 
         write_field_unchecked::<u32>(ptr, 0, typ);
         write_field_unchecked::<u32>(ptr, 4, len);
@@ -200,8 +200,8 @@ pub fn arrvec_init<T: SizedBase + Copy>(
     assert_eq!(temp_get_size(typ), mem::size_of::<T>() as u32);
 
     unsafe {
-        let ptr = memmgt::alloc(reg, size, Cfg::VecArr as u8);
         let size = vec_size(8, temp_get_size(typ), len);
+        let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::VecArr));
 
         write_field_unchecked::<u32>(ptr, 0, typ);
         write_field_unchecked::<u32>(ptr, 4, len);

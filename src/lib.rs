@@ -59,9 +59,16 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_ctr: usize, s
 
     frame.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 
-    let frm_obj = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::Cfg::B8Other as u8) };
-    unsafe { sail::write_field_unchecked(frm_obj, 0, (&frame as *const _) as u64) };
-    sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_FRAME.0, frm_obj);
+    let frm_hdl = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::T_FRM_HDL_ID.0) };
+    unsafe { sail::write_field_unchecked(frm_hdl, 0, (&frame as *const _) as u64) };
+    sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_FRAME.0, frm_hdl);
+
+    println!(
+        "frm_hdl -\ntype id: {}\nsize: {}\nhas size field: {}",
+        sail::get_type_id(frm_hdl),
+        sail::get_size(frm_hdl),
+        sail::size_fld_p(frm_hdl)
+    );
 
     sail_fn! {
         let mngr_fns;

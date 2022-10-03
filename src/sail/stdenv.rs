@@ -256,8 +256,8 @@ sail_fn! {
         // assert_eq!(typ, super::get_self_type(init));
 
         unsafe {
-            let ptr = memmgt::alloc(_reg, size, Cfg::VecArr as u8);
             let size = vec_size(8, temp_get_size(typ), len);
+            let ptr = memmgt::alloc(_reg, size, memmgt::cap(Cfg::VecArr));
 
             write_field_unchecked::<u32>(ptr, 0, typ);
             write_field_unchecked::<u32>(ptr, 4, len);

@@ -16,7 +16,7 @@
 
 // <>
 
-use super::{SlHead, HEAD_LEN, SYMBOL_LEN};
+use super::{SlHead, HEAD_LEN, NUM_32_LEN};
 
 use std::alloc;
 use std::mem;
@@ -164,14 +164,44 @@ impl Drop for RegionTable {
 // TODO: current memory model only sort of works for multiple threads
 // TODO: Probably make this private in the future
 
+/// Core Alloc Prep (CAP)
+///
+/// Utility function for allocating core types according to the rules
+/// of the **alloc** *typ_id* parameter; generally do not use
+#[inline(always)]
+pub fn cap(cfg: super::Cfg) -> u32 {
+    assert!(cfg as u8 & 0b00011100 != 28);
+    ((cfg as u32) >> 2) | 0x80000000
+}
+
 /// Allocates space in the given region for a Sail object, and preinitializes it
-pub unsafe fn alloc(region: *mut Region, size: usize, cfg: u8) -> *mut SlHead {
+pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead {
+    //!
+    //! Parameter Notes:
+    //! **region** - the memory region wherein to allocate the object
+    //! **size** - the object's size in bytes, after the head (full range)
+    //! **typ_id** - the object's type identifier; MSB of 1 indicates
+    //! core type, then *cfg* must be the least significant 6 bits
+
     assert_ne!(region, ptr::null_mut());
 
-    let ptr = {
-        let size_type = cfg >> 5 == 7 || (cfg & 0b00011100) >> 2 == 7;
+    // TODO: use u8 instead of bool to avoid implicit branching? maybe
+    // worth looking at generated code
 
-        let length = (HEAD_LEN + (size_type as u8 * SYMBOL_LEN)) as usize + size;
+    let type_fld_p: bool = (typ_id >> 31) == 0;
+    let size_fld_p: bool = size != 16 && size != 8 && size != 4 && size > 2;
+
+    let size_code =
+        (7 * size_fld_p as u8) | ((size.trailing_zeros() as u8 + 1) * ((size != 0) as u8));
+
+    let cfg: u8 = (((size_code << 5) + 28) * type_fld_p as u8)
+        | (((typ_id as u8 & 0b111111) << 2) * !(type_fld_p) as u8);
+
+    let ptr = {
+        let length = (HEAD_LEN
+            + (type_fld_p as u32 * NUM_32_LEN)
+            + (size_fld_p as u32 * NUM_32_LEN)) as usize
+            + size as usize;
 
         if cfg!(feature = "memdbg") {
             log::debug!("Allocating {} bytes with cfg: {:#010b}", length, cfg);
@@ -212,6 +242,14 @@ pub unsafe fn alloc(region: *mut Region, size: usize, cfg: u8) -> *mut SlHead {
 
     let head = SlHead { cfg, rc: 1 };
     ptr::write_unaligned(ptr, head);
+
+    if type_fld_p {
+        ptr::write_unaligned((ptr as *mut u32).add(2), typ_id);
+    }
+
+    if size_fld_p {
+        ptr::write_unaligned((ptr as *mut u32).add(2 + type_fld_p as usize), size);
+    }
 
     ptr
 }
