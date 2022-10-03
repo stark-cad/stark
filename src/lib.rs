@@ -51,9 +51,11 @@ unsafe impl HasRawWindowHandle for FrameHandle {
 unsafe impl Send for FrameHandle {}
 
 /// Sail interpreter loop for the manager thread
-pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_env: usize) {
-    let (sl_tbl, sl_env) = (sl_tbl as *mut sail::SlHead, sl_env as *mut sail::SlHead);
+pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_ctr: usize, sl_env: usize) {
     let sl_reg = sl_reg as *mut sail::memmgt::Region;
+    let sl_tbl = sl_tbl as *mut SlHead;
+    let sl_ctr = sl_ctr as *mut SlHead;
+    let sl_env = sl_env as *mut SlHead;
 
     frame.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 
@@ -110,7 +112,7 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_env: usize) {
 
     let mut stack = sail::eval::EvalStack::new(10000);
 
-    let mut _slot: usize  = 0;
+    let mut _slot: usize = 0;
     let ret_addr = (&mut _slot as *mut usize) as *mut *mut SlHead;
 
     stack.start(ret_addr, sl_env, prog_expr);

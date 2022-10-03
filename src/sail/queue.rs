@@ -39,8 +39,9 @@ pub fn queue_create(
         let sender = memmgt::alloc(tx_region, 16, Cfg::B16Other as u8);
         let receiver = memmgt::alloc(rx_region, 16, Cfg::B16Other as u8);
 
-        super::set_self_type(sender, super::T_QUEUE_TX.0);
-        super::set_self_type(receiver, super::T_QUEUE_RX.0);
+        // will not work
+        // super::set_self_type(sender, super::T_QUEUE_TX.0);
+        // super::set_self_type(receiver, super::T_QUEUE_RX.0);
 
         write_field_unchecked(sender, 0, receiver);
         write_field_unchecked(sender, 8, rx_region as u64);
@@ -54,7 +55,7 @@ pub fn queue_create(
 
 /// Transmits a copy of the given Sail object along the queue
 pub fn queue_tx(loc: *mut SlHead, item: *mut SlHead) {
-    assert_eq!(super::get_self_type(loc), super::T_QUEUE_TX.0);
+    assert_eq!(get_type_id(loc), super::T_QUEUE_TX_ID.0);
     assert_eq!(get_base_size(loc), BaseSize::B16);
 
     unsafe {
@@ -71,7 +72,7 @@ pub fn queue_tx(loc: *mut SlHead, item: *mut SlHead) {
             tail = read_field_atomic_unchecked(loc, 0);
 
             // get pointer to the tail's next element
-            let (is_head, next) = if super::get_self_type(tail) == super::T_QUEUE_RX.0 {
+            let (is_head, next) = if get_type_id(tail) == super::T_QUEUE_RX_ID.0 {
                 (true, read_field_atomic_unchecked(tail, 0))
             } else {
                 (false, get_next_list_elt(tail))
@@ -101,7 +102,7 @@ pub fn queue_tx(loc: *mut SlHead, item: *mut SlHead) {
 
 /// Receives and returns the object at the head of the queue
 pub fn queue_rx(loc: *mut SlHead) -> *mut SlHead {
-    assert_eq!(super::get_self_type(loc), super::T_QUEUE_RX.0);
+    assert_eq!(get_type_id(loc), super::T_QUEUE_RX_ID.0);
     assert_eq!(get_base_size(loc), BaseSize::B16);
 
     unsafe {

@@ -70,14 +70,14 @@ fn main() {
     let rndr_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
     let ctxt_region = unsafe { sail::memmgt::acquire_mem_region(1000) };
 
-    let (sl_tbl, main_env, rndr_env) = {
-        let (tbl, m_env) = sail::prep_environment(main_region);
-        sail::environment_setup(main_region, tbl, m_env);
+    let (sl_tbl, ty_ctr, main_env, rndr_env) = {
+        let (tbl, ctr, m_env) = sail::prep_environment(main_region);
+        sail::environment_setup(main_region, tbl, ctr, m_env);
 
         let r_env = sail::env_create(rndr_region, 255);
         sail::set_next_list_elt(r_env, m_env);
 
-        (tbl, m_env, r_env)
+        (tbl, ctr, m_env, r_env)
     };
 
     let (mr_send, mr_recv) = sail::queue::queue_create(main_region, rndr_region);
@@ -98,6 +98,7 @@ fn main() {
 
     let (
         sl_tbl,
+        ty_ctr,
         main_region,
         rndr_region,
         ctxt_region,
@@ -109,6 +110,7 @@ fn main() {
         cur_pos,
     ) = (
         sl_tbl as usize,
+        ty_ctr as usize,
         main_region as usize,
         rndr_region as usize,
         ctxt_region as usize,
@@ -123,13 +125,13 @@ fn main() {
     // This thread handles all rendering to the graphical frame: the output interface
     let render = thread::Builder::new()
         .name("render".to_string())
-        .spawn(move || graphics::render_loop(NAME, SIZE, &handle, rndr_region, sl_tbl, rndr_env))
+        .spawn(move || graphics::render_loop(NAME, SIZE, &handle, rndr_region, sl_tbl, ty_ctr, rndr_env))
         .unwrap();
 
     // This thread manages the program, treating the actual main thread as a source of user input
     let manager = thread::Builder::new()
         .name("manager".to_string())
-        .spawn(move || manager_loop(frame, main_region, sl_tbl, main_env))
+        .spawn(move || manager_loop(frame, main_region, sl_tbl, ty_ctr, main_env))
         .unwrap();
 
     // This loop gets input from the user and detects changes to the context

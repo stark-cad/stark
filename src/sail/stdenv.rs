@@ -253,7 +253,7 @@ sail_fn! {
         let len = i64_get(len) as u32;
 
         assert!(temp_base_sized_p(typ));
-        assert_eq!(typ, super::get_self_type(init));
+        // assert_eq!(typ, super::get_self_type(init));
 
         unsafe {
             let size = vec_size(8, temp_get_size(typ), len as usize);
@@ -294,7 +294,7 @@ sail_fn! {
         coretypck!(idx ; I64);
         let typ = super::arrvec_get_typ(target);
         assert!(temp_base_sized_p(typ));
-        assert_eq!(typ, super::get_self_type(val));
+        // assert_eq!(typ, super::get_self_type(val));
 
         let idx = i64_get(idx) as u32;
         assert!(idx < super::arrvec_get_len(target));

@@ -43,10 +43,12 @@ pub fn render_loop(
     frame: &FrameHandle,
     sl_reg: usize,
     sl_tbl: usize,
+    sl_ctr: usize,
     sl_env: usize,
 ) {
     let sl_reg = sl_reg as *mut sail::memmgt::Region;
     let sl_tbl = sl_tbl as *mut SlHead;
+    let sl_ctr = sl_ctr as *mut SlHead;
     let sl_env = sl_env as *mut SlHead;
 
     let mut engine = Engine::new(frame, name, size[0], size[1]);

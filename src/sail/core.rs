@@ -348,11 +348,15 @@ pub fn proc_p(loc: *mut SlHead) -> bool {
 
 /// Checks whether a valid Sail object contains the type ID field
 #[inline(always)]
-pub fn type_id_p(loc: *mut SlHead) -> bool {
+pub fn type_fld_p(loc: *mut SlHead) -> bool {
     let head = get_cfg_all(loc);
     head >> 5 == 7 || (head & 0b00011100) >> 2 == 7
 }
 
+pub fn get_type_id(loc: *mut SlHead) -> u32 {
+    assert!(type_fld_p(loc));
+    unsafe { ptr::read_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *const u32) }
+}
 /// Returns the truthiness of a valid Sail object
 #[inline(always)]
 pub fn truthy(loc: *mut SlHead) -> bool {
@@ -1550,8 +1554,12 @@ fn typ_ctr_get_id(ctr: *mut SlHead) -> u32 {
 ///
 /// TODO: should regions know about their Sail environment?
 /// TODO: insert all the core type symbols
-pub fn prep_environment(reg: *mut Region) -> (*mut SlHead, *mut SlHead) {
-    (sym_tab_create(reg, 255), env_create(reg, 255))
+pub fn prep_environment(reg: *mut Region) -> (*mut SlHead, *mut SlHead, *mut SlHead) {
+    (
+        sym_tab_create(reg, 251),
+        typ_ctr_create(reg),
+        env_create(reg, 251),
+    )
 }
 
 #[inline(always)]

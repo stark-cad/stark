@@ -50,12 +50,34 @@ pub mod stdenv;
 // region, the type ID counter, and information on all the fields;
 // field info includes length, type symbol, and keyword name
 
-// fn make_val_type_mfst(
-//     reg: *mut Region,
-//     ctr: *mut SlHead,
-//     fields: Vec<(u32, u32, u32)>,
-// ) -> *mut SlHead {
-// }
+// TODO: check whether type symbols are valid?
+fn make_val_type_mfst(
+    reg: *mut memmgt::Region,
+    ctr: *mut SlHead,
+    fields: Vec<(u32, u32, u32)>,
+) -> *mut SlHead {
+    assert!(12 + fields.len() * 16 <= u32::MAX as usize);
+
+    let fieldct = fields.len() as u32;
+    let mfst = unsafe { memmgt::alloc(reg, ty_manifest_size(fieldct), memmgt::cap(Cfg::TyMfst)) };
+
+    core_write_field(mfst, 0, typ_ctr_get_id(ctr));
+    core_write_field(mfst, 4, fieldct);
+
+    let mut val_ofst_acc: u32 = 0;
+
+    for (i, f) in fields.iter().enumerate() {
+        let ent_ofst = 16 * i as u32 + 12;
+        core_write_field(mfst, ent_ofst + 0, val_ofst_acc);
+        core_write_field(mfst, ent_ofst + 4, f.0);
+        core_write_field(mfst, ent_ofst + 8, f.1);
+        core_write_field(mfst, ent_ofst + 12, f.2);
+        val_ofst_acc += f.0;
+    }
+
+    core_write_field(mfst, 8, val_ofst_acc);
+    mfst
+}
 
 // Existing Sized Types
 
@@ -260,81 +282,105 @@ incl_symbols! {
     28 T_ERR         "err"     Type;
     29 T_QUEUE_TX    "q-tx"    Type;
     30 T_QUEUE_RX    "q-rx"    Type;
-    31 SP_DEF        "def"     Basic;
-    32 SP_DO         "do"      Basic;
-    33 SP_EVAL       "eval"    Basic;
-    34 SP_FN         "fn"      Basic;
-    35 SP_IF         "if"      Basic;
-    36 SP_QUOTE      "quote"   Basic;
-    37 SP_SET        "set"     Basic;
-    38 SP_WHILE      "while"   Basic;
-    39 S_MR_SEND     "mr-send" Basic;
-    40 S_MR_RECV     "mr-recv" Basic;
-    41 S_CM_SEND     "cm-send" Basic;
-    42 S_CM_RECV     "cm-recv" Basic;
-    43 S_CR_SEND     "cr-send" Basic;
-    44 S_CR_RECV     "cr-recv" Basic;
-    45 S_MAIN        "main"    Basic;
-    46 S_FRAME       "frame"   Basic;
-    47 S_RNDR        "rndr"    Basic;
-    48 S_ENGINE      "engine"  Basic;
-    49 S_T_INTERN    "%true"   Basic;
-    50 S_FR_DIMS     "fr-dims" Basic;
-    51 S_CUR_POS     "cur-pos" Basic;
-    52 K_CX_DESTR    "cx-dstr" Keyword;
-    53 K_CX_RESIZ    "cx-resz" Keyword;
-    54 K_CX_RECRD    "cx-rcrd" Keyword;
-    55 K_CX_REDRW    "cx-rdrw" Keyword;
-    56 K_CX_CURMV    "cx-crmv" Keyword;
-    57 K_CX_SHELL    "cx-shel" Keyword;
-    58 K_CX_KEY_U    "cx-kb-u" Keyword;
-    59 K_CX_KEY_D    "cx-kb-d" Keyword;
-    60 K_CX_KEY_F    "cx-kb-f" Keyword;
-    61 K_CX_KEY_B    "cx-kb-b" Keyword;
-    62 K_CX_KEY_L    "cx-kb-l" Keyword;
-    63 K_CX_KEY_S    "cx-kb-s" Keyword;
-    64 K_CX_KEY_E    "cx-kb-e" Keyword;
-    65 K_CX_KEY_K    "cx-kb-k" Keyword;
-    66 K_CX_KEY_M    "cx-kb-m" Keyword
-    67
+    31 T_FRM_HDL     "frm-hdl" Type;
+    32 T_ENG_HDL     "eng-hdl" Type;
+    33 T_ENV         "env"     Type;
+    34 T_ENV_LYR     "env-lyr" Type;
+    35 SP_DEF        "def"     Basic;
+    36 SP_DO         "do"      Basic;
+    37 SP_EVAL       "eval"    Basic;
+    38 SP_FN         "fn"      Basic;
+    39 SP_IF         "if"      Basic;
+    40 SP_QUOTE      "quote"   Basic;
+    41 SP_SET        "set"     Basic;
+    42 SP_WHILE      "while"   Basic;
+    43 S_MR_SEND     "mr-send" Basic;
+    44 S_MR_RECV     "mr-recv" Basic;
+    45 S_CM_SEND     "cm-send" Basic;
+    46 S_CM_RECV     "cm-recv" Basic;
+    47 S_CR_SEND     "cr-send" Basic;
+    48 S_CR_RECV     "cr-recv" Basic;
+    49 S_MAIN        "main"    Basic;
+    50 S_FRAME       "frame"   Basic;
+    51 S_RNDR        "rndr"    Basic;
+    52 S_ENGINE      "engine"  Basic;
+    53 S_T_INTERN    "%true"   Basic;
+    54 S_FR_DIMS     "fr-dims" Basic;
+    55 S_CUR_POS     "cur-pos" Basic;
+    56 K_CX_DESTR    "cx-dstr" Keyword;
+    57 K_CX_RESIZ    "cx-resz" Keyword;
+    58 K_CX_RECRD    "cx-rcrd" Keyword;
+    59 K_CX_REDRW    "cx-rdrw" Keyword;
+    60 K_CX_CURMV    "cx-crmv" Keyword;
+    61 K_CX_SHELL    "cx-shel" Keyword;
+    62 K_CX_KEY_U    "cx-kb-u" Keyword;
+    63 K_CX_KEY_D    "cx-kb-d" Keyword;
+    64 K_CX_KEY_F    "cx-kb-f" Keyword;
+    65 K_CX_KEY_B    "cx-kb-b" Keyword;
+    66 K_CX_KEY_L    "cx-kb-l" Keyword;
+    67 K_CX_KEY_S    "cx-kb-s" Keyword;
+    68 K_CX_KEY_E    "cx-kb-e" Keyword;
+    69 K_CX_KEY_K    "cx-kb-k" Keyword;
+    70 K_CX_KEY_M    "cx-kb-m" Keyword
+    71
+}
+
+macro_rules! incl_types {
+    ( $ctvar:ident : $( $id:literal $name:ident $sym:ident );+ $ctval:literal ) => {
+        $(
+            pub const $name: (u32, u32) = ($id, $sym.0);
+        )+
+            const $ctvar: usize = $ctval;
+    }
+}
+
+incl_types! {
+    TID_COUNT:
+    0  T_ENV_ID      T_ENV;
+    1  T_ENV_LYR_ID  T_ENV_LYR;
+    2  T_QUEUE_TX_ID T_QUEUE_TX;
+    3  T_QUEUE_RX_ID T_QUEUE_RX;
+    4  T_FRM_HDL_ID  T_FRM_HDL;
+    5  T_ENG_HDL_ID  T_ENG_HDL
+    6
 }
 
 // TODO: MINIMIZE the use of *pub* and *unsafe* functions
 
-/// Returns the type specifier for a Sail object
-fn get_self_type(loc: *mut SlHead) -> u32 {
-    if nil_p(loc) {
-        return T_NIL.0;
-    }
-    use Cfg::*;
-    match get_cfg_spec(loc) {
-        B0BoolF | B0BoolT => T_BOOL.0,
-        B1U8 => T_U8.0,
-        B1I8 => T_I8.0,
-        B2U16 => T_U16.0,
-        B2I16 => T_I16.0,
-        B4U32 => T_U32.0,
-        B4I32 => T_I32.0,
-        B4F32 => T_F32.0,
-        B4Sym => T_SYMBOL.0,
-        B8U64 => T_U64.0,
-        B8I64 => T_I64.0,
-        B8F64 => T_F64.0,
-        B8Ptr => T_REF.0,
-        B16U128 => T_U128.0,
-        B16I128 => T_I128.0,
-        VecStd => T_STDVEC.0,
-        VecStr => T_STRING.0,
-        VecHash => T_HASHVEC.0,
-        VecAny => T_ANYVEC.0,
-        ProcLambda => T_PROC_LAMBDA.0,
-        ProcNative => T_PROC_NATIVE.0,
-        _ => {
-            assert!(type_id_p(loc));
-            unsafe { ptr::read_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *const u32) }
-        }
-    }
-}
+// /// Returns the type specifier for a Sail object
+// fn get_self_type(loc: *mut SlHead) -> u32 {
+//     if nil_p(loc) {
+//         return T_NIL.0;
+//     }
+//     use Cfg::*;
+//     match get_cfg_spec(loc) {
+//         B0BoolF | B0BoolT => T_BOOL.0,
+//         B1U8 => T_U8.0,
+//         B1I8 => T_I8.0,
+//         B2U16 => T_U16.0,
+//         B2I16 => T_I16.0,
+//         B4U32 => T_U32.0,
+//         B4I32 => T_I32.0,
+//         B4F32 => T_F32.0,
+//         B4Sym => T_SYMBOL.0,
+//         B8U64 => T_U64.0,
+//         B8I64 => T_I64.0,
+//         B8F64 => T_F64.0,
+//         B8Ptr => T_REF.0,
+//         B16U128 => T_U128.0,
+//         B16I128 => T_I128.0,
+//         VecStd => T_STDVEC.0,
+//         VecStr => T_STRING.0,
+//         VecHash => T_HASHVEC.0,
+//         VecAny => T_ANYVEC.0,
+//         ProcLambda => T_PROC_LAMBDA.0,
+//         ProcNative => T_PROC_NATIVE.0,
+//         _ => {
+//             assert!(type_fld_p(loc));
+//             unsafe { ptr::read_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *const u32) }
+//         }
+//     }
+// }
 
 // /// Returns the size of a valid Sail object
 // fn get_size(
@@ -358,13 +404,13 @@ fn get_self_type(loc: *mut SlHead) -> u32 {
 //     }
 // }
 
-/// Set the type specifier for a Sail object not of a core type
-///
-/// **Do not use.** Type specifiers should be set once and not altered.
-fn set_self_type(loc: *mut SlHead, typ: u32) {
-    assert!(type_id_p(loc));
-    unsafe { ptr::write_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *mut u32, typ) }
-}
+// /// Set the type specifier for a Sail object not of a core type
+// ///
+// /// **Do not use.** Type specifiers should be set once and not altered.
+// fn set_self_type(loc: *mut SlHead, typ: u32) {
+//     assert!(type_fld_p(loc));
+//     unsafe { ptr::write_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *mut u32, typ) }
+// }
 
 // /// TODO: eliminate as much write_unaligned as possible
 // fn write_field<T: SizedBase>(
@@ -529,10 +575,10 @@ pub fn repl(stream_in: std::io::Stdin) {
     let region = unsafe { memmgt::acquire_mem_region(100000) };
 
     // Create persistent environment and symbol table
-    let (tbl, env) = prep_environment(region);
+    let (tbl, ctr, env) = prep_environment(region);
 
     // Load standard / base definitions into environment and symbol table
-    environment_setup(region, tbl, env);
+    environment_setup(region, tbl, ctr, env);
 
     let mut stack = eval::EvalStack::new(10000);
 
@@ -572,9 +618,9 @@ pub fn run_file(filename: &str) -> Result<String, SlErrCode> {
 pub fn interpret(code: &str) -> Result<String, SlErrCode> {
     let region = unsafe { memmgt::acquire_mem_region(1000000) };
 
-    let (tbl, env) = prep_environment(region);
+    let (tbl, ctr, env) = prep_environment(region);
 
-    environment_setup(region, tbl, env);
+    environment_setup(region, tbl, ctr, env);
 
     let expr = parser::parse(region, tbl, code)?;
     let result = eval::eval(region, tbl, env, expr);
@@ -583,12 +629,18 @@ pub fn interpret(code: &str) -> Result<String, SlErrCode> {
 }
 
 /// Set up the symbol table and environment before interpreting Sail code
-pub fn environment_setup(reg: *mut memmgt::Region, tbl: *mut SlHead, env: *mut SlHead) {
+pub fn environment_setup(
+    reg: *mut memmgt::Region,
+    tbl: *mut SlHead,
+    ctr: *mut SlHead,
+    env: *mut SlHead,
+) {
     for (n, s) in SYM_ARRAY.into_iter().enumerate() {
         sym_tab_add_with_id(reg, tbl, s, n as u32);
     }
 
     sym_tab_set_next_id(tbl, SYM_ARRAY.len() as u32);
+    typ_ctr_set_next_id(ctr, TID_COUNT as u32);
 
     let true_intern = bool_init(reg, true);
     env_layer_ins_by_id(reg, env, S_T_INTERN.0, true_intern);
