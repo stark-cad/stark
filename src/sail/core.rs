@@ -62,14 +62,14 @@ sized_base! {
 }
 
 /// Head includes pointer to next list element
-pub const HEAD_LEN: u8 = 8;
-pub const PTR_LEN: u8 = 8;
-pub const SYMBOL_LEN: u8 = 4;
-pub const NUM_8_LEN: u8 = 1;
-pub const NUM_16_LEN: u8 = 2;
-pub const NUM_32_LEN: u8 = 4;
-pub const NUM_64_LEN: u8 = 8;
-pub const NUM_128_LEN: u8 = 16;
+pub const HEAD_LEN: u32 = 8;
+pub const PTR_LEN: u32 = 8;
+pub const SYMBOL_LEN: u32 = 4;
+pub const NUM_8_LEN: u32 = 1;
+pub const NUM_16_LEN: u32 = 2;
+pub const NUM_32_LEN: u32 = 4;
+pub const NUM_64_LEN: u32 = 8;
+pub const NUM_128_LEN: u32 = 16;
 
 /// Header for all Sail objects in memory
 ///
@@ -419,7 +419,7 @@ pub fn core_type(loc: *mut SlHead) -> Option<CoreType> {
 
 /// Returns the size of an object, which must be of a core type
 #[inline(always)]
-pub fn core_size(loc: *mut SlHead) -> usize {
+pub fn core_size(loc: *mut SlHead) -> u32 {
     use CoreType::*;
     match core_type(loc).expect("not a core type") {
         Nil | Bool => 0,
@@ -428,21 +428,18 @@ pub fn core_size(loc: *mut SlHead) -> usize {
         U32 | I32 | F32 | Symbol => 4,
         U64 | I64 | F64 | Ref => 8,
         U128 | I128 | TyDsc => 16,
-        VecStd => vec_size(8, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }
-            as usize),
-        VecStr => vec_size(8, 1, unsafe { read_field_unchecked::<u32>(loc, 0) }
-            as usize),
-        VecHash => vec_size(8, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }
-            as usize),
+        VecStd => vec_size(8, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }),
+        VecStr => vec_size(8, 1, unsafe { read_field_unchecked::<u32>(loc, 0) }),
+        VecHash => vec_size(8, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }),
         VecArr => vec_size(
             8,
             temp_get_size(unsafe { read_field_unchecked::<u32>(loc, 0) }),
-            unsafe { read_field_unchecked::<u32>(loc, 4) } as usize,
+            unsafe { read_field_unchecked::<u32>(loc, 4) },
         ),
         VecAny => vec_size(
             12,
             temp_get_size(unsafe { read_field_unchecked::<u32>(loc, 0) }),
-            unsafe { read_field_unchecked::<u32>(loc, 4) } as usize,
+            unsafe { read_field_unchecked::<u32>(loc, 4) },
         ),
         ProcLambda => proc_lambda_size(unsafe { read_field_unchecked::<u16>(loc, 0) }),
         ProcNative => proc_native_size(),
@@ -481,7 +478,7 @@ pub fn temp_base_sized_p(typ: u32) -> bool {
 }
 
 /// Gives the size of a limited range of types (base sized) by type ID
-pub fn temp_get_size(typ: u32) -> usize {
+pub fn temp_get_size(typ: u32) -> u32 {
     match typ {
         t if t == super::T_U8.0 => 1,
         t if t == super::T_I8.0 => 1,
@@ -533,42 +530,42 @@ pub fn temp_init_from(reg: *mut Region, typ: u32, ptr: *const u8) -> *mut SlHead
 
 /// Gives the overall size of a Vec with certain parameters
 #[inline(always)]
-pub fn vec_size(head_size: usize, elt_size: usize, capacity: usize) -> usize {
+pub fn vec_size(head_size: u32, elt_size: u32, capacity: u32) -> u32 {
     head_size + (elt_size * capacity)
 }
 
 #[inline(always)]
-fn ty_manifest_size(fldct: u32) -> usize {
-    (NUM_32_LEN + NUM_32_LEN + NUM_32_LEN) as usize
-        + ((NUM_32_LEN + NUM_32_LEN + SYMBOL_LEN + SYMBOL_LEN) as usize * fldct as usize)
+pub fn ty_manifest_size(fldct: u32) -> u32 {
+    (NUM_32_LEN + NUM_32_LEN + NUM_32_LEN)
+        + ((NUM_32_LEN + NUM_32_LEN + SYMBOL_LEN + SYMBOL_LEN) * fldct)
 }
 
 /// Gives the overall size of a lambda procedure by argument count
 #[inline(always)]
-fn proc_lambda_size(argct: u16) -> usize {
-    (NUM_16_LEN + PTR_LEN) as usize + (SYMBOL_LEN as usize * argct as usize)
+fn proc_lambda_size(argct: u16) -> u32 {
+    (NUM_16_LEN + PTR_LEN) + (SYMBOL_LEN * argct as u32)
 }
 
 /// Gives the overall size of a native procedure
 #[inline(always)]
-fn proc_native_size() -> usize {
-    (NUM_16_LEN + PTR_LEN) as usize
+fn proc_native_size() -> u32 {
+    NUM_16_LEN + PTR_LEN
 }
 
 /// Write to a field of a Sail object of a core type
 #[inline(always)]
-pub fn core_write_field<T: SizedBase>(loc: *mut SlHead, offset: usize, src: T) {
+pub fn core_write_field<T: SizedBase>(loc: *mut SlHead, offset: u32, src: T) {
     unsafe {
-        let dst = value_ptr(loc).add(offset) as *mut T;
-        assert!(offset + mem::size_of::<T>() <= core_size(loc));
+        let dst = value_ptr(loc).add(offset as usize) as *mut T;
+        assert!(offset + mem::size_of::<T>() as u32 <= core_size(loc));
         ptr::write_unaligned(dst, src)
     }
 }
 
 /// Write to a field of a Sail object without any checks
 #[inline(always)]
-pub unsafe fn write_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usize, src: T) {
-    let dst = value_ptr(loc).add(offset) as *mut T;
+pub unsafe fn write_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: u32, src: T) {
+    let dst = value_ptr(loc).add(offset as usize) as *mut T;
     ptr::write_unaligned(dst, src)
 }
 
@@ -576,10 +573,10 @@ pub unsafe fn write_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usiz
 #[inline(always)]
 pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(
     loc: *mut SlHead,
-    offset: usize,
+    offset: u32,
     src: T,
 ) {
-    let dst = value_ptr(loc).add(offset) as *mut T;
+    let dst = value_ptr(loc).add(offset as usize) as *mut T;
     std::intrinsics::atomic_store_release(dst, src);
 }
 
@@ -591,38 +588,35 @@ pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(
 #[inline(always)]
 pub unsafe fn write_field_cmpxcg_unchecked<T: SizedBase + Copy>(
     loc: *mut SlHead,
-    offset: usize,
+    offset: u32,
     old: T,
     src: T,
 ) -> bool {
-    let dst = value_ptr(loc).add(offset) as *mut T;
+    let dst = value_ptr(loc).add(offset as usize) as *mut T;
     std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, src).1
 }
 
 /// Read from a field of a Sail object of a core type
 #[inline(always)]
-pub fn core_read_field<T: SizedBase>(loc: *mut SlHead, offset: usize) -> T {
+pub fn core_read_field<T: SizedBase>(loc: *mut SlHead, offset: u32) -> T {
     unsafe {
-        let src = value_ptr(loc).add(offset) as *mut T;
-        assert!(offset + mem::size_of::<T>() <= core_size(loc));
+        let src = value_ptr(loc).add(offset as usize) as *mut T;
+        assert!(offset + mem::size_of::<T>() as u32 <= core_size(loc));
         ptr::read_unaligned(src)
     }
 }
 
 /// Read from a field of a Sail object without any checks
 #[inline(always)]
-pub unsafe fn read_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: usize) -> T {
-    let src = value_ptr(loc).add(offset) as *mut T;
+pub unsafe fn read_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: u32) -> T {
+    let src = value_ptr(loc).add(offset as usize) as *mut T;
     ptr::read_unaligned(src)
 }
 
 /// Read from a field of a Sail object atomically without any checks
 #[inline(always)]
-pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(
-    loc: *mut SlHead,
-    offset: usize,
-) -> T {
-    let src = value_ptr(loc).add(offset) as *mut T;
+pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(loc: *mut SlHead, offset: u32) -> T {
+    let src = value_ptr(loc).add(offset as usize) as *mut T;
     std::intrinsics::atomic_load_acquire(src)
 }
 
@@ -705,8 +699,8 @@ pub fn sym_init(reg: *mut Region, val: u32) -> *mut SlHead {
 pub fn stdvec_make(reg: *mut Region, cap: u32) -> *mut SlHead {
     // cap, len, (pointer * cap)
     unsafe {
-        let size = vec_size(NUM_32_LEN as usize * 2, PTR_LEN as usize, cap as usize);
         let ptr = memmgt::alloc(reg, size, Cfg::VecStd as u8);
+        let size = vec_size(NUM_32_LEN * 2, PTR_LEN, cap);
 
         write_field_unchecked::<u32>(ptr, 0, cap);
         write_field_unchecked::<u32>(ptr, 4, 0);
@@ -722,7 +716,7 @@ pub fn stdvec_init(reg: *mut Region, val: &[*mut SlHead]) -> *mut SlHead {
     unsafe { write_field_unchecked(ptr, 4, len) }
 
     for (i, p) in val.iter().enumerate() {
-        unsafe { write_field_unchecked(ptr, 8 + (8 * i), *p) }
+        unsafe { write_field_unchecked(ptr, 8 + (8 * i as u32), *p) }
     }
 
     ptr
@@ -732,8 +726,8 @@ pub fn stdvec_init(reg: *mut Region, val: &[*mut SlHead]) -> *mut SlHead {
 pub fn string_make(reg: *mut Region, cap: u32) -> *mut SlHead {
     // cap, len, (byte * cap)
     unsafe {
-        let size = vec_size(NUM_32_LEN as usize * 2, NUM_8_LEN as usize, cap as usize);
         let ptr = memmgt::alloc(reg, size, Cfg::VecStr as u8);
+        let size = vec_size(NUM_32_LEN * 2, NUM_8_LEN, cap);
 
         write_field_unchecked::<u32>(ptr, 0, cap);
         write_field_unchecked::<u32>(ptr, 4, 0);
@@ -761,13 +755,13 @@ pub fn string_init(reg: *mut Region, val: &str) -> *mut SlHead {
 pub fn hashvec_make(reg: *mut Region, size: u32) -> *mut SlHead {
     // size, fill, (pointer * size)
     unsafe {
-        let top_size = vec_size(NUM_32_LEN as usize * 2, PTR_LEN as usize, size as usize);
         let ptr = memmgt::alloc(reg, top_size, Cfg::VecHash as u8);
+        let top_size = vec_size(NUM_32_LEN * 2, PTR_LEN, size);
 
         write_field_unchecked::<u32>(ptr, 0, size); // size
         write_field_unchecked::<u32>(ptr, 4, 0); // fill
 
-        for i in 0..size as usize {
+        for i in 0..size {
             write_field_unchecked(ptr, 4 + 4 + (i * 8), ptr::null_mut());
         }
 
@@ -855,7 +849,7 @@ fn stdvec_get_cap(loc: *mut SlHead) -> u32 {
 #[inline(always)]
 pub fn stdvec_idx(loc: *mut SlHead, idx: u32) -> *mut SlHead {
     coretypck!(loc ; VecStd);
-    core_read_field(loc, 4 + 4 + (idx as usize * 8))
+    core_read_field(loc, 4 + 4 + (idx * 8))
 }
 
 #[inline(always)]
@@ -863,7 +857,7 @@ pub fn stdvec_push(loc: *mut SlHead, item: *mut SlHead) {
     let (len, cap) = (stdvec_get_len(loc), stdvec_get_cap(loc));
 
     if len < cap {
-        core_write_field(loc, 4 + 4 + (len as usize * 8), item);
+        core_write_field(loc, 4 + 4 + (len * 8), item);
         stdvec_set_len(loc, len + 1);
     } else {
         panic!("not enough space in vec");
@@ -873,13 +867,13 @@ pub fn stdvec_push(loc: *mut SlHead, item: *mut SlHead) {
 #[inline(always)]
 fn string_get_len(loc: *mut SlHead) -> u32 {
     coretypck!(loc ; VecStr);
-    core_read_field(loc, NUM_32_LEN as usize)
+    core_read_field(loc, NUM_32_LEN)
 }
 
 #[inline(always)]
 fn string_set_len(loc: *mut SlHead, len: u32) {
     coretypck!(loc ; VecStr);
-    core_write_field(loc, NUM_32_LEN as usize, len)
+    core_write_field(loc, NUM_32_LEN, len)
 }
 
 #[inline(always)]
@@ -890,13 +884,15 @@ fn string_get_cap(loc: *mut SlHead) -> u32 {
 
 #[inline(always)]
 pub fn string_set(loc: *mut SlHead, val: &str) {
+    assert!(val.len() <= u32::MAX as usize - 8);
+
     let cap = string_get_cap(loc);
     let len = val.len() as u32;
 
     // TODO: copy using a purpose-designed function
     if len <= cap {
         for (count, c) in val.bytes().enumerate() {
-            core_write_field(loc, 4 + 4 + count as usize, c);
+            core_write_field(loc, 4 + 4 + count as u32, c);
         }
         string_set_len(loc, len);
     } else {
@@ -984,7 +980,7 @@ pub fn hash_map_insert(reg: *mut Region, loc: *mut SlHead, key: *mut SlHead, val
 
     let size = hashvec_get_size(loc);
     let hash = core_hash(key) % size;
-    let idx = 4 + 4 + (hash as usize * PTR_LEN as usize);
+    let idx = 4 + 4 + (hash * PTR_LEN);
 
     let next = core_read_field(loc, idx);
 
@@ -1041,11 +1037,7 @@ pub fn proc_get_argct(loc: *mut SlHead) -> u16 {
 #[inline(always)]
 pub fn proc_lambda_set_arg(loc: *mut SlHead, idx: u16, arg: u32) {
     coretypck!(loc ; ProcLambda);
-    core_write_field(
-        loc,
-        (NUM_16_LEN + PTR_LEN) as usize + (idx as usize * SYMBOL_LEN as usize),
-        arg,
-    )
+    core_write_field(loc, (NUM_16_LEN + PTR_LEN) + (idx as u32 * SYMBOL_LEN), arg)
 }
 
 #[inline(always)]
@@ -1056,37 +1048,36 @@ pub fn proc_lambda_get_arg(reg: *mut Region, loc: *mut SlHead, idx: u16) -> *mut
 #[inline(always)]
 fn proc_lambda_get_arg_id(loc: *mut SlHead, idx: u16) -> u32 {
     coretypck!(loc ; ProcLambda);
-    core_read_field(
-        loc,
-        (NUM_16_LEN + PTR_LEN) as usize + (idx as usize * SYMBOL_LEN as usize),
-    )
+    core_read_field(loc, (NUM_16_LEN + PTR_LEN) + (idx as u32 * SYMBOL_LEN))
 }
 
 #[inline(always)]
 pub fn proc_lambda_set_body(loc: *mut SlHead, body: *mut SlHead) {
     coretypck!(loc ; ProcLambda);
-    core_write_field(loc, NUM_16_LEN as usize, body)
+    core_write_field(loc, NUM_16_LEN, body)
 }
 
 #[inline(always)]
 pub fn proc_lambda_get_body(loc: *mut SlHead) -> *mut SlHead {
     coretypck!(loc ; ProcLambda);
-    core_read_field(loc, NUM_16_LEN as usize)
+    core_read_field(loc, NUM_16_LEN)
 }
 
 #[inline(always)]
 pub fn proc_native_set_body(loc: *mut SlHead, fun: NativeFn) {
     coretypck!(loc ; ProcNative);
     let ptr = unsafe { mem::transmute::<NativeFn, u64>(fun) };
-    core_write_field(loc, NUM_16_LEN as usize, ptr)
+    core_write_field(loc, NUM_16_LEN as u32, ptr)
 }
 
 #[inline(always)]
 pub fn proc_native_get_body(loc: *mut SlHead) -> NativeFn {
     coretypck!(loc ; ProcNative);
-    let ptr = core_read_field(loc, NUM_16_LEN as usize);
+    let ptr = core_read_field(loc, NUM_16_LEN as u32);
     unsafe { mem::transmute::<u64, NativeFn>(ptr) }
 }
+
+// TODO: there are better ways to do the below, maybe in memmgt
 
 /// Copies the value from a Sail object of a core type into a newly
 /// allocated object
@@ -1096,7 +1087,7 @@ pub fn core_copy_val(reg: *mut Region, src: *mut SlHead) -> *mut SlHead {
 
     unsafe {
         let dst = memmgt::alloc(reg, siz, cfg);
-        ptr::copy_nonoverlapping(value_ptr(src), value_ptr(dst), siz);
+        ptr::copy_nonoverlapping(value_ptr(src), value_ptr(dst), siz as usize);
         dst
     }
 }
@@ -1177,7 +1168,7 @@ fn env_lookup_entry(mut env: *mut SlHead, sym_id: u32) -> *mut SlHead {
         let entry = if coretypp!(env ; VecHash) {
             let size = hashvec_get_size(env);
             let hash = sym_id % size;
-            core_read_field(env, 4 + 4 + (hash as usize * PTR_LEN as usize))
+            core_read_field(env, 4 + 4 + (hash * PTR_LEN))
         } else if coretypp!(env ; Ref) {
             core_read_field(env, 0)
         } else {
@@ -1231,7 +1222,7 @@ pub fn env_layer_ins_by_id(reg: *mut Region, layer: *mut SlHead, sym_id: u32, va
     };
 
     let offset = if coretypp!(layer ; VecHash) {
-        8 + ((sym_id % hashvec_get_size(layer)) as usize * PTR_LEN as usize)
+        8 + ((sym_id % hashvec_get_size(layer)) * PTR_LEN)
     } else if coretypp!(layer ; Ref) {
         0
     } else {
@@ -1380,8 +1371,8 @@ fn sym_tab_direct_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead, i
     let id_hash = idn % id_size;
     let str_hash = core_hash(sym) % str_size;
 
-    let id_idx = (NUM_32_LEN + NUM_32_LEN) as usize + (id_hash as usize * PTR_LEN as usize);
-    let str_idx = (NUM_32_LEN + NUM_32_LEN) as usize + (str_hash as usize * PTR_LEN as usize);
+    let id_idx = (NUM_32_LEN + NUM_32_LEN) + (id_hash * PTR_LEN);
+    let str_idx = (NUM_32_LEN + NUM_32_LEN) + (str_hash * PTR_LEN);
 
     let mut id_pos = core_read_field(id_to_str, id_idx);
     let mut str_pos = core_read_field(str_to_id, str_idx);
@@ -1455,7 +1446,7 @@ fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
     let size = hashvec_get_size(map);
     let hash = core_hash(qry) % size as u32;
 
-    let mut entry = core_read_field(map, 4 + 4 + (hash as usize * PTR_LEN as usize));
+    let mut entry = core_read_field(map, 4 + 4 + (hash * PTR_LEN));
 
     loop {
         if nil_p(entry) {
@@ -1479,7 +1470,7 @@ pub fn sym_tab_lookup_id_num(tbl: *mut SlHead, id: u32) -> *mut SlHead {
     let size = hashvec_get_size(map);
     let hash = id % size as u32;
 
-    let mut entry = core_read_field(map, 4 + 4 + (hash as usize * PTR_LEN as usize));
+    let mut entry = core_read_field(map, 4 + 4 + (hash * PTR_LEN));
 
     loop {
         if nil_p(entry) {
@@ -1501,7 +1492,7 @@ pub fn sym_tab_get_id(reg: *mut Region, tbl: *mut SlHead, sym: &str) -> u32 {
     let size = hashvec_get_size(map);
     let hash = str_hash(sym) % size;
 
-    let mut entry = core_read_field(map, 4 + 4 + (hash as usize * PTR_LEN as usize));
+    let mut entry = core_read_field(map, 4 + 4 + (hash * PTR_LEN));
 
     while !nil_p(entry) {
         if sym == string_get(get_next_list_elt(ref_get(entry))) {
@@ -1525,12 +1516,12 @@ fn typ_ctr_create(reg: *mut Region) -> *mut SlHead {
     u32_init(reg, 0x80000000)
 }
 
-fn typ_ctr_set_next_id(ctr: *mut SlHead, id: u32) {
+pub fn typ_ctr_set_next_id(ctr: *mut SlHead, id: u32) {
     u32_set(ctr, id | 0x80000000)
 }
 
 /// Returns the next globally unique object type ID
-fn typ_ctr_get_id(ctr: *mut SlHead) -> u32 {
+pub fn typ_ctr_get_id(ctr: *mut SlHead) -> u32 {
     let lock_id = value_ptr(ctr) as *mut u32;
 
     // the lock is the first bit of the value: high when available,

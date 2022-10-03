@@ -174,16 +174,16 @@ fn arrvec_make<T: SizedBase + Copy>(
     len: u32,
     fill: T,
 ) -> *mut SlHead {
-    assert_eq!(temp_get_size(typ), mem::size_of::<T>());
+    assert_eq!(temp_get_size(typ), mem::size_of::<T>() as u32);
     unsafe {
-        let size = vec_size(8, temp_get_size(typ), len as usize);
         let ptr = memmgt::alloc(reg, size, Cfg::VecArr as u8);
+        let size = vec_size(8, temp_get_size(typ), len);
 
         write_field_unchecked::<u32>(ptr, 0, typ);
         write_field_unchecked::<u32>(ptr, 4, len);
 
         for i in 0..len {
-            write_field_unchecked(ptr, 8 + (temp_get_size(typ) * i as usize), fill)
+            write_field_unchecked(ptr, 8 + (temp_get_size(typ) * i), fill)
         }
 
         ptr
@@ -197,17 +197,17 @@ pub fn arrvec_init<T: SizedBase + Copy>(
     val: &[T],
 ) -> *mut SlHead {
     assert_eq!(len, val.len() as u32);
-    assert_eq!(temp_get_size(typ), mem::size_of::<T>());
+    assert_eq!(temp_get_size(typ), mem::size_of::<T>() as u32);
 
     unsafe {
-        let size = vec_size(8, temp_get_size(typ), len as usize);
         let ptr = memmgt::alloc(reg, size, Cfg::VecArr as u8);
+        let size = vec_size(8, temp_get_size(typ), len);
 
         write_field_unchecked::<u32>(ptr, 0, typ);
         write_field_unchecked::<u32>(ptr, 4, len);
 
         for (i, p) in val.iter().enumerate() {
-            write_field_unchecked(ptr, 8 + (temp_get_size(typ) * i), *p)
+            write_field_unchecked(ptr, 8 + (temp_get_size(typ) * i as u32), *p)
         }
 
         ptr
@@ -228,10 +228,10 @@ pub fn arrvec_rplc<T: SizedBase + Copy>(loc: *mut SlHead, val: &[T]) {
     let (len, typ) = (arrvec_get_len(loc), arrvec_get_typ(loc));
 
     assert_eq!(len, val.len() as u32);
-    assert_eq!(temp_get_size(typ), mem::size_of::<T>());
+    assert_eq!(temp_get_size(typ), mem::size_of::<T>() as u32);
 
     for (i, p) in val.iter().enumerate() {
-        unsafe { write_field_unchecked(loc, 8 + (temp_get_size(typ) * i), *p) }
+        unsafe { write_field_unchecked(loc, 8 + (temp_get_size(typ) * i as u32), *p) }
     }
 }
 
@@ -538,8 +538,7 @@ impl fmt::Display for SlContextVal {
                     let size = hashvec_get_size(value);
                     let mut fst = true;
                     for idx in 0..size {
-                        let mut pos =
-                            core_read_field(value, 4 + 4 + (PTR_LEN as usize * idx as usize));
+                        let mut pos = core_read_field(value, 4 + 4 + (PTR_LEN * idx));
                         while !nil_p(pos) {
                             if !fst {
                                 write!(f, " ").unwrap()

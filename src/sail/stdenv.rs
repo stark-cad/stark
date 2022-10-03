@@ -256,8 +256,8 @@ sail_fn! {
         // assert_eq!(typ, super::get_self_type(init));
 
         unsafe {
-            let size = vec_size(8, temp_get_size(typ), len as usize);
             let ptr = memmgt::alloc(_reg, size, Cfg::VecArr as u8);
+            let size = vec_size(8, temp_get_size(typ), len);
 
             write_field_unchecked::<u32>(ptr, 0, typ);
             write_field_unchecked::<u32>(ptr, 4, len);
@@ -265,8 +265,8 @@ sail_fn! {
             for i in 0..len {
                 std::ptr::copy_nonoverlapping(
                     value_ptr(init),
-                    value_ptr(ptr).add(8 + (temp_get_size(typ) * i as usize)),
-                    temp_get_size(typ),
+                    value_ptr(ptr).add(8 + (temp_get_size(typ) * i) as usize),
+                    temp_get_size(typ) as usize,
                 )
             }
 
@@ -285,7 +285,7 @@ sail_fn! {
         assert!(idx < super::arrvec_get_len(target));
 
         return temp_init_from(_reg, typ, unsafe {
-            value_ptr(target).add(8 + (temp_get_size(typ) * idx as usize))
+            value_ptr(target).add(8 + (temp_get_size(typ) * idx) as usize)
         });
     }
 
@@ -302,8 +302,8 @@ sail_fn! {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 value_ptr(val),
-                value_ptr(target).add(8 + (temp_get_size(typ) * idx as usize)),
-                temp_get_size(typ),
+                value_ptr(target).add(8 + (temp_get_size(typ) * idx) as usize),
+                temp_get_size(typ) as usize,
             )
         }
 
