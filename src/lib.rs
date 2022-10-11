@@ -28,7 +28,7 @@
 
 #![feature(core_intrinsics)]
 
-use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 /// Graphical frame, provided by the desktop environment
 type Frame = winit::window::Window;
@@ -39,16 +39,13 @@ pub mod sail;
 
 use sail::SlHead;
 
-/// Handle for a frame (to pass to rendering system)
-pub struct FrameHandle(pub RawWindowHandle);
-
-unsafe impl HasRawWindowHandle for FrameHandle {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        self.0
-    }
+/// Handles for a frame (to pass to rendering system)
+pub struct FrameHandles {
+    pub window: RawWindowHandle,
+    pub display: RawDisplayHandle,
 }
 
-unsafe impl Send for FrameHandle {}
+unsafe impl Send for FrameHandles {}
 
 /// Sail interpreter loop for the manager thread
 pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_ctr: usize, sl_env: usize) {

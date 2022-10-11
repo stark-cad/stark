@@ -27,9 +27,9 @@
 
 // <>
 
-use stark::{context, graphics, manager_loop, sail, FrameHandle};
+use stark::{context, graphics, manager_loop, sail, FrameHandles};
 
-use raw_window_handle::HasRawWindowHandle;
+use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use std::env;
 use std::io;
@@ -45,7 +45,6 @@ fn main() {
 
     // TODO: add useful logging throughout the program
     simple_logger::SimpleLogger::new()
-        .with_utc_timestamps()
         .with_level(log::LevelFilter::Debug)
         .init()
         .unwrap();
@@ -64,7 +63,11 @@ fn main() {
     }
 
     let (frame, event_loop) = context::init_context(NAME, ICON, SIZE[0], SIZE[1]);
-    let handle = FrameHandle(frame.raw_window_handle());
+
+    let handles = FrameHandles {
+        window: frame.raw_window_handle(),
+        display: frame.raw_display_handle(),
+    };
 
     let main_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
     let rndr_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
@@ -124,7 +127,9 @@ fn main() {
     // This thread handles all rendering to the graphical frame: the output interface
     let render = thread::Builder::new()
         .name("render".to_string())
-        .spawn(move || graphics::render_loop(NAME, SIZE, &handle, rndr_region, sl_tbl, ty_ctr, rndr_env))
+        .spawn(move || {
+            graphics::render_loop(NAME, SIZE, handles, rndr_region, sl_tbl, ty_ctr, rndr_env)
+        })
         .unwrap();
 
     // This thread manages the program, treating the actual main thread as a source of user input

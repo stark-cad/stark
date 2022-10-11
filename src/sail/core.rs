@@ -1213,8 +1213,9 @@ struct _EnvSlot {
 
 const ENV_LAYER_SLOTS: u32 = 41;
 
-/// Creates an environment, which is a list of maps that should
-/// function as a LIFO stack
+/// Creates an environment, which is a list of structures containing
+/// distinct hash dictionaries for binding objects, modules, and types
+/// to symbols
 pub fn env_create(reg: *mut Region, parent: *mut SlHead) -> *mut SlHead {
     let env = unsafe { memmgt::alloc(reg, 3 * PTR_LEN, super::T_ENV_ID.0) };
     set_next_list_elt(env, parent);

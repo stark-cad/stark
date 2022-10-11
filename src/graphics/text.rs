@@ -20,7 +20,7 @@ const FONT_PATH: &str = "fonts/FreeSans.otf";
 
 pub fn load() -> Vec<[f32; 4]> {
     let font_data = std::fs::read(FONT_PATH).unwrap();
-    let face = ttf_parser::Face::from_slice(&font_data, 0).unwrap();
+    let face = ttf_parser::Face::parse(&font_data, 0).unwrap();
 
     let mut builder = Builder {
         acc: Vec::new(),

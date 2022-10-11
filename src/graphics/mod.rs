@@ -28,7 +28,7 @@
 // <>
 
 use crate::sail::{self, SlHead};
-use crate::FrameHandle;
+use crate::FrameHandles;
 
 use ash::vk;
 
@@ -40,7 +40,7 @@ mod text;
 pub fn render_loop(
     name: &'static str,
     size: [u32; 2],
-    frame: &FrameHandle,
+    frame: FrameHandles,
     sl_reg: usize,
     sl_tbl: usize,
     sl_ctr: usize,
@@ -247,7 +247,7 @@ pub struct Engine {
 
 impl Engine {
     /// Initialize the graphics engine
-    fn new(frame: &FrameHandle, name: &str, width: u32, height: u32) -> Self {
+    fn new(frame: FrameHandles, name: &str, width: u32, height: u32) -> Self {
         // let entry = unsafe { ash::Entry::load() }.expect("Ash entry error");
         let entry = ash::Entry::linked();
         let app_name = std::ffi::CString::new(name).unwrap();
@@ -262,7 +262,7 @@ impl Engine {
             .map(|raw| raw.as_ptr())
             .collect::<Vec<_>>();
 
-        let surface_exts = ash_window::enumerate_required_extensions(frame).unwrap();
+        let surface_exts = ash_window::enumerate_required_extensions(frame.display).unwrap();
         let mut surface_ext_names_raw = surface_exts.iter().map(|raw| *raw).collect::<Vec<_>>();
         surface_ext_names_raw.push(ash::extensions::ext::DebugUtils::name().as_ptr());
 
@@ -299,8 +299,10 @@ impl Engine {
         };
 
         let surface_loader = ash::extensions::khr::Surface::new(&entry, &instance);
-        let surface =
-            unsafe { ash_window::create_surface(&entry, &instance, frame, None).unwrap() };
+        let surface = unsafe {
+            ash_window::create_surface(&entry, &instance, frame.display, frame.window, None)
+                .unwrap()
+        };
 
         let pdevices = unsafe {
             instance
@@ -948,7 +950,7 @@ impl Engine {
 
     /// Compile GLSL shader code into SPIR-V
     fn compile_shader(glsl: &str, shader_kind: shaderc::ShaderKind) -> Vec<u32> {
-        let mut compiler = shaderc::Compiler::new().unwrap();
+        let compiler = shaderc::Compiler::new().unwrap();
 
         let compiled_shader = compiler
             .compile_into_spirv(glsl, shader_kind, "unnamed", "main", None)
