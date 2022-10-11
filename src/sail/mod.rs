@@ -174,7 +174,7 @@ fn arrvec_make<T: SizedBase + Copy>(
     len: u32,
     fill: T,
 ) -> *mut SlHead {
-    assert_eq!(temp_get_size(typ), mem::size_of::<T>() as u32);
+    assert_eq!(temp_get_size(typ) as usize, mem::size_of::<T>());
     unsafe {
         let size = vec_size(8, temp_get_size(typ), len);
         let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::VecArr));
@@ -196,8 +196,8 @@ pub fn arrvec_init<T: SizedBase + Copy>(
     len: u32,
     val: &[T],
 ) -> *mut SlHead {
-    assert_eq!(len, val.len() as u32);
-    assert_eq!(temp_get_size(typ), mem::size_of::<T>() as u32);
+    assert_eq!(len as usize, val.len());
+    assert_eq!(temp_get_size(typ) as usize, mem::size_of::<T>());
 
     unsafe {
         let size = vec_size(8, temp_get_size(typ), len);

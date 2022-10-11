@@ -513,7 +513,8 @@ pub fn temp_base_sized_p(typ: u32) -> bool {
     }
 }
 
-/// Gives the size of a limited range of types (base sized) by type ID
+/// Gives the size of a limited range of types (base sized) by type
+/// symbol
 pub fn temp_get_size(typ: u32) -> u32 {
     match typ {
         t if t == super::T_U8.0 => 1,
@@ -587,6 +588,8 @@ fn proc_lambda_size(argct: u16) -> u32 {
 fn proc_native_size() -> u32 {
     NUM_16_LEN + PTR_LEN
 }
+
+// TODO: separate out pointer writes for garbage collection
 
 /// Write to a field of a Sail object of a core type
 #[inline(always)]
@@ -786,7 +789,7 @@ pub fn string_make(reg: *mut Region, cap: u32) -> *mut SlHead {
 #[inline(always)]
 pub fn string_init(reg: *mut Region, val: &str) -> *mut SlHead {
     let len = val.len();
-    let ptr = string_make(reg, len as u32);
+    let ptr = string_make(reg, len.try_into().unwrap());
 
     unsafe {
         write_field_unchecked(ptr, 4, len as u32);
@@ -839,6 +842,19 @@ pub fn proc_native_make(reg: *mut Region, argct: u16) -> *mut SlHead {
 
         write_field_unchecked::<u16>(ptr, 0, argct);
         write_field_unchecked(ptr, 2, ptr::null_mut());
+
+        ptr
+    }
+}
+
+pub fn proc_native_init(reg: *mut Region, argct: u16, fun: NativeFn) -> *mut SlHead {
+    // argct, pointer
+    unsafe {
+        let size = proc_native_size();
+        let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::ProcNative));
+
+        write_field_unchecked::<u16>(ptr, 0, argct);
+        write_field_unchecked(ptr, 2, fun as u64);
 
         ptr
     }
@@ -1093,7 +1109,7 @@ pub fn proc_lambda_get_arg(reg: *mut Region, loc: *mut SlHead, idx: u16) -> *mut
 }
 
 #[inline(always)]
-fn proc_lambda_get_arg_id(loc: *mut SlHead, idx: u16) -> u32 {
+pub fn proc_lambda_get_arg_id(loc: *mut SlHead, idx: u16) -> u32 {
     coretypck!(loc ; ProcLambda);
     core_read_field(loc, (NUM_16_LEN + PTR_LEN) + (idx as u32 * SYMBOL_LEN))
 }
@@ -1113,15 +1129,14 @@ pub fn proc_lambda_get_body(loc: *mut SlHead) -> *mut SlHead {
 #[inline(always)]
 pub fn proc_native_set_body(loc: *mut SlHead, fun: NativeFn) {
     coretypck!(loc ; ProcNative);
-    let ptr = unsafe { mem::transmute::<NativeFn, u64>(fun) };
-    core_write_field(loc, NUM_16_LEN as u32, ptr)
+    core_write_field(loc, NUM_16_LEN, fun as u64)
 }
 
 #[inline(always)]
 pub fn proc_native_get_body(loc: *mut SlHead) -> NativeFn {
     coretypck!(loc ; ProcNative);
-    let ptr = core_read_field(loc, NUM_16_LEN as u32);
-    unsafe { mem::transmute::<u64, NativeFn>(ptr) }
+    let ptr = core_read_field::<u64>(loc, NUM_16_LEN) as *const ();
+    unsafe { mem::transmute::<_, NativeFn>(ptr) }
 }
 
 // TODO: there are better ways to do the below, maybe in memmgt
@@ -1504,6 +1519,8 @@ fn sym_tab_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
 
     // we set the top two bits of the ID slot low; if they were not
     // high before this (locked), we try again until they are
+
+    // TODO: could this be implemented with a single compare and exchange?
 
     // TODO: give up after a certain number of iterations
     unsafe { while std::intrinsics::atomic_and_acquire(lock_id, 0x3FFFFFFF) >> 30 != 3 {} }

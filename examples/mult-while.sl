@@ -2,6 +2,7 @@
 ; using Sail's while form
 
 ; run time, April 21 2021: ~0.07 seconds
+; run time, October 10 2022: negligible
 
 (do
 (def max 1000)

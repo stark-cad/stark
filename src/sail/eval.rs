@@ -320,11 +320,10 @@ impl EvalStack {
 
     /// Consumes one frame off the top of the stack and executes it
     ///
-    /// This is the core of Sail evaluation logic. In the absence of
-    /// code with infinite loops, executing this function repeatedly
-    /// will evaluate any Sail expression. It handles all defined
-    /// opcodes and adds more frames to the stack as necessary, but
-    /// never uses recursion.
+    /// This is the core of Sail evaluation logic. In the limit,
+    /// executing this function repeatedly will evaluate any Sail
+    /// expression. It handles all defined opcodes and adds more
+    /// frames to the stack as necessary, but never uses recursion.
     pub fn iter_once(&mut self, reg: *mut memmgt::Region, tbl: *mut SlHead) -> bool {
         // ***********************************
         // * Sail stack-based evaluation logic
@@ -562,17 +561,16 @@ impl EvalStack {
                     self.push(nil());
                 }
                 let apply_start = self.frame_start;
-                for i in 0..proc_get_argct(proc) {
-                    let mut arg = raw_args;
-                    for _ in 0..i {
-                        arg = get_next_list_elt(arg);
-                    }
 
+                let mut arg = raw_args;
+                for i in 0..proc_get_argct(proc) {
                     let return_to =
                         unsafe { apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize) }
                             as *mut *mut SlHead;
 
                     self.eval_expr(return_to, env, arg);
+
+                    arg = get_next_list_elt(arg);
                 }
             }
             Opcode::Apply => {
