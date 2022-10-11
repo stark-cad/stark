@@ -169,7 +169,7 @@ impl Drop for RegionTable {
 /// Utility function for allocating core types according to the rules
 /// of the **alloc** *typ_id* parameter; generally do not use
 #[inline(always)]
-pub fn cap(cfg: super::Cfg) -> u32 {
+pub const fn cap(cfg: super::Cfg) -> u32 {
     assert!(cfg as u8 & 0b00011100 != 28);
     ((cfg as u32) >> 2) | 0x80000000
 }
@@ -185,17 +185,16 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
 
     assert_ne!(region, ptr::null_mut());
 
-    // TODO: use u8 instead of bool to avoid implicit branching? maybe
-    // worth looking at generated code
+    let maybe_cfg = ((typ_id & 0b111111) as u8) << 2;
 
     let type_fld_p: bool = (typ_id >> 31) == 0;
-    let size_fld_p: bool = size != 16 && size != 8 && size != 4 && size > 2;
+    let size_fld_p: bool =
+        (maybe_cfg >> 5 > 5) || (size != 16 && size != 8 && size != 4 && size > 2);
 
     let size_code =
         (7 * size_fld_p as u8) | ((size.trailing_zeros() as u8 + 1) * ((size != 0) as u8));
 
-    let cfg: u8 = (((size_code << 5) + 28) * type_fld_p as u8)
-        | (((typ_id as u8 & 0b111111) << 2) * !(type_fld_p) as u8);
+    let cfg: u8 = (((size_code << 5) + 28) * type_fld_p as u8) | (maybe_cfg * !(type_fld_p) as u8);
 
     let ptr = {
         let length = (HEAD_LEN

@@ -71,8 +71,11 @@ pub fn queue_tx(loc: *mut SlHead, item: *mut SlHead) {
             // get the current list tail (sender's perspective)
             tail = read_field_atomic_unchecked(loc, 0);
 
+            // TODO: assign type IDs to all types with object representations
+
             // get pointer to the tail's next element
-            let (is_head, next) = if get_type_id(tail) == super::T_QUEUE_RX_ID.0 {
+            let (is_head, next) = if type_fld_p(tail) && get_type_id(tail) == super::T_QUEUE_RX_ID.0
+            {
                 (true, read_field_atomic_unchecked(tail, 0))
             } else {
                 (false, get_next_list_elt(tail))

@@ -346,13 +346,15 @@ pub fn proc_p(loc: *mut SlHead) -> bool {
 //     (get_cfg_all(loc) & 0b00000010) != 0
 // }
 
-/// Checks whether a valid Sail object contains the type ID field
+/// Checks whether a valid Sail object contains the 4-byte type ID
+/// field
 #[inline(always)]
 pub fn type_fld_p(loc: *mut SlHead) -> bool {
     let head = get_cfg_all(loc);
-    head >> 5 == 7 || (head & 0b00011100) >> 2 == 7
+    (head & 0b00011100) >> 2 == 7
 }
 
+/// Checks whether a valid Sail object contains the 4-byte size field
 #[inline(always)]
 pub fn size_fld_p(loc: *mut SlHead) -> bool {
     let head = get_cfg_all(loc);
@@ -367,8 +369,9 @@ pub fn get_type_id(loc: *mut SlHead) -> u32 {
 pub fn get_size(loc: *mut SlHead) -> u32 {
     let code = get_cfg_all(loc) >> 5;
     if code <= 5 {
-        0x80000000_u32.rotate_left(code as u32) & 7
+        0x80000000_u32.rotate_left(code as u32) & 31
     } else {
+        assert!(size_fld_p(loc));
         unsafe {
             ptr::read_unaligned(
                 (loc as *mut u8).add((HEAD_LEN + (NUM_32_LEN * type_fld_p(loc) as u32)) as usize)
@@ -376,6 +379,15 @@ pub fn get_size(loc: *mut SlHead) -> u32 {
             )
         }
     }
+}
+
+fn __dbg_head_info(loc: *mut SlHead) {
+    println!(
+        "type field?: {}; size field?: {}; size: {}",
+        type_fld_p(loc),
+        size_fld_p(loc),
+        get_size(loc)
+    )
 }
 
 /// Returns the truthiness of a valid Sail object
@@ -395,9 +407,10 @@ fn get_cfg_all(loc: *mut SlHead) -> u8 {
 /// Gets the size / type configuration from a Sail object
 #[inline(always)]
 pub fn get_cfg_spec(loc: *mut SlHead) -> Cfg {
-    match Cfg::try_from(get_cfg_all(loc) & 0b11111100) {
+    let top_byte = get_cfg_all(loc);
+    match Cfg::try_from(top_byte & 0b11111100) {
         Ok(out) => out,
-        Err(_) => panic!("invalid cfg specifier"),
+        Err(_) => panic!("invalid cfg specifier: {:08b}", top_byte),
     }
 }
 
@@ -588,6 +601,7 @@ pub fn core_write_field<T: SizedBase>(loc: *mut SlHead, offset: u32, src: T) {
 /// Write to a field of a Sail object without any checks
 #[inline(always)]
 pub unsafe fn write_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: u32, src: T) {
+    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
     let dst = value_ptr(loc).add(offset as usize) as *mut T;
     ptr::write_unaligned(dst, src)
 }
@@ -599,6 +613,7 @@ pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(
     offset: u32,
     src: T,
 ) {
+    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
     let dst = value_ptr(loc).add(offset as usize) as *mut T;
     std::intrinsics::atomic_store_release(dst, src);
 }
@@ -615,6 +630,7 @@ pub unsafe fn write_field_cmpxcg_unchecked<T: SizedBase + Copy>(
     old: T,
     src: T,
 ) -> bool {
+    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
     let dst = value_ptr(loc).add(offset as usize) as *mut T;
     std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, src).1
 }
@@ -632,18 +648,21 @@ pub fn core_read_field<T: SizedBase>(loc: *mut SlHead, offset: u32) -> T {
 /// Get a pointer into a Sail object without any checks
 #[inline(always)]
 unsafe fn get_field_ptr_unchecked<T: SizedBase>(loc: *mut SlHead, offset: u32) -> *mut T {
+    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
     value_ptr(loc).add(offset as usize) as *mut T
 }
 
 /// Read from a field of a Sail object without any checks
 #[inline(always)]
 pub unsafe fn read_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: u32) -> T {
+    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
     ptr::read_unaligned(get_field_ptr_unchecked(loc, offset))
 }
 
 /// Read from a field of a Sail object atomically without any checks
 #[inline(always)]
 pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(loc: *mut SlHead, offset: u32) -> T {
+    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
     let src = value_ptr(loc).add(offset as usize) as *mut T;
     std::intrinsics::atomic_load_acquire(src)
 }
