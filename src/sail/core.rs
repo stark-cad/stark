@@ -629,11 +629,16 @@ pub fn core_read_field<T: SizedBase>(loc: *mut SlHead, offset: u32) -> T {
     }
 }
 
+/// Get a pointer into a Sail object without any checks
+#[inline(always)]
+unsafe fn get_field_ptr_unchecked<T: SizedBase>(loc: *mut SlHead, offset: u32) -> *mut T {
+    value_ptr(loc).add(offset as usize) as *mut T
+}
+
 /// Read from a field of a Sail object without any checks
 #[inline(always)]
 pub unsafe fn read_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: u32) -> T {
-    let src = value_ptr(loc).add(offset as usize) as *mut T;
-    ptr::read_unaligned(src)
+    ptr::read_unaligned(get_field_ptr_unchecked(loc, offset))
 }
 
 /// Read from a field of a Sail object atomically without any checks
@@ -1157,116 +1162,88 @@ fn core_cons_copy(reg: *mut Region, car: *mut SlHead, cdr: *mut SlHead) -> *mut 
 // TODO: the core does not use maps except for env and symtab, so consolidate the code
 // TODO: improve the env data structure (this is where most evaluation time is spent)
 
+
+// TODO: should there be a small version (maybe an array with length 6
+// to 12) for procedure arguments? note need for modules and types
+
+// TODO: assess changing slot "value" for module and type dicts
+
+// unused, tentative, might aid type checking
+type SlSym = u32;
+
+// elements of an environment slot
+struct _EnvSlot {
+    sym: SlSym,
+    obj: *mut SlHead,
+}
+
+const ENV_LAYER_SLOTS: u32 = 41;
+
 /// Creates an environment, which is a list of maps that should
 /// function as a LIFO stack
-#[inline(always)]
-pub fn env_create(reg: *mut Region, size: u32) -> *mut SlHead {
-    hashvec_make(reg, size)
+pub fn env_create(reg: *mut Region, parent: *mut SlHead) -> *mut SlHead {
+    let env = unsafe { memmgt::alloc(reg, 3 * PTR_LEN, super::T_ENV_ID.0) };
+    set_next_list_elt(env, parent);
+
+    unsafe {
+        write_field_unchecked(env, 0, nil());
+        write_field_unchecked(env, 8, nil());
+        write_field_unchecked(env, 16, nil());
+    }
+
+    // println!("<> environment created");
+
+    env
+}
+
+pub fn env_layer_make(reg: *mut Region) -> *mut SlHead {
+    let layer = unsafe {
+        memmgt::alloc(
+            reg,
+            ENV_LAYER_SLOTS * (SYMBOL_LEN + PTR_LEN),
+            super::T_ENV_LYR_ID.0,
+        )
+    };
+
+    let start = value_ptr(layer) as *mut u32;
+
+    for i in 0..ENV_LAYER_SLOTS {
+        unsafe {
+            ptr::write_unaligned(start.add(3 * i as usize), 0x80000000);
+        }
+    }
+
+    // println!("<> env layer created");
+
+    layer
 }
 
 /// Looks up the given symbol in the given environment, returning the
 /// object it refers to
 #[inline(always)]
-pub fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> *mut SlHead {
+pub fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> Option<*mut SlHead> {
+    coretypck!(sym ; Symbol);
     env_lookup_by_id(env, sym_get_id(sym))
 }
 
 /// Looks up the given symbol ID in the given environment, returning
 /// the object it refers to
 #[inline(always)]
-pub fn env_lookup_by_id(env: *mut SlHead, sym_id: u32) -> *mut SlHead {
-    let entry = env_lookup_entry(env, sym_id);
-    if nil_p(entry) {
-        entry
-    } else {
-        get_next_list_elt(entry)
-    }
-}
-
-/// Looks up the given symbol ID in the given environment, returning
-/// the entry it refers to (symbol and object)
-fn env_lookup_entry(mut env: *mut SlHead, sym_id: u32) -> *mut SlHead {
-    while !nil_p(env) {
-        // A layer can be a hash table or an alist
-        let entry = if coretypp!(env ; VecHash) {
-            let size = hashvec_get_size(env);
-            let hash = sym_id % size;
-            core_read_field(env, 4 + 4 + (hash * PTR_LEN))
-        } else if coretypp!(env ; Ref) {
-            core_read_field(env, 0)
-        } else {
-            println!("{:?}", core_type(env).unwrap());
-            panic!("incorrect layer in env")
-        };
-
-        let mut pos = entry;
-        loop {
-            if nil_p(pos) {
-                break;
-            }
-            if sym_get_id(ref_get(pos)) == sym_id {
-                return ref_get(pos);
-            }
-            pos = get_next_list_elt(pos);
-        }
-
-        env = get_next_list_elt(env);
-    }
-
-    nil()
-}
-
-// TODO: use dynamic map mode
-
-/// Creates a new hashmap based environment layer
-fn env_new_layer(reg: *mut Region, min_size: u32) -> *mut SlHead {
-    hashvec_make(reg, min_size * 2)
-}
-
-/// Inserts the given symbol into the environment, referring to the
-/// `val` object
-pub fn env_layer_ins_entry(
-    reg: *mut Region,
-    layer: *mut SlHead,
-    sym: *mut SlHead,
-    val: *mut SlHead,
-) {
-    env_layer_ins_by_id(reg, layer, sym_get_id(sym), val)
-}
-
-/// Inserts a symbol with the given ID into the environment, referring
-/// to the `val` object
-pub fn env_layer_ins_by_id(reg: *mut Region, layer: *mut SlHead, sym_id: u32, val: *mut SlHead) {
-    let entry = {
-        let sym = sym_init(reg, sym_id);
-        set_next_list_elt(sym, val);
-
-        ref_init(reg, sym)
-    };
-
-    let offset = if coretypp!(layer ; VecHash) {
-        8 + ((sym_id % hashvec_get_size(layer)) * PTR_LEN)
-    } else if coretypp!(layer ; Ref) {
-        0
-    } else {
-        panic!("incorrect layer in env")
-    };
-
-    let next = core_read_field(layer, offset);
-
-    if !nil_p(next) {
-        set_next_list_elt(entry, next);
-    }
-
-    core_write_field(layer, offset, entry)
+pub fn env_lookup_by_id(env: *mut SlHead, sym_id: u32) -> Option<*mut SlHead> {
+    env_get_binding_loc(env, sym_id).map(|i| match i {
+        Some(loc) => unsafe { ptr::read_unaligned(loc) },
+        None => nil(),
+    })
 }
 
 /// Changes the object pointed to by the given symbol's ID in the
 /// environment, if the entry already exists
 ///
 /// Returns false if no mutation was performed, or true if it was
-pub fn env_layer_mut_entry(env: *mut SlHead, sym: *mut SlHead, val: *mut SlHead) -> bool {
-    env_layer_mut_by_id(env, sym_get_id(sym), val)
+#[inline(always)]
+pub fn env_scope_mut(env: *mut SlHead, sym: *mut SlHead, obj: *mut SlHead) -> bool {
+    coretypck!(sym ; Symbol);
+    env_scope_mut_by_id(env, sym_get_id(sym), obj)
 }
 
 /// Changes the object pointed to by the given ID in the environment,
@@ -1274,72 +1251,145 @@ pub fn env_layer_mut_entry(env: *mut SlHead, sym: *mut SlHead, val: *mut SlHead)
 ///
 /// Returns false if no mutation was performed, or true if it was
 #[inline(always)]
-fn env_layer_mut_by_id(env: *mut SlHead, sym_id: u32, val: *mut SlHead) -> bool {
-    let entry = env_lookup_entry(env, sym_id);
-    if nil_p(entry) {
-        false
-    } else {
-        set_next_list_elt(entry, val);
-        true
+pub fn env_scope_mut_by_id(env: *mut SlHead, sym_id: u32, obj: *mut SlHead) -> bool {
+    match env_get_binding_loc(env, sym_id).unwrap_or(None) {
+        Some(loc) => {
+            unsafe { ptr::write_unaligned(loc, obj) };
+            true
+        }
+        None => false,
     }
 }
 
-// TODO: many improvements / optimizations possible throughout env system
-
-/// Creates a new association list based environment layer; this is
-/// meant for storing arguments to Sail procedures
-pub fn env_new_arg_layer(reg: *mut Region) -> *mut SlHead {
-    ref_make(reg)
+/// Inserts the given symbol into the environment, bound to the given
+/// object
+#[inline(always)]
+pub fn env_scope_ins(reg: *mut Region, env: *mut SlHead, sym: *mut SlHead, obj: *mut SlHead) {
+    coretypck!(sym ; Symbol);
+    env_scope_ins_by_id(reg, env, sym_get_id(sym), obj)
 }
 
-// never used
-// /// Gets an object from the given argument layer by index
-// ///
-// /// TODO: this should be a vector or something else more suitable
-// #[inline(always)]
-// pub fn env_arg_layer_get(layer: *mut SlHead, idx: u16) -> *mut SlHead {
-//     let mut left = idx;
-//     let mut pos = core_read_field(layer, 0);
-//     while left > 0 {
-//         pos = get_next_list_elt(pos);
-//         left -= 1;
-//     }
-//     get_next_list_elt(ref_get(pos))
-// }
+// TODO: shadowing behavior within a scope is complete nonsense; fix
 
-/// Inserts the given object into the given argument layer using the
-/// given symbol's ID
-pub fn env_arg_layer_ins(reg: *mut Region, layer: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
-    coretypck!(layer ; Ref);
+/// Inserts a symbol with the given ID into the environment, bound to
+/// the given object
+pub fn env_scope_ins_by_id(reg: *mut Region, env: *mut SlHead, sym_id: u32, obj: *mut SlHead) {
+    assert_eq!(get_type_id(env), super::T_ENV_ID.0);
 
-    let entry = {
-        let sym = core_copy_val(reg, key);
-        set_next_list_elt(sym, val);
-        ref_init(reg, sym)
+    // println!("inserting sym {}", sym_id);
+
+    let layer_offset = match mode_of_sym(sym_id) {
+        SymbolMode::Basic => 0,
+        SymbolMode::Module => 8,
+        SymbolMode::Type => 16,
+        SymbolMode::Keyword => return,
     };
 
-    let mut next = core_read_field(layer, 0);
-    if nil_p(next) {
-        core_write_field(layer, 0, entry);
-    } else {
-        while !get_next_list_elt(next).is_null() {
-            next = get_next_list_elt(next);
+    let entry_offset = sym_id % ENV_LAYER_SLOTS;
+
+    let top_layer: *mut SlHead = unsafe { read_field_unchecked(env, layer_offset) };
+    let mut layer_ptr = top_layer;
+
+    'layer: loop {
+        if nil_p(layer_ptr) {
+            let new_layer = env_layer_make(reg);
+            set_next_list_elt(new_layer, top_layer);
+            unsafe { write_field_unchecked(env, layer_offset, new_layer) };
+            layer_ptr = new_layer;
         }
 
-        set_next_list_elt(next, entry);
+        assert_eq!(get_type_id(layer_ptr), super::T_ENV_LYR_ID.0);
+
+        'entry: for o in 0..5 {
+            let slot_offset = (entry_offset + o) % ENV_LAYER_SLOTS;
+            let byte_offset = slot_offset * (SYMBOL_LEN + PTR_LEN);
+
+            // println!("inserting: entry is {}, o is {}", entry_offset, o);
+
+            let slot_id: u32 = unsafe { read_field_unchecked(layer_ptr, byte_offset) };
+
+            if slot_id >> 30 != SymbolMode::Keyword as u32 {
+                continue 'entry;
+            }
+
+            unsafe {
+                write_field_unchecked(layer_ptr, byte_offset, sym_id);
+                write_field_unchecked(layer_ptr, byte_offset + SYMBOL_LEN, obj);
+            }
+
+            break 'layer;
+        }
+
+        layer_ptr = get_next_list_elt(layer_ptr);
     }
+
+    ()
 }
 
-// pub fn env_push_layer(env: *mut SlHead, layer: *mut SlHead) {
-//     let next = ref_get(env);
-//     set_next_list_elt(layer, next);
-//     ref_set(env, layer);
-// }
+// TODO: simpler return type here?
 
-// pub fn env_pop_layer(env: *mut SlHead) {
-//     let next = get_next_list_elt(ref_get(env));
-//     ref_set(env, next);
-// }
+/// Looks up the given symbol ID in the given environment, returning
+/// the location in the environment of the object it refers to; None
+/// if no binding; Some(None) if no binding location
+fn env_get_binding_loc(env: *mut SlHead, sym_id: u32) -> Option<Option<*mut *mut SlHead>> {
+    assert_eq!(get_type_id(env), super::T_ENV_ID.0);
+
+    // println!("seeking sym {}", sym_id);
+
+    let layer_offset = match mode_of_sym(sym_id) {
+        SymbolMode::Basic => 0,
+        SymbolMode::Module => 8,
+        SymbolMode::Type => 16,
+        SymbolMode::Keyword => return Some(None),
+    };
+
+    let entry_offset = sym_id % ENV_LAYER_SLOTS;
+
+    let mut scope_ptr: *mut SlHead = env;
+    let mut layer_ptr: *mut SlHead;
+
+    'scope: loop {
+        if nil_p(scope_ptr) {
+            break 'scope;
+        }
+
+        assert_eq!(get_type_id(scope_ptr), super::T_ENV_ID.0);
+
+        layer_ptr = unsafe { read_field_unchecked(scope_ptr, layer_offset) };
+
+        'layer: loop {
+            if nil_p(layer_ptr) {
+                break 'layer;
+            }
+
+            assert_eq!(get_type_id(layer_ptr), super::T_ENV_LYR_ID.0);
+
+            'entry: for o in 0..5 {
+                let slot_offset = (entry_offset + o) % ENV_LAYER_SLOTS;
+                let byte_offset = slot_offset * (SYMBOL_LEN + PTR_LEN);
+
+                let slot_id: u32 = unsafe { read_field_unchecked(layer_ptr, byte_offset) };
+
+                if slot_id != sym_id {
+                    if slot_id >> 30 == SymbolMode::Keyword as u32 {
+                        break 'entry;
+                    }
+                    continue 'entry;
+                }
+
+                return Some(Some(unsafe {
+                    get_field_ptr_unchecked(layer_ptr, byte_offset + SYMBOL_LEN)
+                }));
+            }
+
+            layer_ptr = get_next_list_elt(layer_ptr);
+        }
+
+        scope_ptr = get_next_list_elt(scope_ptr);
+    }
+
+    None
+}
 
 /// Creates a symbol table, which maps symbol strings to symbol IDs
 /// and vice versa
@@ -1572,7 +1622,7 @@ pub fn prep_environment(reg: *mut Region) -> (*mut SlHead, *mut SlHead, *mut SlH
     (
         sym_tab_create(reg, 251),
         typ_ctr_create(reg),
-        env_create(reg, 251),
+        env_create(reg, nil()),
     )
 }
 

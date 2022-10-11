@@ -38,7 +38,7 @@ macro_rules! sail_fn {
                 _tbl: *mut crate::sail::SlHead,
                 _env: *mut crate::sail::SlHead,
                 _args: &[*mut crate::sail::SlHead]
-                | {
+              | {
                     let $reg = _reg;
                     let $tbl = _tbl;
                     let $env = _env;
@@ -195,7 +195,7 @@ sail_fn! {
         // let out = init_bool(reg);
         let result = i64_get(fst) == i64_get(snd);
         if result {
-            env_lookup_by_id(_env, super::S_T_INTERN.0)
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
         } else {
             nil()
         }
@@ -207,7 +207,7 @@ sail_fn! {
         // let out = init_bool(reg);
         let result = core_eq(fst, snd);
         if result {
-            env_lookup_by_id(_env, super::S_T_INTERN.0)
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
         } else {
             nil()
         }
@@ -219,7 +219,7 @@ sail_fn! {
         // let out = init_bool(reg);
         if !truthy(val) {
             // bool_set(out, false)
-            env_lookup_by_id(_env, super::S_T_INTERN.0)
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
         } else {
             // bool_set(out, true)
             nil()

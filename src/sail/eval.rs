@@ -307,7 +307,10 @@ impl EvalStack {
             self.push(ref_get(expr));
         } else {
             let out = if basic_sym_p(expr) {
-                env_lookup(env, expr)
+                match env_lookup(env, expr) {
+                    Some(obj) => obj,
+                    None => nil(),
+                }
             } else {
                 expr
             };
@@ -451,7 +454,10 @@ impl EvalStack {
                     self.push(ref_get(raw_op));
                 } else {
                     let proc = if basic_sym_p(raw_op) {
-                        env_lookup(env, raw_op)
+                        match env_lookup(env, raw_op) {
+                            Some(obj) => obj,
+                            None => panic!("symbol not bound in env"),
+                        }
                     } else {
                         raw_op
                     };
@@ -483,7 +489,7 @@ impl EvalStack {
                 assert!(basic_sym_p(symbol));
                 let value = self.frame_obj(1);
 
-                env_layer_ins_entry(reg, env, symbol, value);
+                env_scope_ins(reg, env, symbol, value);
                 self.pop_frame();
 
                 unsafe { ptr::write(ret, symbol) };
@@ -493,7 +499,7 @@ impl EvalStack {
                 assert!(basic_sym_p(symbol));
                 let value = self.frame_obj(1);
 
-                if !env_layer_mut_entry(env, symbol, value) {
+                if !env_scope_mut(env, symbol, value) {
                     panic!("symbol not in env")
                 }
 
@@ -580,14 +586,13 @@ impl EvalStack {
                 let argct = proc_get_argct(proc);
 
                 if typ {
-                    let proc_env = env_new_arg_layer(reg);
-                    set_next_list_elt(proc_env, env);
+                    let proc_env = env_create(reg, env);
 
                     for i in 0..argct {
-                        env_arg_layer_ins(
+                        env_scope_ins_by_id(
                             reg,
                             proc_env,
-                            proc_lambda_get_arg(reg, proc, i),
+                            proc_lambda_get_arg_id(proc, i),
                             self.frame_obj(i as usize + 1),
                         );
                     }

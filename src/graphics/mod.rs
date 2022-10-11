@@ -63,7 +63,7 @@ pub fn render_loop(
 
     let eng_hdl = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::T_ENG_HDL_ID.0) };
     unsafe { sail::write_field_unchecked(eng_hdl, 0, (&mut engine as *mut _) as u64) };
-    sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_ENGINE.0, eng_hdl);
+    sail::env_scope_ins_by_id(sl_reg, sl_env, sail::S_ENGINE.0, eng_hdl);
 
     crate::sail_fn! {
         let rndr_fns;
@@ -176,7 +176,7 @@ pub fn render_loop(
 
     while stack.iter_once(sl_reg, sl_tbl) {}
 
-    let rndr = sail::env_lookup_by_id(sl_env, sail::S_RNDR.0);
+    let rndr = sail::env_lookup_by_id(sl_env, sail::S_RNDR.0).expect("rndr script not in env");
 
     stack.push_frame_head(ret_addr, sail::eval::Opcode::Apply, sl_env);
     stack.push(rndr);

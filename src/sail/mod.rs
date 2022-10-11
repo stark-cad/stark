@@ -642,7 +642,7 @@ pub fn environment_setup(
     typ_ctr_set_next_id(ctr, TID_COUNT as u32);
 
     let true_intern = bool_init(reg, true);
-    env_layer_ins_by_id(reg, env, S_T_INTERN.0, true_intern);
+    env_scope_ins_by_id(reg, env, S_T_INTERN.0, true_intern);
 
     insert_native_procs(reg, tbl, env, stdenv::ENVFNS);
 }
@@ -655,12 +655,11 @@ pub fn insert_native_procs(
     fns: &[(&str, NativeFn, u16)],
 ) {
     for entry in fns {
-        let proc_id = sym_init(reg, sym_tab_get_id(reg, tbl, entry.0));
+        let proc_id = sym_tab_get_id(reg, tbl, entry.0);
 
-        let proc_fn = proc_native_make(reg, entry.2);
-        proc_native_set_body(proc_fn, entry.1);
+        let proc_fn = proc_native_init(reg, entry.2, entry.1);
 
-        env_layer_ins_entry(reg, env, proc_id, proc_fn);
+        env_scope_ins_by_id(reg, env, proc_id, proc_fn);
     }
 }
 

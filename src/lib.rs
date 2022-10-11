@@ -61,14 +61,14 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_ctr: usize, s
 
     let frm_hdl = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::T_FRM_HDL_ID.0) };
     unsafe { sail::write_field_unchecked(frm_hdl, 0, (&frame as *const _) as u64) };
-    sail::env_layer_ins_by_id(sl_reg, sl_env, sail::S_FRAME.0, frm_hdl);
+    sail::env_scope_ins_by_id(sl_reg, sl_env, sail::S_FRAME.0, frm_hdl);
 
-    println!(
-        "frm_hdl -\ntype id: {}\nsize: {}\nhas size field: {}",
-        sail::get_type_id(frm_hdl),
-        sail::get_size(frm_hdl),
-        sail::size_fld_p(frm_hdl)
-    );
+    // println!(
+    //     "frm_hdl -\ntype id: {}\nsize: {}\nhas size field: {}",
+    //     sail::get_type_id(frm_hdl),
+    //     sail::get_size(frm_hdl),
+    //     sail::size_fld_p(frm_hdl)
+    // );
 
     sail_fn! {
         let mngr_fns;
@@ -126,7 +126,7 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: usize, sl_ctr: usize, s
 
     while stack.iter_once(sl_reg, sl_tbl) {}
 
-    let main = sail::env_lookup_by_id(sl_env, sail::S_MAIN.0);
+    let main = sail::env_lookup_by_id(sl_env, sail::S_MAIN.0).expect("main script not in env");
 
     stack.push_frame_head(ret_addr, sail::eval::Opcode::Apply, sl_env);
     stack.push(main);

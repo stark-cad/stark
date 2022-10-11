@@ -74,8 +74,7 @@ fn main() {
         let (tbl, ctr, m_env) = sail::prep_environment(main_region);
         sail::environment_setup(main_region, tbl, ctr, m_env);
 
-        let r_env = sail::env_create(rndr_region, 255);
-        sail::set_next_list_elt(r_env, m_env);
+        let r_env = sail::env_create(rndr_region, m_env);
 
         (tbl, ctr, m_env, r_env)
     };
@@ -84,17 +83,17 @@ fn main() {
     let (cm_send, cm_recv) = sail::queue::queue_create(ctxt_region, main_region);
     let (cr_send, cr_recv) = sail::queue::queue_create(ctxt_region, rndr_region);
 
-    sail::env_layer_ins_by_id(main_region, main_env, sail::S_MR_SEND.0, mr_send);
-    sail::env_layer_ins_by_id(main_region, main_env, sail::S_CM_RECV.0, cm_recv);
+    sail::env_scope_ins_by_id(main_region, main_env, sail::S_MR_SEND.0, mr_send);
+    sail::env_scope_ins_by_id(main_region, main_env, sail::S_CM_RECV.0, cm_recv);
 
-    sail::env_layer_ins_by_id(rndr_region, rndr_env, sail::S_MR_RECV.0, mr_recv);
-    sail::env_layer_ins_by_id(rndr_region, rndr_env, sail::S_CR_RECV.0, cr_recv);
+    sail::env_scope_ins_by_id(rndr_region, rndr_env, sail::S_MR_RECV.0, mr_recv);
+    sail::env_scope_ins_by_id(rndr_region, rndr_env, sail::S_CR_RECV.0, cr_recv);
 
     let fr_dims = sail::arrvec_init::<u32>(main_region, sail::T_U32.0, 2, &[0, 0]);
     let cur_pos = sail::arrvec_init::<f32>(main_region, sail::T_F32.0, 2, &[0.0, 0.0]);
 
-    sail::env_layer_ins_by_id(main_region, main_env, sail::S_FR_DIMS.0, fr_dims);
-    sail::env_layer_ins_by_id(main_region, main_env, sail::S_CUR_POS.0, cur_pos);
+    sail::env_scope_ins_by_id(main_region, main_env, sail::S_FR_DIMS.0, fr_dims);
+    sail::env_scope_ins_by_id(main_region, main_env, sail::S_CUR_POS.0, cur_pos);
 
     let (
         sl_tbl,
