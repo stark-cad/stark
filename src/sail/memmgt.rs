@@ -258,8 +258,254 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
 //     obj
 // }
 
-// pub unsafe fn dealloc(val: *mut SlHead) {
-// }
+/// Get total length of live block
+fn lblk_get_len(blk: *mut SlHead) -> u32 {
+    (HEAD_LEN
+        + (super::type_fld_p(blk) as u32 * NUM_32_LEN)
+        + (super::size_fld_p(blk) as u32 * NUM_32_LEN))
+        + super::get_size(blk)
+}
+
+/// Adds memory that used to hold a Sail object to the freed memory
+/// structure in its zone
+pub unsafe fn dealloc(val: *mut SlHead) {
+    // TODO: deallocations need to also handle objects' references
+
+    let len = {
+        let length = lblk_get_len(val);
+
+        if length > !(1u32.reverse_bits()) {
+            panic!("attempt to deallocate too-large object")
+        }
+
+        length
+    };
+
+    // TODO: panic if object appears to exceed cone's max obj size
+
+    let zone = which_mem_area(val).1;
+
+    // TODO: free blocks at end of used portion should simply be
+    // rolled into empty portion!
+
+    // TODO: a block may end up "left over" adjacent to empty portion;
+    // check for this here? provide for a cleanup routine? let it go?
+
+    // let at_end = (val as *mut u8).add(len as _) == (*zone).top;
+    // if at_end {}
+
+    let newblk = val as *mut FreeBlock;
+
+    let trunk = {
+        let f_trunk = (*zone).free;
+        if f_trunk.is_null() {
+            fblk_set_len(newblk, len);
+            fblk_set_prev_ofs(newblk, FBLK_NULL_OFFSET);
+            fblk_set_next_ofs(newblk, FBLK_NULL_OFFSET);
+
+            // TODO: if this needs to be concurrency-safe, so does
+            // every write to any offset pointer in the free
+            // tree. probably better to keep a safe queue of objects
+            // that require deallocation, then guarantee that
+            // deallocation activity will only be undertaken by a
+            // single thread. could also use a free tree lock. when
+            // the lock is taken, reentrant deallocation runs are
+            // prevented, as well as any allocation not from the
+            // zone's empty area.
+
+            // TODO: more clearly specify concurrency needs for zones
+
+            let (n_trunk, done) = std::intrinsics::atomic_cxchg_acqrel_acquire(
+                &mut (*zone).free,
+                ptr::null_mut(),
+                newblk,
+            );
+
+            if done {
+                std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, len);
+                std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, len);
+                return;
+            } else {
+                n_trunk
+            }
+        } else {
+            f_trunk
+        }
+    };
+
+    let (mut lower_bound, mut upper_bound, mut foll_parent) = {
+        if newblk < trunk {
+            let prior = fblk_get_prev_blk(zone, trunk);
+            (prior, trunk, trunk)
+        } else if newblk > trunk {
+            let next = fblk_get_next_blk(zone, trunk);
+            (trunk, next, trunk)
+        } else {
+            panic!("double free attempted")
+        }
+    };
+
+    let mut chg_p = true;
+
+    while chg_p {
+        chg_p = false;
+
+        let (ubp, lbp) = (upper_bound, lower_bound);
+
+        if !lower_bound.is_null() {
+            let prospect = fblk_get_next_blk(zone, lower_bound);
+            if prospect.is_null() {
+            } else if prospect > lower_bound && prospect < newblk {
+                lower_bound = prospect;
+            } else if prospect > lower_bound && prospect > newblk {
+                if prospect != ubp {
+                    foll_parent = lower_bound
+                }
+                upper_bound = prospect;
+            }
+        }
+
+        if !upper_bound.is_null() {
+            let prospect = fblk_get_prev_blk(zone, upper_bound);
+            if prospect.is_null() {
+            } else if prospect < upper_bound && prospect < newblk {
+                lower_bound = prospect;
+            } else if prospect < upper_bound && prospect > newblk {
+                if prospect != ubp {
+                    foll_parent = upper_bound
+                }
+                upper_bound = prospect;
+            }
+        }
+
+        if lbp != lower_bound || ubp != upper_bound {
+            chg_p = true
+        }
+    }
+
+    const BD_MAX: usize = FBLK_NULL_OFFSET as usize;
+
+    let prior_merge = 'p: {
+        if lower_bound.is_null() {
+            break 'p false;
+        }
+
+        let lb_end = lower_bound as usize + fblk_get_len(lower_bound) as usize;
+        let nw_start = newblk as usize;
+        let diff = nw_start - lb_end;
+
+        match diff {
+            0 => true,
+            1..=7 => panic!("memory management failed"),
+            8..=BD_MAX => false,
+            _ => panic!(),
+        }
+    };
+
+    let follow_merge = 'n: {
+        if upper_bound.is_null() {
+            break 'n false;
+        }
+
+        let nw_end = newblk as usize + len as usize;
+        let ub_start = upper_bound as usize;
+        let diff = ub_start - nw_end;
+
+        match diff {
+            0 => true,
+            1..=7 => panic!("memory management failed"),
+            8..=BD_MAX => false,
+            _ => panic!(),
+        }
+    };
+
+    let final_len = match (prior_merge, follow_merge) {
+        (true, true) => {
+            let (ubprev, ubnext) = (
+                fblk_get_prev_blk(zone, upper_bound),
+                fblk_get_next_blk(zone, upper_bound),
+            );
+
+            if upper_bound < foll_parent {
+                assert!(newblk < foll_parent);
+                assert_eq!(upper_bound, fblk_get_prev_blk(zone, foll_parent));
+
+                if !ubnext.is_null() {
+                    fblk_set_prev_blk(zone, ubnext, ubprev)
+                }
+
+                fblk_set_prev_blk(zone, foll_parent, ubnext)
+            } else if upper_bound > foll_parent {
+                assert!(newblk > foll_parent);
+                assert_eq!(upper_bound, fblk_get_next_blk(zone, foll_parent));
+
+                if !ubprev.is_null() {
+                    fblk_set_next_blk(zone, ubprev, ubnext)
+                }
+
+                fblk_set_next_blk(zone, foll_parent, ubprev)
+            }
+
+            if upper_bound == trunk {
+                (*zone).free = lower_bound
+            }
+
+            let full_len = len + fblk_get_len(lower_bound) + fblk_get_len(upper_bound);
+            fblk_set_len(lower_bound, full_len);
+
+            full_len
+        }
+        (true, false) => {
+            let full_len = len + fblk_get_len(lower_bound);
+            fblk_set_len(lower_bound, full_len);
+
+            full_len
+        }
+        (false, true) => {
+            if upper_bound < foll_parent {
+                assert!(newblk < foll_parent);
+                assert_eq!(upper_bound, fblk_get_prev_blk(zone, foll_parent));
+
+                fblk_set_prev_blk(zone, foll_parent, newblk)
+            } else if upper_bound > foll_parent {
+                assert!(newblk > foll_parent);
+                assert_eq!(upper_bound, fblk_get_next_blk(zone, foll_parent));
+
+                fblk_set_next_blk(zone, foll_parent, newblk)
+            }
+
+            fblk_set_prev_ofs(newblk, fblk_get_prev_ofs(upper_bound));
+            fblk_set_next_ofs(newblk, fblk_get_next_ofs(upper_bound));
+
+            if upper_bound == trunk {
+                (*zone).free = newblk
+            }
+
+            let full_len = len + fblk_get_len(upper_bound);
+            fblk_set_len(newblk, full_len);
+
+            full_len
+        }
+        (false, false) => {
+            if !lower_bound.is_null() && fblk_get_next_ofs(lower_bound) == FBLK_NULL_OFFSET {
+                fblk_set_next_blk(zone, lower_bound, newblk)
+            } else if !upper_bound.is_null() && fblk_get_prev_ofs(upper_bound) == FBLK_NULL_OFFSET {
+                fblk_set_prev_blk(zone, upper_bound, newblk)
+            } else {
+                panic!("neither neighbor had an available field")
+            }
+
+            fblk_set_prev_ofs(newblk, FBLK_NULL_OFFSET);
+            fblk_set_next_ofs(newblk, FBLK_NULL_OFFSET);
+            fblk_set_len(newblk, len);
+
+            len
+        }
+    };
+
+    std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, len);
+    std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, final_len);
+}
 
 /// Set the length of a free memory block in a zone
 unsafe fn fblk_set_len(block: *mut FreeBlock, length: u32) {
@@ -526,6 +772,43 @@ mod free_tree_tests {
         }
     }
 
+    #[test]
+    fn dealloc_in_zone() {
+        use super::super::Cfg;
+
+        unsafe {
+            let region = acquire_mem_region(1000);
+            let zone = (*region).head;
+
+            assert_eq!(0, (*zone).used);
+
+            let obj_1 = alloc(region, 256, cap(Cfg::VecAny));
+            let obj_2 = alloc(region, 16, cap(Cfg::B16U128));
+            let obj_3 = alloc(region, 0, cap(Cfg::B0BoolF));
+            let obj_4 = alloc(region, 42, cap(Cfg::VecStr));
+
+            let total_size = lblk_get_len(obj_1)
+                + lblk_get_len(obj_2)
+                + lblk_get_len(obj_3)
+                + lblk_get_len(obj_4);
+
+            assert_eq!(total_size, (*zone).used);
+            assert_eq!(
+                total_size as usize,
+                (*zone).top as usize - (*zone).bot as usize
+            );
+
+            dealloc(obj_2);
+            dealloc(obj_3);
+            dealloc(obj_1);
+            dealloc(obj_4);
+
+            assert_eq!(0, (*zone).used);
+
+            assert_eq!(obj_1 as *mut u8, (*zone).free as *mut u8);
+            assert_eq!(total_size, fblk_get_len((*zone).free));
+        }
+    }
 }
 
 
