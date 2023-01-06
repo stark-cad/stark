@@ -211,7 +211,7 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
         let region_ref = region.as_mut().unwrap();
         let mut zone_ref = region_ref.head.as_mut().unwrap();
 
-        while zone_ref.used + length >= region_ref.zone_size {
+        while zone_ref.used as usize + length >= region_ref.zone_size as usize {
             zone_ref = match zone_ref.next.as_mut() {
                 Some(refer) => refer,
                 None => {
@@ -228,7 +228,8 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
 
         let out = zone_ref.top;
 
-        zone_ref.used += length;
+        // TODO: turns out length always needs to be a u32 anyway; fix
+        zone_ref.used += length as u32;
         zone_ref.top = out.add(length);
 
         std::intrinsics::atomic_store_release(lock, false as u8);
@@ -260,13 +261,285 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
 // pub unsafe fn dealloc(val: *mut SlHead) {
 // }
 
+/// Set the length of a free memory block in a zone
+unsafe fn fblk_set_len(block: *mut FreeBlock, length: u32) {
+    assert!(!block.is_null());
+    assert!(length >= 8);
+
+    let exceeds_head = length > 8;
+    let exceeds_tag = length > 255;
+    let exceeds_temporary_limit = length > (1 << 31) - 1;
+
+    if exceeds_temporary_limit {
+        panic!("attempt to assert free block too large")
+    }
+
+    {
+        let block = block as *mut u8;
+        if exceeds_head {
+            if exceeds_tag {
+                ptr::write_unaligned(block.add(HEAD_LEN as usize), 0);
+                ptr::write_unaligned(block.add(HEAD_LEN as usize + 1) as *mut u32, length as u32);
+            } else {
+                ptr::write_unaligned(block.add(HEAD_LEN as usize), length as u8);
+            }
+        }
+    }
+
+    let head = ptr::read_unaligned(block as *mut u64);
+
+    let next_ofs = head & 0x7FFFFFFF;
+    let prev_ofs = (head >> 32) & 0x7FFFFFFF;
+
+    let parity_flag = {
+        let set_bits =
+            (exceeds_head as u8).count_ones() + prev_ofs.count_ones() + next_ofs.count_ones();
+        assert!(set_bits <= 63);
+
+        !(set_bits as u64 & 1) & 1
+    };
+
+    let new_head =
+        ((exceeds_head as u64) << 63) + (prev_ofs << 32) + (parity_flag << 31) + next_ofs;
+
+    ptr::write_unaligned(block as *mut u64, new_head);
+}
+
+/// Get the length stored in a free memory block
+unsafe fn fblk_get_len(block: *const FreeBlock) -> u32 {
+    assert!(!block.is_null());
+
+    let head = ptr::read_unaligned(block as *const u64);
+
+    // odd parity check
+    assert_eq!(head.count_ones() & 1, 1);
+
+    let exceeds_head = (head >> 63) != 0;
+
+    if exceeds_head {
+        let tag = ptr::read_unaligned((block as *const u8).add(HEAD_LEN as usize));
+        let exceeds_tag = tag < 9;
+        if exceeds_tag {
+            ptr::read_unaligned((block as *const u8).add(HEAD_LEN as usize + 1) as *mut u32)
+        } else {
+            tag as u32
+        }
+    } else {
+        8
+    }
+}
+
+// Free block head scheme: size bit, prev offset, parity bit, next offset
+
+/// MSB 0; all other bits 1
+const FBLK_NULL_OFFSET: u32 = (!1u32).reverse_bits();
+
+/// Set a free block's offset pointer to the previous block
+unsafe fn fblk_set_prev_ofs(block: *mut FreeBlock, offset: u32) {
+    let head_ptr = block as *mut u64;
+    let head = ptr::read_unaligned(head_ptr);
+
+    let size_flag = head >> 63;
+
+    assert_eq!(offset & 1u32.reverse_bits(), 0);
+    let prev_ofs = offset as u64;
+
+    let next_ofs = head & 0x7FFFFFFF;
+
+    let parity_flag = {
+        let set_bits = size_flag.count_ones() + prev_ofs.count_ones() + next_ofs.count_ones();
+        assert!(set_bits <= 63);
+
+        !(set_bits as u64 & 1) & 1
+    };
+
+    let new_head = (size_flag << 63) + (prev_ofs << 32) + (parity_flag << 31) + next_ofs;
+
+    ptr::write_unaligned(head_ptr, new_head)
+}
+
+/// Get a free block's offset pointer to the previous block
+unsafe fn fblk_get_prev_ofs(block: *const FreeBlock) -> u32 {
+    let head_ptr = block as *mut u64;
+    let head = ptr::read_unaligned(head_ptr);
+
+    // odd parity check
+    assert_eq!(head.count_ones() & 1, 1);
+
+    (head >> 32) as u32 & 0x7FFFFFFF
+}
+
+/// Set a free block's offset pointer to the next block
+unsafe fn fblk_set_next_ofs(block: *mut FreeBlock, offset: u32) {
+    let head_ptr = block as *mut u64;
+    let head = ptr::read_unaligned(head_ptr);
+
+    let size_flag = head >> 63;
+
+    let prev_ofs = (head >> 32) & 0x7FFFFFFF;
+
+    assert_eq!(offset & 1u32.reverse_bits(), 0);
+    let next_ofs = offset as u64;
+
+    let parity_flag = {
+        let set_bits = size_flag.count_ones() + prev_ofs.count_ones() + next_ofs.count_ones();
+        assert!(set_bits <= 63);
+
+        !(set_bits as u64 & 1) & 1
+    };
+
+    let new_head = (size_flag << 63) + (prev_ofs << 32) + (parity_flag << 31) + next_ofs;
+
+    ptr::write_unaligned(head_ptr, new_head)
+}
+
+/// Get a free block's offset pointer to the next block
+unsafe fn fblk_get_next_ofs(block: *const FreeBlock) -> u32 {
+    let head_ptr = block as *mut u64;
+    let head = ptr::read_unaligned(head_ptr);
+
+    // odd parity check
+    assert_eq!(head.count_ones() & 1, 1);
+
+    head as u32 & 0x7FFFFFFF
+}
+
+/// Set which block a free block points to as the prior block
+unsafe fn fblk_set_prev_blk(zone: *const Zone, block: *mut FreeBlock, prev: *const FreeBlock) {
+    debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+
+    if prev.is_null() {
+        fblk_set_prev_ofs(block, FBLK_NULL_OFFSET);
+        return;
+    }
+
+    debug_assert_eq!(which_mem_area(prev as *mut _).1 as *const _, zone);
+
+    let start = (*zone).bot;
+    let prev_ofs = prev as u64 - start as u64;
+
+    assert!(prev_ofs < FBLK_NULL_OFFSET as u64);
+
+    fblk_set_prev_ofs(block, prev_ofs as u32)
+}
+
+/// Get the block a free block points to as the prior block
+unsafe fn fblk_get_prev_blk(zone: *const Zone, block: *const FreeBlock) -> *mut FreeBlock {
+    debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+
+    let start = (*zone).bot;
+    let prev_ofs = fblk_get_prev_ofs(block);
+
+    if prev_ofs == FBLK_NULL_OFFSET {
+        return ptr::null_mut();
+    }
+
+    assert!(prev_ofs < FBLK_NULL_OFFSET);
+
+    (start as u64 + prev_ofs as u64) as *mut FreeBlock
+}
+
+/// Set which block a free block points to as the following block
+unsafe fn fblk_set_next_blk(zone: *const Zone, block: *mut FreeBlock, next: *const FreeBlock) {
+    debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+
+    if next.is_null() {
+        fblk_set_next_ofs(block, FBLK_NULL_OFFSET);
+        return;
+    }
+
+    debug_assert_eq!(which_mem_area(next as *mut _).1 as *const _, zone);
+
+    let start = (*zone).bot;
+    let next_ofs = next as u64 - start as u64;
+
+    assert!(next_ofs <= 1u32.reverse_bits() as u64 - 1);
+
+    fblk_set_next_ofs(block, next_ofs as u32)
+}
+
+/// Get the block a free block points to as the following block
+unsafe fn fblk_get_next_blk(zone: *const Zone, block: *const FreeBlock) -> *mut FreeBlock {
+    debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+
+    let start = (*zone).bot;
+    let next_ofs = fblk_get_next_ofs(block);
+
+    if next_ofs == FBLK_NULL_OFFSET {
+        return ptr::null_mut();
+    }
+
+    assert!(next_ofs < FBLK_NULL_OFFSET);
+
+    (start as u64 + next_ofs as u64) as *mut FreeBlock
+}
+
+#[cfg(test)]
+mod free_tree_tests {
+    use super::*;
+
+    #[test]
+    fn set_block_fields() {
+        let mut test_block = FreeBlock { prev: 0, next: 0 };
+
+        unsafe {
+            let block_ptr = &mut test_block;
+
+            fblk_set_len(block_ptr, 8);
+            fblk_set_prev_ofs(block_ptr, 101);
+            fblk_set_next_ofs(block_ptr, 202);
+
+            assert_eq!(8, fblk_get_len(block_ptr));
+            assert_eq!(101, fblk_get_prev_ofs(block_ptr));
+            assert_eq!(202, fblk_get_next_ofs(block_ptr));
+        }
+
+        assert_eq!(101, test_block.prev & !(1u32.reverse_bits()));
+        assert_eq!(202, test_block.next & !(1u32.reverse_bits()));
+    }
+
+    #[test]
+    fn block_lengths() {
+        unsafe {
+            let ptr =
+                alloc::alloc(alloc::Layout::from_size_align(13, 1).unwrap()) as *mut FreeBlock;
+
+            fblk_set_prev_ofs(ptr, 222222);
+            fblk_set_next_ofs(ptr, 888888);
+
+            fblk_set_len(ptr, 42);
+
+            assert_eq!(42, fblk_get_len(ptr));
+            assert_eq!(42, ptr::read((ptr as *mut u8).add(8)));
+
+            fblk_set_len(ptr, 1234567);
+
+            assert_eq!(1234567, fblk_get_len(ptr));
+            assert_eq!(0, ptr::read((ptr as *mut u8).add(8)));
+            assert_eq!(
+                1234567,
+                ptr::read_unaligned((ptr as *mut u8).add(9) as *mut u32)
+            );
+
+            assert_eq!(222222, fblk_get_prev_ofs(ptr));
+            assert_eq!(888888, fblk_get_next_ofs(ptr));
+        }
+    }
+
+}
+
+
 /// A memory region is a linked list of memory zones, all of the same size
 #[derive(Debug)]
 #[repr(C)]
 pub struct Region {
-    zone_size: usize,
     head: *mut Zone,
+    zone_size: u32,
 }
+
+// Maximum zone size: 2GiB
+// Maximum object size: 1/32 of zone size
+// Larger objects will require a special allocation scheme (TODO)
 
 /// A zone is a contiguous chunk of memory in which Sail objects may
 /// be allocated
@@ -274,10 +547,14 @@ pub struct Region {
 #[repr(C)]
 struct Zone {
     /// Size of used portion
-    used: usize,
-    /// Pointer to end of used portion
+    used: u32,
+    /// Size of largest free block
+    lblk: u32,
+    /// Pointer to start of working memory
+    bot: *mut u8,
+    /// Pointer to last of used portion
     top: *mut u8,
-    /// Pointer to start of freelist
+    /// Pointer to top of free tree
     free: *mut FreeBlock,
     /// Pointer to next zone in region
     next: *mut Zone,
@@ -285,18 +562,21 @@ struct Zone {
     lock: u8,
 }
 
-/// Block of free memory in a zone, resulting from deallocation
 #[repr(C)]
 struct FreeBlock {
-    /// Tagged pointer with size of block and pointer to next block
-    field: usize,
+    /// The top bit of this offset is an odd parity bit, set to make
+    /// the count of high bits in the leaf structure odd (experiment)
+    next: u32,
+    /// The top bit of this offset (also top bit of the word) is low if
+    /// the block is 8 bytes long, and high if it is longer
+    prev: u32,
 }
 
-const MEM_REGION_HEAD_SIZE: usize = mem::size_of::<Region>();
+// const MEM_REGION_HEAD_SIZE: usize = mem::size_of::<Region>();
 const MEM_ZONE_HEAD_SIZE: usize = mem::size_of::<Zone>();
 
 /// Creates a new memory region and accompanying zone
-pub unsafe fn acquire_mem_region(zone_size: usize) -> *mut Region {
+pub unsafe fn acquire_mem_region(zone_size: u32) -> *mut Region {
     if cfg!(feature = "memdbg") {
         log::debug!("Creating mem region");
     }
@@ -317,7 +597,8 @@ pub unsafe fn acquire_mem_region(zone_size: usize) -> *mut Region {
 }
 
 pub unsafe fn destroy_mem_region(reg: *mut Region) {
-    let layout = alloc::Layout::from_size_align_unchecked((*reg).zone_size + MEM_ZONE_HEAD_SIZE, 1);
+    let layout =
+        alloc::Layout::from_size_align_unchecked((*reg).zone_size as usize + MEM_ZONE_HEAD_SIZE, 1);
     let mut next = (*reg).head;
     loop {
         let cur = next;
@@ -374,18 +655,21 @@ unsafe fn new_mem_zone(region: *mut Region) {
     let cur_head = region_head.head;
 
     let ptr = {
-        let layout = alloc::Layout::from_size_align_unchecked(size + MEM_ZONE_HEAD_SIZE, 1);
+        let layout =
+            alloc::Layout::from_size_align_unchecked(size as usize + MEM_ZONE_HEAD_SIZE, 1);
         alloc::alloc(layout) as *mut Zone
     };
 
-    let start = (ptr as *mut u8).offset(MEM_ZONE_HEAD_SIZE as isize);
+    let start = (ptr as *mut u8).add(MEM_ZONE_HEAD_SIZE);
     let end = start.offset(size as isize);
 
     let new_head = Zone {
         used: 0,
         free: ptr::null_mut(),
+        lblk: 0,
         next: cur_head,
         top: start,
+        bot: start,
         lock: false as u8,
     };
 
@@ -393,7 +677,7 @@ unsafe fn new_mem_zone(region: *mut Region) {
 
     REGION_TABLE.append(start as usize, end as usize, ptr, region);
 
-    ptr::write_unaligned((region as *mut usize).offset(1) as *mut *mut Zone, ptr);
+    ptr::write_unaligned(&mut (*region).head, ptr);
 
     // std::intrinsics::atomic_store_rel((region as *mut usize).offset(1) as *mut *mut Zone, ptr);
 }

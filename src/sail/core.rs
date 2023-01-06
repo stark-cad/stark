@@ -126,7 +126,7 @@ macro_rules! enum_and_tryfrom {
 
 enum_and_tryfrom! {
     /// Contains all valid values for the high six bits of an SlHead
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
     #[repr(u8)]
     pub enum Cfg {
         B0BoolF = 0b00000000,
