@@ -454,7 +454,7 @@ pub fn core_type(loc: *mut SlHead) -> Option<CoreType> {
 }
 
 /// Returns the size of an object, which must be of a core type
-#[inline(always)]
+#[deprecated]
 pub fn core_size(loc: *mut SlHead) -> u32 {
     use CoreType::*;
     match core_type(loc).expect("not a core type") {
@@ -669,17 +669,6 @@ pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(loc: *mut SlHead,
     let src = value_ptr(loc).add(offset as usize) as *mut T;
     std::intrinsics::atomic_load_acquire(src)
 }
-
-// irrelevant
-// fn set_list_elt_bit(loc: *mut SlHead, elt: bool) {
-//     let old = get_cfg_all(loc);
-//     let new = if elt {
-//         old | 0b00000010
-//     } else {
-//         old & 0b11111101
-//     };
-//     unsafe { ptr::write_unaligned(loc as *mut u8, new) }
-// }
 
 /// Set the pointer to a list element's next element
 #[inline(always)]

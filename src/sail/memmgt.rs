@@ -234,11 +234,14 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
 
         std::intrinsics::atomic_store_release(lock, false as u8);
 
+        // zero the whole object
+        ptr::write_bytes(out, 0, length);
+
         out as *mut SlHead
     };
 
     // zero the next list elt pointer
-    ptr::write_unaligned(ptr as *mut usize, 0);
+    // ptr::write_unaligned(ptr as *mut usize, 0);
 
     let head = SlHead { cfg, rc: 1 };
     ptr::write_unaligned(ptr, head);
@@ -271,6 +274,8 @@ fn lblk_get_len(blk: *mut SlHead) -> u32 {
 pub unsafe fn dealloc(val: *mut SlHead) {
     // TODO: deallocations need to also handle objects' references
 
+    log::info!("running a deallocation");
+
     let len = {
         let length = lblk_get_len(val);
 
@@ -281,7 +286,7 @@ pub unsafe fn dealloc(val: *mut SlHead) {
         length
     };
 
-    // TODO: panic if object appears to exceed cone's max obj size
+    // TODO: panic if object appears to exceed zone's max obj size
 
     let zone = which_mem_area(val).1;
 

@@ -347,7 +347,7 @@ fn read_string(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
+    _tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
     let mut next = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while next != b'"' {
@@ -373,7 +373,7 @@ fn read_number(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
+    _tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
@@ -392,7 +392,7 @@ fn read_number(
             }
         }
     }
-    process_num(unsafe { str::from_utf8_unchecked(acc) }, reg, tbl)
+    process_num(unsafe { str::from_utf8_unchecked(acc) }, reg)
 }
 
 /// Reads a special item from the input stream and creates a Sail
@@ -401,7 +401,7 @@ fn read_special(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
+    _tbl: *mut SlHead,
 ) -> Result<*mut SlHead, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
@@ -436,11 +436,7 @@ fn read_special(
 
 /// Parses a number and creates an object according to its textual
 /// representation
-fn process_num(
-    slice: &str,
-    reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-) -> Result<*mut SlHead, SlErrCode> {
+fn process_num(slice: &str, reg: *mut memmgt::Region) -> Result<*mut SlHead, SlErrCode> {
     if let Ok(n) = slice.parse::<i64>() {
         Ok(i64_init(reg, n))
     } else if let Ok(n) = slice.parse::<f64>() {

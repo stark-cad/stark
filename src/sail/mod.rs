@@ -347,71 +347,6 @@ incl_types! {
 
 // TODO: MINIMIZE the use of *pub* and *unsafe* functions
 
-// /// Returns the type specifier for a Sail object
-// fn get_self_type(loc: *mut SlHead) -> u32 {
-//     if nil_p(loc) {
-//         return T_NIL.0;
-//     }
-//     use Cfg::*;
-//     match get_cfg_spec(loc) {
-//         B0BoolF | B0BoolT => T_BOOL.0,
-//         B1U8 => T_U8.0,
-//         B1I8 => T_I8.0,
-//         B2U16 => T_U16.0,
-//         B2I16 => T_I16.0,
-//         B4U32 => T_U32.0,
-//         B4I32 => T_I32.0,
-//         B4F32 => T_F32.0,
-//         B4Sym => T_SYMBOL.0,
-//         B8U64 => T_U64.0,
-//         B8I64 => T_I64.0,
-//         B8F64 => T_F64.0,
-//         B8Ptr => T_REF.0,
-//         B16U128 => T_U128.0,
-//         B16I128 => T_I128.0,
-//         VecStd => T_STDVEC.0,
-//         VecStr => T_STRING.0,
-//         VecHash => T_HASHVEC.0,
-//         VecAny => T_ANYVEC.0,
-//         ProcLambda => T_PROC_LAMBDA.0,
-//         ProcNative => T_PROC_NATIVE.0,
-//         _ => {
-//             assert!(type_fld_p(loc));
-//             unsafe { ptr::read_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *const u32) }
-//         }
-//     }
-// }
-
-// /// Returns the size of a valid Sail object
-// fn get_size(
-//     reg: *mut memmgt::Region,
-//     tbl: *mut SlHead,
-//     env: *mut SlHead,
-//     loc: *mut SlHead,
-// ) -> usize {
-//     use BaseSize::*;
-//     match get_base_size(loc) {
-//         B0 => 0,
-//         B1 => 1,
-//         B2 => 2,
-//         B4 => 4,
-//         B8 => 8,
-//         B16 => 16,
-//         _ => match core_type(loc) {
-//             Some(_) => core_size(loc),
-//             None => {}
-//         },
-//     }
-// }
-
-// /// Set the type specifier for a Sail object not of a core type
-// ///
-// /// **Do not use.** Type specifiers should be set once and not altered.
-// fn set_self_type(loc: *mut SlHead, typ: u32) {
-//     assert!(type_fld_p(loc));
-//     unsafe { ptr::write_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *mut u32, typ) }
-// }
-
 // /// TODO: eliminate as much write_unaligned as possible
 // fn write_field<T: SizedBase>(
 //     reg: *mut memmgt::Region,
@@ -441,12 +376,6 @@ incl_types! {
 //         assert!(offset + std::mem::size_of::<T>() <= get_size(reg, tbl, env, loc));
 //         ptr::read_unaligned(src)
 //     }
-// }
-
-// TODO: use this as the standard Sail object handle?
-// union _SlSend {
-//     ptr: *mut SlHead,
-//     num: usize,
 // }
 
 /// Bundles together an object and associated symbol table for display

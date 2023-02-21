@@ -43,6 +43,8 @@ fn main() {
     const ICON: &'static str = "icons/icon.png";
     const SIZE: [u32; 2] = [1280, 720];
 
+    assert_eq!(sail::PTR_LEN as usize, std::mem::size_of::<*mut sail::SlHead>());
+
     // TODO: add useful logging throughout the program
     simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Debug)

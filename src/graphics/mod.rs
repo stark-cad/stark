@@ -86,10 +86,9 @@ pub fn render_loop(
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine)
             };
 
-            let w = sail::u32_get(w);
-            let h = sail::u32_get(h);
+            // let w = sail::u32_get(w);
+            // let h = sail::u32_get(h);
 
-            // engine.state.set_extent(w, h);
             engine.need_surface_cfg = true;
 
             sail::nil()
@@ -1214,7 +1213,6 @@ impl Drop for Engine {
     }
 }
 
-// /// Draw a frame that is cleared to the specified color
 // pub fn draw_clear_frame(&mut self, color: [f32; 4]) -> Result<(), &str> {
 //     let timeout_ns = 1_000_000_000;
 
@@ -1281,9 +1279,4 @@ impl Drop for Engine {
 //     }
 
 //     Ok(())
-// }
-
-// /// Set the size of the 2D graphics surface, in pixels
-// pub fn set_extent(&mut self, width: u32, height: u32) {
-//     self.surface_extent = Extent2D { width, height };
 // }
