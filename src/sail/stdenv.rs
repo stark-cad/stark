@@ -228,7 +228,7 @@ sail_fn! {
     }
 
     "qtx" 2 [sender, item] {
-        super::queue::queue_tx(sender, item);
+        super::queue::queue_tx(_env, sender, item);
 
         // let out = init_bool(reg);
         // bool_set(out, true);
@@ -238,7 +238,7 @@ sail_fn! {
     }
 
     "qrx" 2 [receiver] {
-        return super::queue::queue_rx(receiver);
+        return super::queue::queue_rx(_env, receiver);
     }
 
     "as-f32" 1 [val] {

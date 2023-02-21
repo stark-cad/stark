@@ -58,7 +58,7 @@ sized_base! {
     u32, i32, u64, i64,
     u128, i128,
     f32, f64,
-    *mut SlHead,
+    // *mut SlHead,
 }
 
 /// Head includes pointer to next list element
@@ -98,6 +98,18 @@ const _MIN_HEAD: u16 = 0b0001110011111111;
 /// tagged with the SlHead (upper 2 unused bytes)
 struct _SlListPtr {
     ptr: *mut SlHead,
+}
+
+// TODO: use this type to manage Sail object references on the main
+// stack using the Rust lifetime system
+struct SlHndl {
+    ptr: *mut SlHead,
+}
+
+impl Drop for SlHndl {
+    fn drop(&mut self) {
+        todo!()
+    }
 }
 
 /// Generates TryFrom implementations for important enums
@@ -350,24 +362,28 @@ pub fn proc_p(loc: *mut SlHead) -> bool {
 /// field
 #[inline(always)]
 pub fn type_fld_p(loc: *mut SlHead) -> bool {
-    let head = get_cfg_all(loc);
+    let head = get_cfg_byte(loc);
     (head & 0b00011100) >> 2 == 7
 }
 
 /// Checks whether a valid Sail object contains the 4-byte size field
 #[inline(always)]
 pub fn size_fld_p(loc: *mut SlHead) -> bool {
-    let head = get_cfg_all(loc);
+    let head = get_cfg_byte(loc);
     head >> 5 > 5
 }
 
+#[inline(always)]
 pub fn get_type_id(loc: *mut SlHead) -> u32 {
     assert!(type_fld_p(loc));
     unsafe { ptr::read_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *const u32) }
 }
 
+/// Return the size in bytes of any Sail object's payload (the space
+/// for a value following the head)
+#[inline(always)]
 pub fn get_size(loc: *mut SlHead) -> u32 {
-    let code = get_cfg_all(loc) >> 5;
+    let code = get_cfg_byte(loc) >> 5;
     if code <= 5 {
         0x80000000_u32.rotate_left(code as u32) & 31
     } else {
@@ -381,6 +397,7 @@ pub fn get_size(loc: *mut SlHead) -> u32 {
     }
 }
 
+#[inline(always)]
 fn __dbg_head_info(loc: *mut SlHead) {
     println!(
         "type field?: {}; size field?: {}; size: {}",
@@ -400,14 +417,20 @@ pub fn truthy(loc: *mut SlHead) -> bool {
 
 /// Gets the full configuration byte from a Sail object
 #[inline(always)]
-fn get_cfg_all(loc: *mut SlHead) -> u8 {
+fn get_cfg_byte(loc: *mut SlHead) -> u8 {
     unsafe { ptr::read_unaligned(loc as *const u8) }
+}
+
+/// Gets the reference count byte from a Sail object
+#[inline(always)]
+fn get_refc_byte(loc: *mut SlHead) -> u8 {
+    unsafe { ptr::read_unaligned((loc as *const u8).add(1)) }
 }
 
 /// Gets the size / type configuration from a Sail object
 #[inline(always)]
 pub fn get_cfg_spec(loc: *mut SlHead) -> Cfg {
-    let top_byte = get_cfg_all(loc);
+    let top_byte = get_cfg_byte(loc);
     match Cfg::try_from(top_byte & 0b11111100) {
         Ok(out) => out,
         Err(_) => panic!("invalid cfg specifier: {:08b}", top_byte),
@@ -417,7 +440,7 @@ pub fn get_cfg_spec(loc: *mut SlHead) -> Cfg {
 /// Gets the base size of a Sail object
 #[inline(always)]
 pub fn get_base_size(loc: *mut SlHead) -> BaseSize {
-    match BaseSize::try_from(get_cfg_all(loc) >> 5) {
+    match BaseSize::try_from(get_cfg_byte(loc) >> 5) {
         Ok(out) => out,
         Err(_) => unreachable!(),
     }
@@ -426,7 +449,7 @@ pub fn get_base_size(loc: *mut SlHead) -> BaseSize {
 /// Gets base type specifier from a Sail object (its meaning differs with size)
 #[inline(always)]
 fn get_base_spec(loc: *mut SlHead) -> u8 {
-    (get_cfg_all(loc) & 0b00011100) >> 2
+    (get_cfg_byte(loc) & 0b00011100) >> 2
 }
 
 /// From a valid Sail object, returns a pointer to the start of the value proper
@@ -591,6 +614,243 @@ fn proc_native_size() -> u32 {
 
 // TODO: separate out pointer writes for garbage collection
 
+/// Increment the reference count stored in a Sail object, up to a
+/// maximum of 255; if the count is at 255, return true
+pub fn inc_refc(loc: *mut SlHead) -> bool {
+    assert!(!nil_p(loc));
+
+    let rc_pos = unsafe { (loc as *mut u8).add(1) };
+    let mut cur = unsafe { std::intrinsics::atomic_load_acquire(rc_pos) };
+
+    loop {
+        match cur {
+            0 => panic!("attempted reference to dead object"),
+            255 => return true,
+            _ => (),
+        }
+
+        let sp;
+        (cur, sp) = unsafe { std::intrinsics::atomic_cxchg_acqrel_acquire(rc_pos, cur, cur + 1) };
+
+        if sp {
+            break;
+        }
+    }
+
+    false
+}
+
+/// Decrement the reference count stored in a Sail object, down to a
+/// minimum of 0; if the count reaches 0, return true
+pub fn dec_refc(loc: *mut SlHead) -> bool {
+    assert!(!nil_p(loc));
+    let mut out;
+
+    let rc_pos = unsafe { (loc as *mut u8).add(1) };
+    let mut cur = unsafe { std::intrinsics::atomic_load_acquire(rc_pos) };
+
+    loop {
+        match cur {
+            0 => panic!("too many reference count decrements"),
+            1 => out = true,
+            255 => return false,
+            _ => out = false,
+        }
+
+        let sp;
+        (cur, sp) = unsafe { std::intrinsics::atomic_cxchg_acqrel_acquire(rc_pos, cur, cur - 1) };
+
+        if sp {
+            break;
+        }
+    }
+
+    out
+}
+
+/// Return pointers to every object referenced by a given object,
+/// such as can be known from core type information
+fn discern_refs_core(loc: *mut SlHead) -> Vec<*mut SlHead> {
+    let mut acc = Vec::new();
+
+    let next = get_next_list_elt(loc);
+    if !nil_p(next) {
+        acc.push(next)
+    }
+
+    match core_type(loc) {
+        Some(CoreType::Ref) => {
+            let nest = ref_get(loc);
+            if !nil_p(nest) {
+                acc.push(nest)
+            }
+        }
+        Some(CoreType::ProcLambda) => {
+            let nest = proc_lambda_get_body(loc);
+            if !nil_p(nest) {
+                acc.push(nest)
+            }
+        }
+        Some(CoreType::VecStd) => {
+            for i in 0..stdvec_get_len(loc) {
+                let nest = stdvec_idx(loc, i);
+                if !nil_p(nest) {
+                    acc.push(nest)
+                }
+            }
+        }
+        // TODO: Handle VecArr and VecAny possibilities?
+        _ => (),
+    }
+
+    acc
+}
+
+/// Return pointers to every object referenced by a given object
+fn discern_refs(env: *mut SlHead, loc: *mut SlHead) -> Vec<*mut SlHead> {
+    let acc = discern_refs_core(loc);
+
+    if core_type(loc).is_none() {
+        let tid = get_type_id(loc);
+
+        // TODO: adapt to work with custom types in time
+
+        // first, search the type section of the environment for type
+        // descriptions with the first bit set, then follow the
+        // pointer to the manifest.
+
+        // here, compare the first four-byte segment to the type
+        // ID. if it matches, check the static type section of every
+        // field entry in the manifest; note the offset if this
+        // indicates a reference (maybe check the length against that
+        // too just in case).
+
+        // with the offsets of all references in the object body now
+        // recorded, take the words from those addresses, check that
+        // they are not nil (another check could be whether the
+        // address lies within a region table span, but that's
+        // usually-unnecessary debugging), and append them to the
+        // reference accumulator.
+    }
+
+    acc
+}
+
+fn destroy_obj(env: *mut SlHead, loc: *mut SlHead) {
+    assert!(!nil_p(loc));
+
+    let refs = discern_refs(env, loc);
+
+    for r in refs {
+        if !nil_p(r) && dec_refc(r) {
+            // TODO: eliminate recursion
+            destroy_obj(env, r)
+        }
+    }
+
+    unsafe { memmgt::dealloc(loc) }
+}
+
+pub fn write_ptr(env: *mut SlHead, loc: *mut SlHead, offset: u32, tgt: *mut SlHead) {
+    assert!(offset + PTR_LEN <= get_size(loc));
+
+    unsafe {
+        let dst = value_ptr(loc).add(offset as usize) as *mut _;
+        let cur = ptr::read_unaligned(dst);
+
+        ptr::write_unaligned(dst, tgt);
+
+        if !nil_p(tgt) {
+            inc_refc(tgt);
+        }
+
+        if !nil_p(cur) && dec_refc(cur) {
+            destroy_obj(env, cur)
+        }
+    }
+}
+
+fn write_ptr_atomic(env: *mut SlHead, loc: *mut SlHead, offset: u32, tgt: *mut SlHead) {
+    assert!(offset + PTR_LEN <= get_size(loc));
+
+    unsafe {
+        let dst = value_ptr(loc).add(offset as usize) as *mut _;
+
+        let cur = std::intrinsics::atomic_xchg_acqrel(dst, tgt);
+
+        if !nil_p(tgt) {
+            inc_refc(tgt);
+        }
+
+        if !nil_p(cur) && dec_refc(cur) {
+            destroy_obj(env, cur)
+        }
+    }
+}
+
+pub fn write_ptr_cmpxcg(
+    env: *mut SlHead,
+    loc: *mut SlHead,
+    offset: u32,
+    old: *mut SlHead,
+    tgt: *mut SlHead,
+) -> bool {
+    assert!(offset + PTR_LEN <= get_size(loc));
+
+    unsafe {
+        let dst = value_ptr(loc).add(offset as usize) as *mut _;
+
+        let p = std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, tgt).1;
+
+        if p {
+            if !nil_p(tgt) {
+                inc_refc(tgt);
+            }
+
+            if !nil_p(old) && dec_refc(old) {
+                destroy_obj(env, old)
+            }
+        }
+
+        p
+    }
+}
+
+/// Write a Sail object reference to a Sail object without any memory
+/// accounting; will NOT handle reference counts
+pub unsafe fn write_ptr_unsafe_unchecked(loc: *mut SlHead, offset: u32, tgt: *mut SlHead) {
+    debug_assert!(offset + PTR_LEN <= get_size(loc));
+    unsafe {
+        let dst = value_ptr(loc).add(offset as usize) as *mut _;
+        ptr::write_unaligned(dst, tgt);
+    }
+}
+
+// TODO: shouldn't reads always increase the reference count?
+
+pub fn read_ptr(loc: *mut SlHead, offset: u32) -> *mut SlHead {
+    assert!(offset + PTR_LEN <= get_size(loc));
+    unsafe { ptr::read_unaligned(value_ptr(loc).add(offset as usize) as _) }
+}
+
+pub fn read_ptr_atomic(loc: *mut SlHead, offset: u32) -> *mut SlHead {
+    assert!(offset + PTR_LEN <= get_size(loc));
+    unsafe { std::intrinsics::atomic_load_acquire(value_ptr(loc).add(offset as usize) as _) }
+}
+
+pub unsafe fn read_ptr_unchecked(loc: *mut SlHead, offset: u32) -> *mut SlHead {
+    debug_assert!(offset + PTR_LEN <= get_size(loc));
+    unsafe { ptr::read_unaligned(value_ptr(loc).add(offset as usize) as _) }
+}
+
+#[inline(always)]
+unsafe fn get_ptr_ptr_unchecked(loc: *mut SlHead, offset: u32) -> *mut *mut SlHead {
+    debug_assert!(offset + PTR_LEN <= get_size(loc));
+    value_ptr(loc).add(offset as usize) as _
+}
+
+// TODO: check that the given offset matches a valid field offset in the object?
+
 /// Write to a field of a Sail object of a core type
 #[inline(always)]
 pub fn core_write_field<T: SizedBase>(loc: *mut SlHead, offset: u32, src: T) {
@@ -672,26 +932,76 @@ pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(loc: *mut SlHead,
 
 /// Set the pointer to a list element's next element
 #[inline(always)]
-pub fn set_next_list_elt(loc: *mut SlHead, next: *mut SlHead) {
+pub fn set_next_list_elt(env: *mut SlHead, loc: *mut SlHead, next: *mut SlHead) {
+    // TODO: what happens if the reference count changes between the
+    // read and the write? (answer: wrong count ends up written)
+
     unsafe {
-        let head = ptr::read_unaligned(loc as *mut u16);
-        ptr::write_unaligned(loc as *mut u64, ((next as u64) << 16) + head as u64);
+        let (cfg, prev_ptr) = {
+            let head = ptr::read_unaligned(loc as *mut u64);
+            (head & u16::MAX as u64, (head >> 16) as *mut SlHead)
+        };
+
+        ptr::write_unaligned(loc as *mut u64, ((next as u64) << 16) + cfg);
+
+        if !nil_p(next) {
+            inc_refc(next);
+        }
+
+        if !nil_p(prev_ptr) && dec_refc(prev_ptr) {
+            destroy_obj(env, prev_ptr)
+        }
     }
 }
+
+// TODO: set_next_list_elt_atomic (?)
 
 /// Set the pointer to a list element's next element only if the
 /// current pointer is equivalent to `old`
 #[inline(always)]
-pub fn set_next_list_elt_cmpxcg(loc: *mut SlHead, old: *mut SlHead, new: *mut SlHead) -> bool {
+pub fn set_next_list_elt_cmpxcg(
+    env: *mut SlHead,
+    loc: *mut SlHead,
+    old: *mut SlHead,
+    new: *mut SlHead,
+) -> bool {
     unsafe {
-        let head = ptr::read_unaligned(loc as *mut u16);
-        std::intrinsics::atomic_cxchg_acqrel_acquire(
-            loc as *mut u64,
-            ((old as u64) << 16) + head as u64,
-            ((new as u64) << 16) + head as u64,
-        )
-        .1
+        let mut cfg = std::intrinsics::atomic_load_acquire(loc as *mut u16) as u64;
+
+        let p = loop {
+            let (cur, p) = std::intrinsics::atomic_cxchg_acqrel_acquire(
+                loc as *mut u64,
+                ((old as u64) << 16) + cfg,
+                ((new as u64) << 16) + cfg,
+            );
+
+            let cur_cfg = cur & u16::MAX as u64;
+
+            if p || cur_cfg == cfg {
+                break p;
+            }
+
+            cfg = cur_cfg
+        };
+
+        if p {
+            if !nil_p(new) {
+                inc_refc(new);
+            }
+
+            if !nil_p(old) && dec_refc(old) {
+                destroy_obj(env, old)
+            }
+        }
+
+        p
     }
+}
+
+#[inline(always)]
+pub unsafe fn set_next_list_elt_unsafe_unchecked(loc: *mut SlHead, next: *mut SlHead) {
+    let head = ptr::read_unaligned(loc as *mut u16);
+    ptr::write_unaligned(loc as *mut u64, ((next as u64) << 16) + head as u64);
 }
 
 /// Gets the pointer to the next element from a list element
@@ -707,7 +1017,7 @@ pub fn get_next_list_elt(loc: *mut SlHead) -> *mut SlHead {
 pub fn ref_make(reg: *mut Region) -> *mut SlHead {
     unsafe {
         let ptr = memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr));
-        write_field_unchecked(ptr, 0, nil());
+        write_ptr_unsafe_unchecked(ptr, 0, nil());
         ptr
     }
 }
@@ -717,7 +1027,8 @@ pub fn ref_make(reg: *mut Region) -> *mut SlHead {
 pub fn ref_init(reg: *mut Region, val: *mut SlHead) -> *mut SlHead {
     unsafe {
         let ptr = memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr));
-        write_field_unchecked(ptr, 0, val);
+        write_ptr_unsafe_unchecked(ptr, 0, val);
+        inc_refc(val);
         ptr
     }
 }
@@ -755,7 +1066,8 @@ pub fn stdvec_init(reg: *mut Region, val: &[*mut SlHead]) -> *mut SlHead {
     unsafe { write_field_unchecked(ptr, 4, len) }
 
     for (i, p) in val.iter().enumerate() {
-        unsafe { write_field_unchecked(ptr, 8 + (8 * i as u32), *p) }
+        unsafe { write_ptr_unsafe_unchecked(ptr, 8 + (8 * i as u32), *p) }
+        inc_refc(*p);
     }
 
     ptr
@@ -801,7 +1113,7 @@ pub fn hashvec_make(reg: *mut Region, size: u32) -> *mut SlHead {
         write_field_unchecked::<u32>(ptr, 4, 0); // fill
 
         for i in 0..size {
-            write_field_unchecked(ptr, 4 + 4 + (i * 8), ptr::null_mut());
+            write_ptr_unsafe_unchecked(ptr, 4 + 4 + (i * 8), ptr::null_mut());
         }
 
         ptr
@@ -816,7 +1128,7 @@ pub fn proc_lambda_make(reg: *mut Region, argct: u16) -> *mut SlHead {
         let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::ProcLambda));
 
         write_field_unchecked::<u16>(ptr, 0, argct);
-        write_field_unchecked(ptr, 2, ptr::null_mut());
+        write_ptr_unsafe_unchecked(ptr, 2, ptr::null_mut());
 
         ptr
     }
@@ -830,7 +1142,7 @@ pub fn proc_native_make(reg: *mut Region, argct: u16) -> *mut SlHead {
         let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::ProcNative));
 
         write_field_unchecked::<u16>(ptr, 0, argct);
-        write_field_unchecked(ptr, 2, ptr::null_mut());
+        write_ptr_unsafe_unchecked(ptr, 2, ptr::null_mut());
 
         ptr
     }
@@ -852,15 +1164,16 @@ pub fn proc_native_init(reg: *mut Region, argct: u16, fun: NativeFn) -> *mut SlH
 // TODO: this implementation will **easily** cause memory leaks
 // TODO: decrement the reference count of previous object
 #[inline(always)]
-pub fn ref_set(loc: *mut SlHead, dst: *mut SlHead) {
+pub fn ref_set(env: *mut SlHead, loc: *mut SlHead, dst: *mut SlHead) {
     coretypck!(loc ; Ref);
-    core_write_field(loc, 0, dst)
+    // core_write_field(loc, 0, dst)
+    write_ptr(env, loc, 0, dst)
 }
 
 #[inline(always)]
 pub fn ref_get(loc: *mut SlHead) -> *mut SlHead {
     coretypck!(loc ; Ref);
-    core_read_field(loc, 0)
+    read_ptr(loc, 0)
 }
 
 #[inline(always)]
@@ -901,7 +1214,7 @@ fn stdvec_get_cap(loc: *mut SlHead) -> u32 {
 #[inline(always)]
 pub fn stdvec_idx(loc: *mut SlHead, idx: u32) -> *mut SlHead {
     coretypck!(loc ; VecStd);
-    core_read_field(loc, 4 + 4 + (idx * 8))
+    read_ptr(loc, 4 + 4 + (idx * 8))
 }
 
 #[inline(always)]
@@ -909,7 +1222,7 @@ pub fn stdvec_push(loc: *mut SlHead, item: *mut SlHead) {
     let (len, cap) = (stdvec_get_len(loc), stdvec_get_cap(loc));
 
     if len < cap {
-        core_write_field(loc, 4 + 4 + (len * 8), item);
+        unsafe { write_ptr_unsafe_unchecked(loc, 4 + 4 + (len * 8), item) };
         stdvec_set_len(loc, len + 1);
     } else {
         panic!("not enough space in vec");
@@ -1034,13 +1347,14 @@ pub fn hash_map_insert(reg: *mut Region, loc: *mut SlHead, key: *mut SlHead, val
     let hash = core_hash(key) % size;
     let idx = 4 + 4 + (hash * PTR_LEN);
 
-    let next = core_read_field(loc, idx);
+    let next = read_ptr(loc, idx);
 
     if !nil_p(next) {
-        set_next_list_elt(entry, next);
+        unsafe { set_next_list_elt_unsafe_unchecked(entry, next) };
     }
 
-    core_write_field(loc, idx, entry)
+    unsafe { write_ptr_unsafe_unchecked(loc, idx, entry) }
+    inc_refc(entry);
 }
 
 // fn alist_map_insert(reg: *mut Region, loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
@@ -1106,13 +1420,13 @@ pub fn proc_lambda_get_arg_id(loc: *mut SlHead, idx: u16) -> u32 {
 #[inline(always)]
 pub fn proc_lambda_set_body(loc: *mut SlHead, body: *mut SlHead) {
     coretypck!(loc ; ProcLambda);
-    core_write_field(loc, NUM_16_LEN, body)
+    unsafe { write_ptr_unsafe_unchecked(loc, NUM_16_LEN, body) }
 }
 
 #[inline(always)]
 pub fn proc_lambda_get_body(loc: *mut SlHead) -> *mut SlHead {
     coretypck!(loc ; ProcLambda);
-    core_read_field(loc, NUM_16_LEN)
+    read_ptr(loc, NUM_16_LEN)
 }
 
 #[inline(always)]
@@ -1134,7 +1448,7 @@ pub fn proc_native_get_body(loc: *mut SlHead) -> NativeFn {
 /// allocated object
 #[inline(always)]
 pub fn core_copy_val(reg: *mut Region, src: *mut SlHead) -> *mut SlHead {
-    let (siz, cfg) = (core_size(src), get_cfg_all(src));
+    let (siz, cfg) = (core_size(src), get_cfg_byte(src));
 
     unsafe {
         let dst = memmgt::alloc(reg, siz, memmgt::cap(cfg.try_into().unwrap()));
@@ -1149,7 +1463,9 @@ pub fn core_copy_val(reg: *mut Region, src: *mut SlHead) -> *mut SlHead {
 fn core_cons_copy(reg: *mut Region, car: *mut SlHead, cdr: *mut SlHead) -> *mut SlHead {
     let new_cdr = core_copy_val(reg, cdr);
     let new_car = core_copy_val(reg, car);
-    set_next_list_elt(new_car, new_cdr);
+
+    unsafe { set_next_list_elt_unsafe_unchecked(new_car, new_cdr) };
+    inc_refc(new_cdr);
 
     ref_init(reg, new_car)
 }
@@ -1206,18 +1522,22 @@ const ENV_LAYER_SLOTS: u32 = 41;
 /// distinct hash dictionaries for binding objects, modules, and types
 /// to symbols
 pub fn env_create(reg: *mut Region, parent: *mut SlHead) -> *mut SlHead {
-    let env = unsafe { memmgt::alloc(reg, 3 * PTR_LEN, super::T_ENV_ID.0) };
-    set_next_list_elt(env, parent);
-
     unsafe {
-        write_field_unchecked(env, 0, nil());
-        write_field_unchecked(env, 8, nil());
-        write_field_unchecked(env, 16, nil());
+        let env = memmgt::alloc(reg, 3 * PTR_LEN, super::T_ENV_ID.0);
+        set_next_list_elt_unsafe_unchecked(env, parent);
+
+        if !nil_p(parent) {
+            inc_refc(parent);
+        }
+
+        write_ptr_unsafe_unchecked(env, 0, nil());
+        write_ptr_unsafe_unchecked(env, 8, nil());
+        write_ptr_unsafe_unchecked(env, 16, nil());
+
+        // println!("<> environment created");
+
+        env
     }
-
-    // println!("<> environment created");
-
-    env
 }
 
 pub fn env_layer_make(reg: *mut Region) -> *mut SlHead {
@@ -1311,14 +1631,14 @@ pub fn env_scope_ins_by_id(reg: *mut Region, env: *mut SlHead, sym_id: u32, obj:
 
     let entry_offset = sym_id % ENV_LAYER_SLOTS;
 
-    let top_layer: *mut SlHead = unsafe { read_field_unchecked(env, layer_offset) };
+    let top_layer = unsafe { read_ptr_unchecked(env, layer_offset) };
     let mut layer_ptr = top_layer;
 
     'layer: loop {
         if nil_p(layer_ptr) {
             let new_layer = env_layer_make(reg);
-            set_next_list_elt(new_layer, top_layer);
-            unsafe { write_field_unchecked(env, layer_offset, new_layer) };
+            set_next_list_elt(env, new_layer, top_layer);
+            write_ptr(env, env, layer_offset, new_layer);
             layer_ptr = new_layer;
         }
 
@@ -1332,13 +1652,15 @@ pub fn env_scope_ins_by_id(reg: *mut Region, env: *mut SlHead, sym_id: u32, obj:
 
             let slot_id: u32 = unsafe { read_field_unchecked(layer_ptr, byte_offset) };
 
+            // there needs to be a way to discern an empty slot in all
+            // three environment sections
             if slot_id >> 30 != SymbolMode::Keyword as u32 {
                 continue 'entry;
             }
 
             unsafe {
                 write_field_unchecked(layer_ptr, byte_offset, sym_id);
-                write_field_unchecked(layer_ptr, byte_offset + SYMBOL_LEN, obj);
+                write_ptr(env, layer_ptr, byte_offset + SYMBOL_LEN, obj);
             }
 
             break 'layer;
@@ -1356,6 +1678,10 @@ pub fn env_scope_ins_by_id(reg: *mut Region, env: *mut SlHead, sym_id: u32, obj:
 /// the location in the environment of the object it refers to; None
 /// if no binding; Some(None) if no binding location
 fn env_get_binding_loc(env: *mut SlHead, sym_id: u32) -> Option<Option<*mut *mut SlHead>> {
+    if nil_p(env) {
+        return None;
+    }
+
     assert_eq!(get_type_id(env), super::T_ENV_ID.0);
 
     // println!("seeking sym {}", sym_id);
@@ -1379,7 +1705,7 @@ fn env_get_binding_loc(env: *mut SlHead, sym_id: u32) -> Option<Option<*mut *mut
 
         assert_eq!(get_type_id(scope_ptr), super::T_ENV_ID.0);
 
-        layer_ptr = unsafe { read_field_unchecked(scope_ptr, layer_offset) };
+        layer_ptr = unsafe { read_ptr_unchecked(scope_ptr, layer_offset) };
 
         'layer: loop {
             if nil_p(layer_ptr) {
@@ -1402,7 +1728,7 @@ fn env_get_binding_loc(env: *mut SlHead, sym_id: u32) -> Option<Option<*mut *mut
                 }
 
                 return Some(Some(unsafe {
-                    get_field_ptr_unchecked(layer_ptr, byte_offset + SYMBOL_LEN)
+                    get_ptr_ptr_unchecked(layer_ptr, byte_offset + SYMBOL_LEN)
                 }));
             }
 
@@ -1455,7 +1781,8 @@ pub fn sym_tab_set_next_id(tbl: *mut SlHead, id: u32) {
 fn sym_tab_direct_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead, idn: u32) {
     let entry = {
         let id = sym_init(reg, idn);
-        set_next_list_elt(id, sym);
+        unsafe { set_next_list_elt_unsafe_unchecked(id, sym) };
+        inc_refc(sym);
         id
     };
 
@@ -1471,31 +1798,33 @@ fn sym_tab_direct_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead, i
     let id_idx = (NUM_32_LEN + NUM_32_LEN) + (id_hash * PTR_LEN);
     let str_idx = (NUM_32_LEN + NUM_32_LEN) + (str_hash * PTR_LEN);
 
-    let mut id_pos = core_read_field(id_to_str, id_idx);
-    let mut str_pos = core_read_field(str_to_id, str_idx);
+    let mut id_pos = read_ptr(id_to_str, id_idx);
+    let mut str_pos = read_ptr(str_to_id, str_idx);
 
     let id_entry = ref_init(reg, entry);
     let str_entry = ref_init(reg, entry);
 
     if nil_p(id_pos) {
-        core_write_field(id_to_str, id_idx, id_entry)
+        unsafe { write_ptr_unsafe_unchecked(id_to_str, id_idx, id_entry) }
     } else {
         while !nil_p(get_next_list_elt(id_pos)) {
             id_pos = get_next_list_elt(id_pos);
         }
 
-        set_next_list_elt(id_pos, id_entry)
+        unsafe { set_next_list_elt_unsafe_unchecked(id_pos, id_entry) }
     }
+    inc_refc(id_entry);
 
     if nil_p(str_pos) {
-        core_write_field(str_to_id, str_idx, str_entry)
+        unsafe { write_ptr_unsafe_unchecked(str_to_id, str_idx, str_entry) }
     } else {
         while !nil_p(get_next_list_elt(str_pos)) {
             str_pos = get_next_list_elt(str_pos);
         }
 
-        set_next_list_elt(str_pos, str_entry)
+        unsafe { set_next_list_elt_unsafe_unchecked(str_pos, str_entry) }
     }
+    inc_refc(str_entry);
 }
 
 /// Takes the symbol table and a string object to insert, returning
@@ -1545,7 +1874,7 @@ fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
     let size = hashvec_get_size(map);
     let hash = core_hash(qry) % size as u32;
 
-    let mut entry = core_read_field(map, 4 + 4 + (hash * PTR_LEN));
+    let mut entry = read_ptr(map, 4 + 4 + (hash * PTR_LEN));
 
     loop {
         if nil_p(entry) {
@@ -1569,7 +1898,7 @@ pub fn sym_tab_lookup_id_num(tbl: *mut SlHead, id: u32) -> *mut SlHead {
     let size = hashvec_get_size(map);
     let hash = id % size as u32;
 
-    let mut entry = core_read_field(map, 4 + 4 + (hash * PTR_LEN));
+    let mut entry = read_ptr(map, 4 + 4 + (hash * PTR_LEN));
 
     loop {
         if nil_p(entry) {
@@ -1591,7 +1920,7 @@ pub fn sym_tab_get_id(reg: *mut Region, tbl: *mut SlHead, sym: &str) -> u32 {
     let size = hashvec_get_size(map);
     let hash = str_hash(sym) % size;
 
-    let mut entry = core_read_field(map, 4 + 4 + (hash * PTR_LEN));
+    let mut entry = read_ptr(map, 4 + 4 + (hash * PTR_LEN));
 
     while !nil_p(entry) {
         if sym == string_get(get_next_list_elt(ref_get(entry))) {
@@ -1988,6 +2317,7 @@ struct _TypeDesc {
     parent_type: u32,       // type symbol of parent
     manifest_or_predicate: *mut SlHead, // pointer to description data
 }
+// TODO: What are our uses / dependencies for type symbol and type ID?
 // objects like this are immutable once created
 struct _TypeManifest {
     id: u32,    // global ID of this object type

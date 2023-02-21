@@ -152,7 +152,8 @@ fn read_quote(
     let head = ref_init(reg, start);
 
     let end = read_value(chars, acc, reg, tbl)?;
-    set_next_list_elt(start, end);
+    unsafe { set_next_list_elt_unsafe_unchecked(start, end) }
+    inc_refc(end);
 
     Ok(head)
 }
@@ -186,11 +187,14 @@ fn read_list(
                 // append to the list tail
                 tail = {
                     let next = read_value(chars, acc, reg, tbl)?;
-                    if count < 1 {
-                        ref_set(tail, next)
-                    } else {
-                        set_next_list_elt(tail, next)
+                    unsafe {
+                        if count < 1 {
+                            write_ptr_unsafe_unchecked(tail, 0, next)
+                        } else {
+                            set_next_list_elt_unsafe_unchecked(tail, next)
+                        }
                     }
+                    inc_refc(next);
                     next
                 };
 

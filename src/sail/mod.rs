@@ -467,7 +467,7 @@ impl fmt::Display for SlContextVal {
                     let size = hashvec_get_size(value);
                     let mut fst = true;
                     for idx in 0..size {
-                        let mut pos = core_read_field(value, 4 + 4 + (PTR_LEN * idx));
+                        let mut pos = read_ptr(value, 4 + 4 + (PTR_LEN * idx));
                         while !nil_p(pos) {
                             if !fst {
                                 write!(f, " ").unwrap()

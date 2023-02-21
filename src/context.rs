@@ -76,8 +76,8 @@ pub fn run_loop<Ij: 'static>(
                 let strin = sail::string_init(sl_reg, &buffer);
                 let shell = sail::sym_init(sl_reg, sail::K_CX_SHELL.0);
 
-                sail::queue::queue_tx(main_tx, shell);
-                sail::queue::queue_tx(main_tx, strin);
+                sail::queue::queue_tx(sail::nil(), main_tx, shell);
+                sail::queue::queue_tx(sail::nil(), main_tx, strin);
             }
         })
         .unwrap();
@@ -111,7 +111,7 @@ pub fn run_loop<Ij: 'static>(
 
             Event::RedrawRequested(..) => {
                 let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
-                sail::queue::queue_tx(rndr_tx, redrw);
+                sail::queue::queue_tx(sail::nil(), rndr_tx, redrw);
             }
 
             Event::RedrawEventsCleared => {
@@ -125,8 +125,8 @@ pub fn run_loop<Ij: 'static>(
 
                     let destr = sail::sym_init(sl_reg, sail::K_CX_DESTR.0);
 
-                    sail::queue::queue_tx(rndr_tx, destr);
-                    sail::queue::queue_tx(main_tx, destr);
+                    sail::queue::queue_tx(sail::nil(), rndr_tx, destr);
+                    sail::queue::queue_tx(sail::nil(), main_tx, destr);
                 }
                 WindowEvent::Focused(f) => {
                     focus = f;
@@ -136,7 +136,7 @@ pub fn run_loop<Ij: 'static>(
                     sail::arrvec_rplc(fr_dims, &[dims.width, dims.height]);
 
                     let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
-                    sail::queue::queue_tx(rndr_tx, resiz);
+                    sail::queue::queue_tx(sail::nil(), rndr_tx, resiz);
                 }
                 WindowEvent::ScaleFactorChanged {
                     new_inner_size: dims,
@@ -146,12 +146,12 @@ pub fn run_loop<Ij: 'static>(
                     sail::arrvec_rplc(fr_dims, &[dims.width, dims.height]);
 
                     let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
-                    sail::queue::queue_tx(rndr_tx, resiz);
+                    sail::queue::queue_tx(sail::nil(), rndr_tx, resiz);
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     if state == ElementState::Pressed {
                         let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
-                        sail::queue::queue_tx(main_tx, recrd);
+                        sail::queue::queue_tx(sail::nil(), main_tx, recrd);
                     }
                 }
                 WindowEvent::CursorMoved {
@@ -164,7 +164,7 @@ pub fn run_loop<Ij: 'static>(
                     ]);
 
                     let moved = sail::sym_init(sl_reg, sail::K_CX_CURMV.0);
-                    sail::queue::queue_tx(rndr_tx, moved);
+                    sail::queue::queue_tx(sail::nil(), rndr_tx, moved);
                 }
                 _ => {}
             },
@@ -181,52 +181,52 @@ pub fn run_loop<Ij: 'static>(
                             Some(VirtualKeyCode::U) => {
                                 // move up
                                 let key_u = sail::sym_init(sl_reg, sail::K_CX_KEY_U.0);
-                                sail::queue::queue_tx(main_tx, key_u);
+                                sail::queue::queue_tx(sail::nil(), main_tx, key_u);
                             }
                             Some(VirtualKeyCode::D) => {
                                 // move down
                                 let key_d = sail::sym_init(sl_reg, sail::K_CX_KEY_D.0);
-                                sail::queue::queue_tx(main_tx, key_d);
+                                sail::queue::queue_tx(sail::nil(), main_tx, key_d);
                             }
                             Some(VirtualKeyCode::F) => {
                                 // move forward (right)
                                 let key_f = sail::sym_init(sl_reg, sail::K_CX_KEY_F.0);
-                                sail::queue::queue_tx(main_tx, key_f);
+                                sail::queue::queue_tx(sail::nil(), main_tx, key_f);
                             }
                             Some(VirtualKeyCode::B) => {
                                 // move backward (left)
                                 let key_b = sail::sym_init(sl_reg, sail::K_CX_KEY_B.0);
-                                sail::queue::queue_tx(main_tx, key_b);
+                                sail::queue::queue_tx(sail::nil(), main_tx, key_b);
                             }
                             Some(VirtualKeyCode::L) => {
                                 // make step longer
                                 let key_l = sail::sym_init(sl_reg, sail::K_CX_KEY_L.0);
-                                sail::queue::queue_tx(main_tx, key_l);
+                                sail::queue::queue_tx(sail::nil(), main_tx, key_l);
                             }
                             Some(VirtualKeyCode::S) => {
                                 // make step shorter
                                 let key_s = sail::sym_init(sl_reg, sail::K_CX_KEY_S.0);
-                                sail::queue::queue_tx(main_tx, key_s);
+                                sail::queue::queue_tx(sail::nil(), main_tx, key_s);
                             }
                             Some(VirtualKeyCode::E) => {
                                 // escape line in progress
                                 let key_e = sail::sym_init(sl_reg, sail::K_CX_KEY_E.0);
-                                sail::queue::queue_tx(main_tx, key_e);
+                                sail::queue::queue_tx(sail::nil(), main_tx, key_e);
                             }
                             Some(VirtualKeyCode::K) => {
                                 // kill last line drawn
                                 let key_k = sail::sym_init(sl_reg, sail::K_CX_KEY_K.0);
-                                sail::queue::queue_tx(main_tx, key_k);
+                                sail::queue::queue_tx(sail::nil(), main_tx, key_k);
                             }
                             Some(VirtualKeyCode::M) => {
                                 // switch drawing mode
                                 let key_m = sail::sym_init(sl_reg, sail::K_CX_KEY_M.0);
-                                sail::queue::queue_tx(main_tx, key_m);
+                                sail::queue::queue_tx(sail::nil(), main_tx, key_m);
                             }
                             Some(VirtualKeyCode::Space) => {
                                 // enter the point
                                 let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
-                                sail::queue::queue_tx(main_tx, recrd);
+                                sail::queue::queue_tx(sail::nil(), main_tx, recrd);
                             }
                             _ => {}
                         }
