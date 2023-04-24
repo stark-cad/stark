@@ -115,6 +115,15 @@ impl RegionTable {
         ptr::write(self.high_array.add(old_len), end);
         ptr::write(self.zone_array.add(old_len), zone);
         ptr::write(self.region_array.add(old_len), region);
+
+        if cfg!(feature = "memdbg") {
+            println!("- Zone added -");
+            for i in 0..self.len {
+                let entry = self.index(i);
+                println!("Zone {}: {:x} to {:x}", i, entry.0, entry.1)
+            }
+            println!()
+        }
     }
 
     /// Gets a table entry by index
@@ -346,6 +355,11 @@ pub unsafe fn dealloc(val: *mut SlHead) {
             if done {
                 std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, len);
                 std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, len);
+
+                if cfg!(feature = "memdbg") {
+                    __dbg_visualize_zone(zone)
+                }
+
                 return;
             } else {
                 n_trunk
@@ -626,6 +640,10 @@ pub unsafe fn dealloc(val: *mut SlHead) {
 
     std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, len);
     std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, final_len);
+
+    if cfg!(feature = "memdbg") {
+        __dbg_visualize_zone(zone)
+    }
 }
 
 /// Set the length of a free memory block in a zone
@@ -841,6 +859,90 @@ unsafe fn fblk_get_next_blk(zone: *const Zone, block: *const FreeBlock) -> *mut 
     (start as u64 + next_ofs as u64) as *mut FreeBlock
 }
 
+fn __dbg_visualize_zone(zone: *const Zone) {
+    unsafe {
+        println!("--- Zone Report: {:x} ---", zone as usize);
+
+        println!(
+            "Offset to empty area: {}",
+            (*zone).top as usize - (*zone).bot as usize
+        );
+
+        let trunk = (*zone).free;
+
+        let mut free_blocks = if trunk == ptr::null_mut() {
+            println!("No Trunk");
+            vec![]
+        } else {
+            // (block address, (parent by index, prev or next))
+            vec![(trunk, None)]
+        };
+
+        let mut n = 0;
+
+        while n < free_blocks.len() {
+            let (fb, co) = free_blocks[n];
+
+            let prev = fblk_get_prev_blk(zone, fb);
+            if !prev.is_null() {
+                free_blocks.push((prev, Some((n, false))))
+            }
+            let next = fblk_get_next_blk(zone, fb);
+            if !next.is_null() {
+                free_blocks.push((next, Some((n, true))))
+            }
+
+            println!(
+                "FBlock {}: offset {}; length {}; {}",
+                n,
+                fb as usize - (*zone).bot as usize,
+                fblk_get_len(fb),
+                match co {
+                    None => String::from("TRUNK"),
+                    Some((x, p)) => format!(
+                        "{} child of {}",
+                        if p { "following" } else { "preceding" },
+                        x
+                    ),
+                }
+            );
+
+            n += 1;
+        }
+
+        free_blocks.sort_by_key(|e| e.0);
+
+        let mut probe_pos = (*zone).bot as usize;
+
+        for fb in free_blocks.iter().map(|e| e.0 as usize) {
+            while probe_pos < fb {
+                let len = lblk_get_len(probe_pos as *mut SlHead) as usize;
+                println!(
+                    "LBlock: offset {}; length {}",
+                    probe_pos - (*zone).bot as usize,
+                    len
+                );
+                probe_pos += len;
+                assert!(probe_pos <= fb)
+            }
+            probe_pos = fb + fblk_get_len(fb as *mut FreeBlock) as usize
+        }
+
+        while probe_pos < (*zone).top as usize {
+            let len = lblk_get_len(probe_pos as *mut SlHead) as usize;
+            println!(
+                "LBlock: offset {}; length {}",
+                probe_pos - (*zone).bot as usize,
+                len
+            );
+            probe_pos += len;
+            assert!(probe_pos <= (*zone).top as usize)
+        }
+
+        println!()
+    }
+}
+
 #[cfg(test)]
 mod free_tree_tests {
     use super::*;
@@ -1039,7 +1141,7 @@ unsafe fn which_mem_area(ptr: *mut SlHead) -> (*mut Region, *mut Zone) {
         }
     }
 
-    panic!("invalid memory area")
+    panic!("INVALID memory area for {:x}", ptr as usize)
 }
 
 // unsafe fn which_mem_zone(ptr: *mut SlHead) -> *mut Zone {
