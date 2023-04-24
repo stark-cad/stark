@@ -15,7 +15,7 @@
 
 // <>
 
-use super::{core::*, memmgt, SlErrCode, SlHead};
+use super::{core::*, memmgt, SlErrCode};
 
 use std::iter;
 use std::str;
@@ -26,11 +26,7 @@ use std::str;
 // }
 
 /// Parses a textual Sail expression into a structure of Sail objects
-pub fn parse(
-    reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    code: &str,
-) -> Result<*mut SlHead, SlErrCode> {
+pub fn parse(reg: *mut memmgt::Region, tbl: SlHndl, code: &str) -> Result<SlHndl, SlErrCode> {
     // Accumulator for collecting string values
     let mut acc: Vec<u8> = Vec::new();
     let mut chars = code.bytes().peekable();
@@ -56,8 +52,8 @@ fn read_value(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-) -> Result<*mut SlHead, SlErrCode> {
+    tbl: SlHndl,
+) -> Result<SlHndl, SlErrCode> {
     let value;
 
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
@@ -146,14 +142,16 @@ fn read_quote(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-) -> Result<*mut SlHead, SlErrCode> {
+    tbl: SlHndl,
+) -> Result<SlHndl, SlErrCode> {
     let start = sym_init(reg, super::SP_QUOTE.0);
-    let head = ref_init(reg, start);
+    let head = ref_init(reg, start.clone());
 
     let end = read_value(chars, acc, reg, tbl)?;
-    unsafe { set_next_list_elt_unsafe_unchecked(start, end) }
-    inc_refc(end);
+    unsafe {
+        inc_refc(end.get_raw());
+        set_next_list_elt_unsafe_unchecked(start, end);
+    }
 
     Ok(head)
 }
@@ -164,8 +162,8 @@ fn read_list(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-) -> Result<*mut SlHead, SlErrCode> {
+    tbl: SlHndl,
+) -> Result<SlHndl, SlErrCode> {
     let head = ref_make(reg);
 
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
@@ -175,7 +173,7 @@ fn read_list(
     }
 
     let mut count = 0;
-    let mut tail = head;
+    let mut tail = head.clone();
 
     while c != b')' {
         match c {
@@ -186,15 +184,15 @@ fn read_list(
             _ => {
                 // append to the list tail
                 tail = {
-                    let next = read_value(chars, acc, reg, tbl)?;
+                    let next = read_value(chars, acc, reg, tbl.clone())?;
                     unsafe {
+                        inc_refc(next.get_raw());
                         if count < 1 {
-                            write_ptr_unsafe_unchecked(tail, 0, next)
+                            write_ptr_unsafe_unchecked(tail, 0, next.clone())
                         } else {
-                            set_next_list_elt_unsafe_unchecked(tail, next)
+                            set_next_list_elt_unsafe_unchecked(tail, next.clone())
                         }
                     }
-                    inc_refc(next);
                     next
                 };
 
@@ -218,8 +216,8 @@ fn read_vec(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-) -> Result<*mut SlHead, SlErrCode> {
+    tbl: SlHndl,
+) -> Result<SlHndl, SlErrCode> {
     // TODO: allow vectors of arbitrary length
     let vec = stdvec_make(reg, 8);
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
@@ -229,7 +227,7 @@ fn read_vec(
             _ if c.is_ascii_whitespace() => {
                 chars.next();
             }
-            _ => stdvec_push(vec, read_value(chars, acc, reg, tbl)?),
+            _ => stdvec_push(vec.clone(), read_value(chars, acc, reg, tbl.clone())?),
         }
         c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
@@ -243,8 +241,8 @@ fn read_map(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-) -> Result<*mut SlHead, SlErrCode> {
+    tbl: SlHndl,
+) -> Result<SlHndl, SlErrCode> {
     let map = hashvec_make(reg, 16);
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while c != b'}' {
@@ -255,9 +253,9 @@ fn read_map(
             }
             _ => hash_map_insert(
                 reg,
-                map,
-                read_value(chars, acc, reg, tbl)?,
-                read_value(chars, acc, reg, tbl)?,
+                map.clone(),
+                read_value(chars, acc, reg, tbl.clone())?,
+                read_value(chars, acc, reg, tbl.clone())?,
             ),
         }
         c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
@@ -272,8 +270,8 @@ fn read_symbol(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-) -> Result<*mut SlHead, SlErrCode> {
+    tbl: SlHndl,
+) -> Result<SlHndl, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
         match peek {
@@ -308,9 +306,9 @@ fn read_spec_sym(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
+    tbl: SlHndl,
     mode: SymbolMode,
-) -> Result<*mut SlHead, SlErrCode> {
+) -> Result<SlHndl, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
         match peek {
@@ -351,8 +349,8 @@ fn read_string(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    _tbl: *mut SlHead,
-) -> Result<*mut SlHead, SlErrCode> {
+    _tbl: SlHndl,
+) -> Result<SlHndl, SlErrCode> {
     let mut next = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while next != b'"' {
         acc.push(chars.next().unwrap());
@@ -377,8 +375,8 @@ fn read_number(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    _tbl: *mut SlHead,
-) -> Result<*mut SlHead, SlErrCode> {
+    _tbl: SlHndl,
+) -> Result<SlHndl, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
         match peek {
@@ -405,8 +403,8 @@ fn read_special(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    _tbl: *mut SlHead,
-) -> Result<*mut SlHead, SlErrCode> {
+    _tbl: SlHndl,
+) -> Result<SlHndl, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
         match peek {
@@ -440,7 +438,7 @@ fn read_special(
 
 /// Parses a number and creates an object according to its textual
 /// representation
-fn process_num(slice: &str, reg: *mut memmgt::Region) -> Result<*mut SlHead, SlErrCode> {
+fn process_num(slice: &str, reg: *mut memmgt::Region) -> Result<SlHndl, SlErrCode> {
     if let Ok(n) = slice.parse::<i64>() {
         Ok(i64_init(reg, n))
     } else if let Ok(n) = slice.parse::<f64>() {

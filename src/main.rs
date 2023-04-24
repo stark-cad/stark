@@ -43,7 +43,14 @@ fn main() {
     const ICON: &'static str = "icons/icon.png";
     const SIZE: [u32; 2] = [1280, 720];
 
-    assert_eq!(sail::PTR_LEN as usize, std::mem::size_of::<*mut sail::SlHead>());
+    assert_eq!(
+        sail::PTR_LEN as usize,
+        std::mem::size_of::<*mut sail::SlHead>()
+    );
+    assert_eq!(
+        std::mem::size_of::<sail::SlHndl>(),
+        std::mem::size_of::<*mut sail::SlHead>()
+    );
 
     // TODO: add useful logging throughout the program
     simple_logger::SimpleLogger::new()
@@ -77,9 +84,9 @@ fn main() {
 
     let (sl_tbl, ty_ctr, main_env, rndr_env) = {
         let (tbl, ctr, m_env) = sail::prep_environment(main_region);
-        sail::environment_setup(main_region, tbl, ctr, m_env);
+        sail::environment_setup(main_region, tbl.clone(), ctr.clone(), m_env.clone());
 
-        let r_env = sail::env_create(rndr_region, m_env);
+        let r_env = sail::env_create(rndr_region, Some(m_env.clone()));
 
         (tbl, ctr, m_env, r_env)
     };
@@ -88,49 +95,49 @@ fn main() {
     let (cm_send, cm_recv) = sail::queue::queue_create(ctxt_region, main_region);
     let (cr_send, cr_recv) = sail::queue::queue_create(ctxt_region, rndr_region);
 
-    sail::env_scope_ins_by_id(main_region, main_env, sail::S_MR_SEND.0, mr_send);
-    sail::env_scope_ins_by_id(main_region, main_env, sail::S_CM_RECV.0, cm_recv);
+    sail::env_scope_ins_by_id(main_region, main_env.clone(), sail::S_MR_SEND.0, mr_send);
+    sail::env_scope_ins_by_id(main_region, main_env.clone(), sail::S_CM_RECV.0, cm_recv);
 
-    sail::env_scope_ins_by_id(rndr_region, rndr_env, sail::S_MR_RECV.0, mr_recv);
-    sail::env_scope_ins_by_id(rndr_region, rndr_env, sail::S_CR_RECV.0, cr_recv);
+    sail::env_scope_ins_by_id(rndr_region, rndr_env.clone(), sail::S_MR_RECV.0, mr_recv);
+    sail::env_scope_ins_by_id(rndr_region, rndr_env.clone(), sail::S_CR_RECV.0, cr_recv);
 
     let fr_dims = sail::arrvec_init::<u32>(main_region, sail::T_U32.0, 2, &[0, 0]);
     let cur_pos = sail::arrvec_init::<f32>(main_region, sail::T_F32.0, 2, &[0.0, 0.0]);
 
-    sail::env_scope_ins_by_id(main_region, main_env, sail::S_FR_DIMS.0, fr_dims);
-    sail::env_scope_ins_by_id(main_region, main_env, sail::S_CUR_POS.0, cur_pos);
-
-    let (
-        sl_tbl,
-        ty_ctr,
+    sail::env_scope_ins_by_id(
         main_region,
-        rndr_region,
-        ctxt_region,
-        main_env,
-        rndr_env,
-        cm_send,
-        cr_send,
-        fr_dims,
-        cur_pos,
-    ) = (
-        sl_tbl as usize,
-        ty_ctr as usize,
+        main_env.clone(),
+        sail::S_FR_DIMS.0,
+        fr_dims.clone(),
+    );
+    sail::env_scope_ins_by_id(
+        main_region,
+        main_env.clone(),
+        sail::S_CUR_POS.0,
+        cur_pos.clone(),
+    );
+
+    let (main_region, rndr_region, ctxt_region) = (
         main_region as usize,
         rndr_region as usize,
         ctxt_region as usize,
-        main_env as usize,
-        rndr_env as usize,
-        cm_send as usize,
-        cr_send as usize,
-        fr_dims as usize,
-        cur_pos as usize,
     );
+
+    let (sl_tb_rd, ty_ct_rd) = (sl_tbl.clone(), ty_ctr.clone());
 
     // This thread handles all rendering to the graphical frame: the output interface
     let render = thread::Builder::new()
         .name("render".to_string())
         .spawn(move || {
-            graphics::render_loop(NAME, SIZE, handles, rndr_region, sl_tbl, ty_ctr, rndr_env)
+            graphics::render_loop(
+                NAME,
+                SIZE,
+                handles,
+                rndr_region,
+                sl_tb_rd,
+                ty_ct_rd,
+                rndr_env,
+            )
         })
         .unwrap();
 

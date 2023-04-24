@@ -27,14 +27,14 @@ use super::memmgt::{self, Region};
 /// Core type assertion
 macro_rules! coretypck {
     ( $var:ident ; $typ:ident ) => {
-        assert_eq!(core_type($var).unwrap(), CoreType::$typ);
+        assert_eq!($var.core_type().unwrap(), CoreType::$typ);
     };
 }
 
 /// Core type predicate
 macro_rules! coretypp {
     ( $var:ident ; $typ:ident ) => {
-        match core_type($var) {
+        match $var.core_type() {
             Some(t) => t == CoreType::$typ,
             None => false,
         }
@@ -449,7 +449,7 @@ impl TryFrom<Cfg> for CoreType {
 /// - Symbol table
 /// - Current environment
 /// - Slice containing all Sail arguments
-pub type NativeFn = fn(*mut Region, *mut SlHead, *mut SlHead, &[*mut SlHead]) -> *mut SlHead;
+pub type NativeFn = fn(*mut Region, SlHndl, SlHndl, &[SlHndl]) -> SlHndl;
 
 /// Creates a nil Sail object
 #[inline(always)]
@@ -486,183 +486,98 @@ pub const fn mode_of_sym(sym: u32) -> SymbolMode {
     unsafe { mem::transmute::<u8, SymbolMode>((sym >> 30) as u8) }
 }
 
-/// Checks whether a Sail object is a reference to another non-nil object
-#[inline(always)]
-pub fn nnil_ref_p(loc: *mut SlHead) -> bool {
-    match core_type(loc) {
-        Some(t) if t == CoreType::Ref => !ref_empty_p(loc),
-        _ => false,
-    }
-}
-
-/// Checks whether a Sail object is a basic symbol
-#[inline(always)]
-pub fn basic_sym_p(loc: *mut SlHead) -> bool {
-    match core_type(loc) {
-        Some(t) if t == CoreType::Symbol => mode_of_sym(sym_get_id(loc)) == SymbolMode::Basic,
-        _ => false,
-    }
-}
-
-/// Checks whether a Sail object is an executable procedure
-#[inline(always)]
-pub fn proc_p(loc: *mut SlHead) -> bool {
-    match core_type(loc) {
-        Some(t) if t == CoreType::ProcLambda || t == CoreType::ProcNative => true,
-        _ => false,
-    }
-}
-
-// no longer relevant
-// pub fn list_elt_p(loc: *mut SlHead) -> bool {
-//     (get_cfg_all(loc) & 0b00000010) != 0
-// }
-
 /// Checks whether a valid Sail object contains the 4-byte type ID
 /// field
-#[inline(always)]
-pub fn type_fld_p(loc: *mut SlHead) -> bool {
-    let head = get_cfg_byte(loc);
+#[deprecated]
+pub fn raw_typ_fld_p(loc: *mut SlHead) -> bool {
+    let head = raw_cfg_byte(loc);
     (head & 0b00011100) >> 2 == 7
 }
 
 /// Checks whether a valid Sail object contains the 4-byte size field
-#[inline(always)]
-pub fn size_fld_p(loc: *mut SlHead) -> bool {
-    let head = get_cfg_byte(loc);
+#[deprecated]
+pub fn raw_siz_fld_p(loc: *mut SlHead) -> bool {
+    let head = raw_cfg_byte(loc);
     head >> 5 > 5
 }
 
-#[inline(always)]
-pub fn get_type_id(loc: *mut SlHead) -> u32 {
-    assert!(type_fld_p(loc));
+#[deprecated]
+pub fn raw_type_id(loc: *mut SlHead) -> u32 {
+    assert!(raw_typ_fld_p(loc));
     unsafe { ptr::read_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *const u32) }
 }
 
 /// Return the size in bytes of any Sail object's payload (the space
 /// for a value following the head)
-#[inline(always)]
-pub fn get_size(loc: *mut SlHead) -> u32 {
-    let code = get_cfg_byte(loc) >> 5;
+#[deprecated]
+pub fn raw_size(loc: *mut SlHead) -> u32 {
+    let code = raw_cfg_byte(loc) >> 5;
     if code <= 5 {
         0x80000000_u32.rotate_left(code as u32) & 31
     } else {
-        assert!(size_fld_p(loc));
+        assert!(raw_siz_fld_p(loc));
         unsafe {
             ptr::read_unaligned(
-                (loc as *mut u8).add((HEAD_LEN + (NUM_32_LEN * type_fld_p(loc) as u32)) as usize)
+                (loc as *mut u8).add((HEAD_LEN + (NUM_32_LEN * raw_typ_fld_p(loc) as u32)) as usize)
                     as *const u32,
             )
         }
     }
 }
 
-#[inline(always)]
+#[deprecated]
 fn __dbg_head_info(loc: *mut SlHead) {
     println!(
         "type field?: {}; size field?: {}; size: {}",
-        type_fld_p(loc),
-        size_fld_p(loc),
-        get_size(loc)
+        raw_typ_fld_p(loc),
+        raw_siz_fld_p(loc),
+        raw_size(loc)
     )
 }
 
-/// Returns the truthiness of a valid Sail object
-#[inline(always)]
-pub fn truthy(loc: *mut SlHead) -> bool {
-    !(nil_p(loc)
-        || (coretypp!(loc ; Bool) && !bool_get(loc))
-        || (coretypp!(loc ; Ref) && ref_empty_p(loc)))
-}
-
 /// Gets the full configuration byte from a Sail object
-#[inline(always)]
-fn get_cfg_byte(loc: *mut SlHead) -> u8 {
+#[deprecated]
+fn raw_cfg_byte(loc: *mut SlHead) -> u8 {
     unsafe { ptr::read_unaligned(loc as *const u8) }
 }
 
 /// Gets the reference count byte from a Sail object
-#[inline(always)]
-fn get_refc_byte(loc: *mut SlHead) -> u8 {
+#[deprecated]
+fn raw_refc_byte(loc: *mut SlHead) -> u8 {
     unsafe { ptr::read_unaligned((loc as *const u8).add(1)) }
 }
 
 /// Gets the size / type configuration from a Sail object
-#[inline(always)]
-pub fn get_cfg_spec(loc: *mut SlHead) -> Cfg {
-    let top_byte = get_cfg_byte(loc);
+#[deprecated]
+pub fn raw_cfg_spec(loc: *mut SlHead) -> Cfg {
+    let top_byte = raw_cfg_byte(loc);
     match Cfg::try_from(top_byte & 0b11111100) {
         Ok(out) => out,
         Err(_) => panic!("invalid cfg specifier: {:08b}", top_byte),
     }
 }
 
-/// Gets the base size of a Sail object
-#[inline(always)]
-pub fn get_base_size(loc: *mut SlHead) -> BaseSize {
-    match BaseSize::try_from(get_cfg_byte(loc) >> 5) {
-        Ok(out) => out,
-        Err(_) => unreachable!(),
-    }
-}
-
-/// Gets base type specifier from a Sail object (its meaning differs with size)
-#[inline(always)]
-fn get_base_spec(loc: *mut SlHead) -> u8 {
-    (get_cfg_byte(loc) & 0b00011100) >> 2
-}
-
 /// From a valid Sail object, returns a pointer to the start of the value proper
 ///
 /// (After the header and type specifiers, if they exist)
-#[inline(always)]
-pub fn value_ptr(loc: *mut SlHead) -> *mut u8 {
+#[deprecated]
+pub fn raw_val_ptr(loc: *mut SlHead) -> *mut u8 {
     let offset = (HEAD_LEN
-        + (type_fld_p(loc) as u32 * NUM_32_LEN)
-        + (size_fld_p(loc) as u32 * NUM_32_LEN)) as usize;
+        + (raw_typ_fld_p(loc) as u32 * NUM_32_LEN)
+        + (raw_siz_fld_p(loc) as u32 * NUM_32_LEN)) as usize;
     unsafe { (loc as *mut u8).add(offset) }
 }
 
 /// Returns None if the object is not of a core type, or its type if it is
-#[inline(always)]
-pub fn core_type(loc: *mut SlHead) -> Option<CoreType> {
+#[deprecated]
+pub fn raw_core_type(loc: *mut SlHead) -> Option<CoreType> {
     if nil_p(loc) {
         Some(CoreType::Nil)
     } else {
-        match CoreType::try_from(get_cfg_spec(loc)) {
+        match CoreType::try_from(raw_cfg_spec(loc)) {
             Ok(out) => Some(out),
             Err(_) => None,
         }
-    }
-}
-
-/// Returns the size of an object, which must be of a core type
-#[deprecated]
-pub fn core_size(loc: *mut SlHead) -> u32 {
-    use CoreType::*;
-    match core_type(loc).expect("not a core type") {
-        Nil | Bool => 0,
-        U8 | I8 => 1,
-        U16 | I16 | ErrCode => 2,
-        U32 | I32 | F32 | Symbol => 4,
-        U64 | I64 | F64 | Ref => 8,
-        U128 | I128 | TyDsc => 16,
-        VecStd => vec_size(8, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }),
-        VecStr => vec_size(8, 1, unsafe { read_field_unchecked::<u32>(loc, 0) }),
-        VecHash => vec_size(8, 8, unsafe { read_field_unchecked::<u32>(loc, 0) }),
-        VecArr => vec_size(
-            8,
-            temp_get_size(unsafe { read_field_unchecked::<u32>(loc, 0) }),
-            unsafe { read_field_unchecked::<u32>(loc, 4) },
-        ),
-        VecAny => vec_size(
-            12,
-            temp_get_size(unsafe { read_field_unchecked::<u32>(loc, 0) }),
-            unsafe { read_field_unchecked::<u32>(loc, 4) },
-        ),
-        ProcLambda => proc_lambda_size(unsafe { read_field_unchecked::<u16>(loc, 0) }),
-        ProcNative => proc_native_size(),
-        TyMfst => ty_manifest_size(unsafe { read_field_unchecked::<u32>(loc, 4) }),
     }
 }
 
@@ -722,7 +637,7 @@ pub fn temp_get_size(typ: u32) -> u32 {
 }
 
 /// Initializes a Sail object from a base sized type and a pointer
-pub fn temp_init_from(reg: *mut Region, typ: u32, ptr: *const u8) -> *mut SlHead {
+pub fn temp_init_from(reg: *mut Region, typ: u32, ptr: *const u8) -> SlHndl {
     assert!(temp_base_sized_p(typ));
     unsafe {
         match typ {
@@ -833,45 +748,47 @@ pub fn dec_refc(loc: *mut SlHead) -> bool {
 fn discern_refs_core(loc: *mut SlHead) -> Vec<*mut SlHead> {
     let mut acc = Vec::new();
 
-    let next = get_next_list_elt(loc);
-    if !nil_p(next) {
-        acc.push(next)
-    }
+    unsafe {
+        let next = (ptr::read_unaligned(loc as *mut usize) >> 16) as _;
+        if !nil_p(next) {
+            acc.push(next)
+        }
 
-    match core_type(loc) {
-        Some(CoreType::Ref) => {
-            let nest = ref_get(loc);
-            if !nil_p(nest) {
-                acc.push(nest)
-            }
-        }
-        Some(CoreType::ProcLambda) => {
-            let nest = proc_lambda_get_body(loc);
-            if !nil_p(nest) {
-                acc.push(nest)
-            }
-        }
-        Some(CoreType::VecStd) => {
-            for i in 0..stdvec_get_len(loc) {
-                let nest = stdvec_idx(loc, i);
+        match raw_core_type(loc) {
+            Some(CoreType::Ref) => {
+                let nest = ptr::read_unaligned(raw_val_ptr(loc) as _);
                 if !nil_p(nest) {
                     acc.push(nest)
                 }
             }
+            Some(CoreType::ProcLambda) => {
+                let nest = ptr::read_unaligned(raw_val_ptr(loc).add(2) as _);
+                if !nil_p(nest) {
+                    acc.push(nest)
+                }
+            }
+            Some(CoreType::VecStd) => {
+                for i in 0..ptr::read_unaligned(raw_val_ptr(loc).add(4) as *mut u32) {
+                    let nest = ptr::read_unaligned(raw_val_ptr(loc).add(8 * (i as usize + 1)) as _);
+                    if !nil_p(nest) {
+                        acc.push(nest)
+                    }
+                }
+            }
+            // TODO: Handle VecArr and VecAny possibilities?
+            _ => (),
         }
-        // TODO: Handle VecArr and VecAny possibilities?
-        _ => (),
     }
 
     acc
 }
 
 /// Return pointers to every object referenced by a given object
-fn discern_refs(env: *mut SlHead, loc: *mut SlHead) -> Vec<*mut SlHead> {
+fn discern_refs(env: SlHndl, loc: *mut SlHead) -> Vec<*mut SlHead> {
     let acc = discern_refs_core(loc);
 
-    if core_type(loc).is_none() {
-        let tid = get_type_id(loc);
+    if raw_core_type(loc).is_none() {
+        let tid = raw_type_id(loc);
 
         // TODO: adapt to work with custom types in time
 
@@ -896,28 +813,52 @@ fn discern_refs(env: *mut SlHead, loc: *mut SlHead) -> Vec<*mut SlHead> {
     acc
 }
 
-fn destroy_obj(env: *mut SlHead, loc: *mut SlHead) {
+// TODO: if the object points to non-core objects, this may cause leakage
+
+// TODO: there are some non-core types used in the core logic, but
+// their layout is known; we must use this knowledge to properly
+// handle those types
+fn destroy_obj_core(loc: *mut SlHead) {
     assert!(!nil_p(loc));
 
-    let refs = discern_refs(env, loc);
+    // log::debug!("Destroying object at {:x}", loc as usize);
+
+    let refs = discern_refs_core(loc);
 
     for r in refs {
         if !nil_p(r) && dec_refc(r) {
             // TODO: eliminate recursion
-            destroy_obj(env, r)
+            destroy_obj_core(r)
         }
     }
 
     unsafe { memmgt::dealloc(loc) }
 }
 
-pub fn write_ptr(env: *mut SlHead, loc: *mut SlHead, offset: u32, tgt: *mut SlHead) {
-    assert!(offset + PTR_LEN <= get_size(loc));
+pub fn destroy_obj(env: SlHndl, loc: *mut SlHead) {
+    assert!(!nil_p(loc));
+
+    let refs = discern_refs(env.clone(), loc);
+
+    for r in refs {
+        if !nil_p(r) && dec_refc(r) {
+            // TODO: eliminate recursion
+            destroy_obj(env.clone(), r)
+        }
+    }
+
+    unsafe { memmgt::dealloc(loc) }
+}
+
+
+pub fn write_ptr(env: SlHndl, loc: SlHndl, offset: u32, pto: SlHndl) {
+    assert!(offset + PTR_LEN <= loc.size());
 
     unsafe {
-        let dst = value_ptr(loc).add(offset as usize) as *mut _;
+        let dst = loc.value_ptr().add(offset as usize) as *mut _;
         let cur = ptr::read_unaligned(dst);
 
+        let tgt = pto.get_raw();
         ptr::write_unaligned(dst, tgt);
 
         if !nil_p(tgt) {
@@ -930,12 +871,13 @@ pub fn write_ptr(env: *mut SlHead, loc: *mut SlHead, offset: u32, tgt: *mut SlHe
     }
 }
 
-fn write_ptr_atomic(env: *mut SlHead, loc: *mut SlHead, offset: u32, tgt: *mut SlHead) {
-    assert!(offset + PTR_LEN <= get_size(loc));
+fn write_ptr_atomic(env: SlHndl, loc: SlHndl, offset: u32, pto: SlHndl) {
+    assert!(offset + PTR_LEN <= loc.size());
 
     unsafe {
-        let dst = value_ptr(loc).add(offset as usize) as *mut _;
+        let dst = loc.value_ptr().add(offset as usize) as *mut _;
 
+        let tgt = pto.get_raw();
         let cur = std::intrinsics::atomic_xchg_acqrel(dst, tgt);
 
         if !nil_p(tgt) {
@@ -949,23 +891,29 @@ fn write_ptr_atomic(env: *mut SlHead, loc: *mut SlHead, offset: u32, tgt: *mut S
 }
 
 pub fn write_ptr_cmpxcg(
-    env: *mut SlHead,
-    loc: *mut SlHead,
+    env: SlHndl,
+    loc: SlHndl,
     offset: u32,
-    old: *mut SlHead,
-    tgt: *mut SlHead,
+    old: Option<SlHndl>,
+    pto: SlHndl,
 ) -> bool {
-    assert!(offset + PTR_LEN <= get_size(loc));
+    assert!(offset + PTR_LEN <= loc.size());
 
     unsafe {
-        let dst = value_ptr(loc).add(offset as usize) as *mut _;
+        let dst = loc.value_ptr().add(offset as usize) as *mut _;
 
+        let old = match old {
+            Some(o) => o.get_raw(),
+            None => nil(),
+        };
+
+        let tgt = pto.get_raw();
         let p = std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, tgt).1;
 
         if p {
-            if !nil_p(tgt) {
-                inc_refc(tgt);
-            }
+            // if !nil_p(tgt) {
+            inc_refc(tgt);
+            // }
 
             if !nil_p(old) && dec_refc(old) {
                 destroy_obj(env, old)
@@ -976,68 +924,114 @@ pub fn write_ptr_cmpxcg(
     }
 }
 
+pub fn write_ptr_cmpxcg_may_clr(
+    env: SlHndl,
+    loc: SlHndl,
+    offset: u32,
+    old: Option<SlHndl>,
+    pto: Option<SlHndl>,
+) -> bool {
+    assert!(offset + PTR_LEN <= loc.size());
+
+    unsafe {
+        let dst = loc.value_ptr().add(offset as usize) as *mut _;
+
+        let olp = match old {
+            Some(o) => o.get_raw(),
+            None => nil(),
+        };
+
+        let tgt = match pto {
+            Some(p) => p.get_raw(),
+            None => nil(),
+        };
+
+        let p = std::intrinsics::atomic_cxchg_acqrel_acquire(dst, olp, tgt).1;
+
+        if p {
+            if !nil_p(tgt) {
+                inc_refc(tgt);
+            }
+
+            if !nil_p(olp) && dec_refc(olp) {
+                destroy_obj(env, olp)
+            }
+        }
+
+        p
+    }
+}
+
 /// Write a Sail object reference to a Sail object without any memory
 /// accounting; will NOT handle reference counts
-pub unsafe fn write_ptr_unsafe_unchecked(loc: *mut SlHead, offset: u32, tgt: *mut SlHead) {
-    debug_assert!(offset + PTR_LEN <= get_size(loc));
+pub unsafe fn write_ptr_unsafe_unchecked(loc: SlHndl, offset: u32, pto: SlHndl) {
+    debug_assert!(offset + PTR_LEN <= loc.size());
     unsafe {
-        let dst = value_ptr(loc).add(offset as usize) as *mut _;
-        ptr::write_unaligned(dst, tgt);
+        let dst = loc.value_ptr().add(offset as usize) as *mut _;
+        ptr::write_unaligned(dst, pto.get_raw());
     }
 }
 
 // TODO: shouldn't reads always increase the reference count?
 
-pub fn read_ptr(loc: *mut SlHead, offset: u32) -> *mut SlHead {
-    assert!(offset + PTR_LEN <= get_size(loc));
-    unsafe { ptr::read_unaligned(value_ptr(loc).add(offset as usize) as _) }
+pub fn read_ptr(loc: SlHndl, offset: u32) -> Option<SlHndl> {
+    assert!(offset + PTR_LEN <= loc.size());
+    unsafe {
+        SlHndl::from_raw(ptr::read_unaligned(
+            loc.value_ptr().add(offset as usize) as _
+        ))
+    }
 }
 
-pub fn read_ptr_atomic(loc: *mut SlHead, offset: u32) -> *mut SlHead {
-    assert!(offset + PTR_LEN <= get_size(loc));
-    unsafe { std::intrinsics::atomic_load_acquire(value_ptr(loc).add(offset as usize) as _) }
+pub fn read_ptr_atomic(loc: SlHndl, offset: u32) -> Option<SlHndl> {
+    assert!(offset + PTR_LEN <= loc.size());
+    unsafe {
+        SlHndl::from_raw(std::intrinsics::atomic_load_acquire(
+            loc.value_ptr().add(offset as usize) as _,
+        ))
+    }
 }
 
-pub unsafe fn read_ptr_unchecked(loc: *mut SlHead, offset: u32) -> *mut SlHead {
-    debug_assert!(offset + PTR_LEN <= get_size(loc));
-    unsafe { ptr::read_unaligned(value_ptr(loc).add(offset as usize) as _) }
+pub unsafe fn read_ptr_unchecked(loc: SlHndl, offset: u32) -> Option<SlHndl> {
+    debug_assert!(offset + PTR_LEN <= loc.size());
+    unsafe {
+        SlHndl::from_raw(ptr::read_unaligned(
+            loc.value_ptr().add(offset as usize) as _
+        ))
+    }
 }
 
 #[inline(always)]
-unsafe fn get_ptr_ptr_unchecked(loc: *mut SlHead, offset: u32) -> *mut *mut SlHead {
-    debug_assert!(offset + PTR_LEN <= get_size(loc));
-    value_ptr(loc).add(offset as usize) as _
+unsafe fn get_ptr_ptr_unchecked(loc: SlHndl, offset: u32) -> *mut *mut SlHead {
+    debug_assert!(offset + PTR_LEN <= loc.size());
+    loc.value_ptr().add(offset as usize) as _
 }
 
 // TODO: check that the given offset matches a valid field offset in the object?
 
 /// Write to a field of a Sail object of a core type
 #[inline(always)]
-pub fn core_write_field<T: SizedBase>(loc: *mut SlHead, offset: u32, src: T) {
+pub fn core_write_field<T: SizedBase>(loc: SlHndl, offset: u32, src: T) {
+    assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
     unsafe {
-        let dst = value_ptr(loc).add(offset as usize) as *mut T;
-        assert!(offset + mem::size_of::<T>() as u32 <= core_size(loc));
+        let dst = loc.value_ptr().add(offset as usize) as *mut T;
         ptr::write_unaligned(dst, src)
     }
 }
 
 /// Write to a field of a Sail object without any checks
 #[inline(always)]
-pub unsafe fn write_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: u32, src: T) {
-    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
-    let dst = value_ptr(loc).add(offset as usize) as *mut T;
+pub unsafe fn write_field_unchecked<T: SizedBase>(loc: SlHndl, offset: u32, src: T) {
+    debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
+    let dst = loc.value_ptr().add(offset as usize) as *mut T;
     ptr::write_unaligned(dst, src)
 }
 
 /// Write to a field of a Sail object atomically without any checks
 #[inline(always)]
-pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(
-    loc: *mut SlHead,
-    offset: u32,
-    src: T,
-) {
-    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
-    let dst = value_ptr(loc).add(offset as usize) as *mut T;
+pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(loc: SlHndl, offset: u32, src: T) {
+    debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
+    let dst = loc.value_ptr().add(offset as usize) as *mut T;
     std::intrinsics::atomic_store_release(dst, src);
 }
 
@@ -1048,65 +1042,83 @@ pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(
 /// written
 #[inline(always)]
 pub unsafe fn write_field_cmpxcg_unchecked<T: SizedBase + Copy>(
-    loc: *mut SlHead,
+    loc: SlHndl,
     offset: u32,
     old: T,
     src: T,
 ) -> bool {
-    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
-    let dst = value_ptr(loc).add(offset as usize) as *mut T;
+    debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
+    let dst = loc.value_ptr().add(offset as usize) as *mut T;
     std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, src).1
 }
 
 /// Read from a field of a Sail object of a core type
 #[inline(always)]
-pub fn core_read_field<T: SizedBase>(loc: *mut SlHead, offset: u32) -> T {
+pub fn core_read_field<T: SizedBase>(loc: SlHndl, offset: u32) -> T {
+    assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
     unsafe {
-        let src = value_ptr(loc).add(offset as usize) as *mut T;
-        assert!(offset + mem::size_of::<T>() as u32 <= core_size(loc));
+        let src = loc.value_ptr().add(offset as usize) as *mut T;
         ptr::read_unaligned(src)
     }
 }
 
 /// Get a pointer into a Sail object without any checks
 #[inline(always)]
-unsafe fn get_field_ptr_unchecked<T: SizedBase>(loc: *mut SlHead, offset: u32) -> *mut T {
-    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
-    value_ptr(loc).add(offset as usize) as *mut T
+unsafe fn get_field_ptr_unchecked<T: SizedBase>(loc: SlHndl, offset: u32) -> *mut T {
+    debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
+    loc.value_ptr().add(offset as usize) as *mut T
 }
 
 /// Read from a field of a Sail object without any checks
 #[inline(always)]
-pub unsafe fn read_field_unchecked<T: SizedBase>(loc: *mut SlHead, offset: u32) -> T {
-    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
+pub unsafe fn read_field_unchecked<T: SizedBase>(loc: SlHndl, offset: u32) -> T {
     ptr::read_unaligned(get_field_ptr_unchecked(loc, offset))
 }
 
 /// Read from a field of a Sail object atomically without any checks
 #[inline(always)]
-pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(loc: *mut SlHead, offset: u32) -> T {
-    debug_assert!(offset as usize + mem::size_of::<T>() <= get_size(loc) as usize);
-    let src = value_ptr(loc).add(offset as usize) as *mut T;
-    std::intrinsics::atomic_load_acquire(src)
+pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(loc: SlHndl, offset: u32) -> T {
+    std::intrinsics::atomic_load_acquire(get_field_ptr_unchecked(loc, offset))
 }
 
 /// Set the pointer to a list element's next element
 #[inline(always)]
-pub fn set_next_list_elt(env: *mut SlHead, loc: *mut SlHead, next: *mut SlHead) {
+pub fn set_next_list_elt(env: SlHndl, loc: SlHndl, next: SlHndl) {
     // TODO: what happens if the reference count changes between the
     // read and the write? (answer: wrong count ends up written)
 
     unsafe {
         let (cfg, prev_ptr) = {
-            let head = ptr::read_unaligned(loc as *mut u64);
+            let head = ptr::read_unaligned(loc.get_raw() as *mut u64);
             (head & u16::MAX as u64, (head >> 16) as *mut SlHead)
         };
 
-        ptr::write_unaligned(loc as *mut u64, ((next as u64) << 16) + cfg);
+        let tgt = next.get_raw();
 
-        if !nil_p(next) {
-            inc_refc(next);
+        ptr::write_unaligned(loc.get_raw() as *mut u64, ((tgt as u64) << 16) + cfg);
+
+        // if !nil_p(next) {
+        inc_refc(tgt);
+        // }
+
+        if !nil_p(prev_ptr) && dec_refc(prev_ptr) {
+            destroy_obj(env, prev_ptr)
         }
+    }
+}
+
+#[inline(always)]
+pub fn clr_next_list_elt(env: SlHndl, loc: SlHndl) {
+    // TODO: what happens if the reference count changes between the
+    // read and the write? (answer: wrong count ends up written)
+
+    unsafe {
+        let (cfg, prev_ptr) = {
+            let head = ptr::read_unaligned(loc.get_raw() as *mut u64);
+            (head & u16::MAX as u64, (head >> 16) as *mut SlHead)
+        };
+
+        ptr::write_unaligned(loc.get_raw() as *mut u64, cfg);
 
         if !nil_p(prev_ptr) && dec_refc(prev_ptr) {
             destroy_obj(env, prev_ptr)
@@ -1120,19 +1132,26 @@ pub fn set_next_list_elt(env: *mut SlHead, loc: *mut SlHead, next: *mut SlHead) 
 /// current pointer is equivalent to `old`
 #[inline(always)]
 pub fn set_next_list_elt_cmpxcg(
-    env: *mut SlHead,
-    loc: *mut SlHead,
-    old: *mut SlHead,
-    new: *mut SlHead,
+    env: SlHndl,
+    loc: SlHndl,
+    old: Option<SlHndl>,
+    new: SlHndl,
 ) -> bool {
     unsafe {
-        let mut cfg = std::intrinsics::atomic_load_acquire(loc as *mut u16) as u64;
+        let lcp = loc.get_raw();
+        let olp = match old {
+            Some(o) => o.get_raw(),
+            None => nil(),
+        };
+        let nwp = new.get_raw();
+
+        let mut cfg = std::intrinsics::atomic_load_acquire(lcp as *mut u16) as u64;
 
         let p = loop {
             let (cur, p) = std::intrinsics::atomic_cxchg_acqrel_acquire(
-                loc as *mut u64,
-                ((old as u64) << 16) + cfg,
-                ((new as u64) << 16) + cfg,
+                lcp as *mut u64,
+                ((olp as u64) << 16) + cfg,
+                ((nwp as u64) << 16) + cfg,
             );
 
             let cur_cfg = cur & u16::MAX as u64;
@@ -1145,12 +1164,12 @@ pub fn set_next_list_elt_cmpxcg(
         };
 
         if p {
-            if !nil_p(new) {
-                inc_refc(new);
-            }
+            // if !nil_p(new) {
+            inc_refc(nwp);
+            // }
 
-            if !nil_p(old) && dec_refc(old) {
-                destroy_obj(env, old)
+            if !nil_p(olp) && dec_refc(olp) {
+                destroy_obj(env, olp)
             }
         }
 
@@ -1159,230 +1178,231 @@ pub fn set_next_list_elt_cmpxcg(
 }
 
 #[inline(always)]
-pub unsafe fn set_next_list_elt_unsafe_unchecked(loc: *mut SlHead, next: *mut SlHead) {
-    let head = ptr::read_unaligned(loc as *mut u16);
-    ptr::write_unaligned(loc as *mut u64, ((next as u64) << 16) + head as u64);
+pub unsafe fn set_next_list_elt_unsafe_unchecked(loc: SlHndl, next: SlHndl) {
+    let head = ptr::read_unaligned(loc.get_raw() as *mut u16);
+    ptr::write_unaligned(
+        loc.get_raw() as *mut u64,
+        ((next.get_raw() as u64) << 16) + head as u64,
+    );
 }
+
+// TODO: in future, handle redirects?
 
 /// Gets the pointer to the next element from a list element
-///
-/// TODO: in future, handle redirects?
 #[inline(always)]
-pub fn get_next_list_elt(loc: *mut SlHead) -> *mut SlHead {
-    assert!(!nil_p(loc));
-    unsafe { (ptr::read_unaligned(loc as *mut usize) >> 16) as *mut SlHead }
+pub fn get_next_list_elt(loc: SlHndl) -> Option<SlHndl> {
+    unsafe { SlHndl::from_raw((ptr::read_unaligned(loc.get_raw() as *mut usize) >> 16) as _) }
 }
 
 #[inline(always)]
-pub fn ref_make(reg: *mut Region) -> *mut SlHead {
-    unsafe {
-        let ptr = memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr));
-        write_ptr_unsafe_unchecked(ptr, 0, nil());
-        ptr
-    }
+pub fn ref_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr))) }
 }
 
 // TODO: disallow null pointers to make sure that nil and the empty list are the same?
+
 #[inline(always)]
-pub fn ref_init(reg: *mut Region, val: *mut SlHead) -> *mut SlHead {
+pub fn ref_init(reg: *mut Region, val: SlHndl) -> SlHndl {
     unsafe {
-        let ptr = memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr));
-        write_ptr_unsafe_unchecked(ptr, 0, val);
-        inc_refc(val);
-        ptr
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr)));
+
+        inc_refc(val.get_raw());
+        write_ptr_unsafe_unchecked(out.clone(), 0, val);
+
+        out
     }
 }
 
 #[inline(always)]
-pub fn sym_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, SYMBOL_LEN, memmgt::cap(Cfg::B4Sym)) }
+pub fn sym_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, SYMBOL_LEN, memmgt::cap(Cfg::B4Sym))) }
 }
 
 #[inline(always)]
-pub fn sym_init(reg: *mut Region, val: u32) -> *mut SlHead {
-    let ptr = sym_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
-    ptr
+pub fn sym_init(reg: *mut Region, val: u32) -> SlHndl {
+    let out = sym_make(reg);
+    unsafe { write_field_unchecked(out.clone(), 0, val) };
+    out
 }
 
 #[inline(always)]
-pub fn stdvec_make(reg: *mut Region, cap: u32) -> *mut SlHead {
+pub fn stdvec_make(reg: *mut Region, cap: u32) -> SlHndl {
     // cap, len, (pointer * cap)
     unsafe {
         let size = vec_size(NUM_32_LEN * 2, PTR_LEN, cap);
-        let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::VecStd));
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::VecStd)));
 
-        write_field_unchecked::<u32>(ptr, 0, cap);
-        write_field_unchecked::<u32>(ptr, 4, 0);
+        write_field_unchecked::<u32>(out.clone(), 0, cap);
+        // write_field_unchecked::<u32>(ptr, 4, 0);
 
-        ptr
+        out
     }
 }
 
 #[inline(always)]
-pub fn stdvec_init(reg: *mut Region, val: &[*mut SlHead]) -> *mut SlHead {
+pub fn stdvec_init(reg: *mut Region, val: &[SlHndl]) -> SlHndl {
     let len = val.len() as u32;
-    let ptr = stdvec_make(reg, len);
-    unsafe { write_field_unchecked(ptr, 4, len) }
+    let out = stdvec_make(reg, len);
+    unsafe { write_field_unchecked(out.clone(), 4, len) }
 
-    for (i, p) in val.iter().enumerate() {
-        unsafe { write_ptr_unsafe_unchecked(ptr, 8 + (8 * i as u32), *p) }
-        inc_refc(*p);
+    for (i, p) in val.into_iter().enumerate() {
+        unsafe {
+            inc_refc(p.get_raw());
+            write_ptr_unsafe_unchecked(out.clone(), 8 + (8 * i as u32), p.clone());
+        }
     }
 
-    ptr
+    out
 }
 
 #[inline(always)]
-pub fn string_make(reg: *mut Region, cap: u32) -> *mut SlHead {
+pub fn string_make(reg: *mut Region, cap: u32) -> SlHndl {
     // cap, len, (byte * cap)
     unsafe {
         let size = vec_size(NUM_32_LEN * 2, NUM_8_LEN, cap);
-        let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::VecStr));
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::VecStr)));
 
-        write_field_unchecked::<u32>(ptr, 0, cap);
-        write_field_unchecked::<u32>(ptr, 4, 0);
+        write_field_unchecked::<u32>(out.clone(), 0, cap);
+        // write_field_unchecked::<u32>(ptr, 4, 0);
 
-        ptr
+        out
     }
 }
 
 #[inline(always)]
-pub fn string_init(reg: *mut Region, val: &str) -> *mut SlHead {
+pub fn string_init(reg: *mut Region, val: &str) -> SlHndl {
     let len = val.len();
-    let ptr = string_make(reg, len.try_into().unwrap());
+    let out = string_make(reg, len.try_into().unwrap());
 
     unsafe {
-        write_field_unchecked(ptr, 4, len as u32);
+        write_field_unchecked(out.clone(), 4, len as u32);
 
-        let local = std::slice::from_raw_parts_mut(value_ptr(ptr).add(8), len);
+        let local = std::slice::from_raw_parts_mut(out.value_ptr().add(8), len);
         local.copy_from_slice(val.as_bytes());
     }
 
-    ptr
+    out
 }
 
 #[inline(always)]
-pub fn hashvec_make(reg: *mut Region, size: u32) -> *mut SlHead {
+pub fn hashvec_make(reg: *mut Region, size: u32) -> SlHndl {
     // size, fill, (pointer * size)
     unsafe {
         let top_size = vec_size(NUM_32_LEN * 2, PTR_LEN, size);
-        let ptr = memmgt::alloc(reg, top_size, memmgt::cap(Cfg::VecHash));
+        let out =
+            SlHndl::from_raw_unchecked(memmgt::alloc(reg, top_size, memmgt::cap(Cfg::VecHash)));
 
-        write_field_unchecked::<u32>(ptr, 0, size); // size
-        write_field_unchecked::<u32>(ptr, 4, 0); // fill
+        write_field_unchecked::<u32>(out.clone(), 0, size); // size
 
-        for i in 0..size {
-            write_ptr_unsafe_unchecked(ptr, 4 + 4 + (i * 8), ptr::null_mut());
-        }
+        // write_field_unchecked::<u32>(ptr, 4, 0); // fill
 
-        ptr
+        // for i in 0..size {
+        //     write_ptr_unsafe_unchecked(out, 4 + 4 + (i * 8), ptr::null_mut());
+        // }
+
+        out
     }
 }
 
 #[inline(always)]
-pub fn proc_lambda_make(reg: *mut Region, argct: u16) -> *mut SlHead {
+pub fn proc_lambda_make(reg: *mut Region, argct: u16) -> SlHndl {
     // argct, pointer, (symbol * argct)
     unsafe {
         let size = proc_lambda_size(argct);
-        let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::ProcLambda));
+        let out =
+            SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::ProcLambda)));
 
-        write_field_unchecked::<u16>(ptr, 0, argct);
-        write_ptr_unsafe_unchecked(ptr, 2, ptr::null_mut());
+        write_field_unchecked::<u16>(out.clone(), 0, argct);
+        // write_ptr_unsafe_unchecked(out, 2, ptr::null_mut());
 
-        ptr
+        out
     }
 }
 
 #[inline(always)]
-pub fn proc_native_make(reg: *mut Region, argct: u16) -> *mut SlHead {
+pub fn proc_native_make(reg: *mut Region, argct: u16) -> SlHndl {
     // argct, pointer
     unsafe {
         let size = proc_native_size();
-        let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::ProcNative));
+        let out =
+            SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::ProcNative)));
 
-        write_field_unchecked::<u16>(ptr, 0, argct);
-        write_ptr_unsafe_unchecked(ptr, 2, ptr::null_mut());
+        write_field_unchecked::<u16>(out.clone(), 0, argct);
+        // write_ptr_unsafe_unchecked(ptr, 2, ptr::null_mut());
 
-        ptr
+        out
     }
 }
 
-pub fn proc_native_init(reg: *mut Region, argct: u16, fun: NativeFn) -> *mut SlHead {
-    // argct, pointer
-    unsafe {
-        let size = proc_native_size();
-        let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::ProcNative));
-
-        write_field_unchecked::<u16>(ptr, 0, argct);
-        write_field_unchecked(ptr, 2, fun as u64);
-
-        ptr
-    }
+pub fn proc_native_init(reg: *mut Region, argct: u16, fun: NativeFn) -> SlHndl {
+    let out = proc_native_make(reg, argct);
+    unsafe { write_field_unchecked(out.clone(), 2, fun as u64) };
+    out
 }
 
 // TODO: this implementation will **easily** cause memory leaks
 // TODO: decrement the reference count of previous object
+
 #[inline(always)]
-pub fn ref_set(env: *mut SlHead, loc: *mut SlHead, dst: *mut SlHead) {
+pub fn ref_set(env: SlHndl, loc: SlHndl, dst: SlHndl) {
     coretypck!(loc ; Ref);
     // core_write_field(loc, 0, dst)
     write_ptr(env, loc, 0, dst)
 }
 
 #[inline(always)]
-pub fn ref_get(loc: *mut SlHead) -> *mut SlHead {
+pub fn ref_get(loc: SlHndl) -> Option<SlHndl> {
     coretypck!(loc ; Ref);
     read_ptr(loc, 0)
 }
 
 #[inline(always)]
-fn ref_empty_p(loc: *mut SlHead) -> bool {
-    nil_p(ref_get(loc))
-}
-
-#[inline(always)]
-pub fn sym_set_id(loc: *mut SlHead, id: u32) {
+pub fn sym_set_id(loc: SlHndl, id: u32) {
     coretypck!(loc ; Symbol);
     core_write_field(loc, 0, id)
 }
 
 #[inline(always)]
-pub fn sym_get_id(loc: *mut SlHead) -> u32 {
+pub fn sym_get_id(loc: SlHndl) -> u32 {
     coretypck!(loc ; Symbol);
     core_read_field(loc, 0)
 }
 
 #[inline(always)]
-fn stdvec_set_len(loc: *mut SlHead, len: u32) {
+fn stdvec_set_len(loc: SlHndl, len: u32) {
     coretypck!(loc ; VecStd);
     core_write_field(loc, 4, len)
 }
 
 #[inline(always)]
-pub fn stdvec_get_len(loc: *mut SlHead) -> u32 {
+pub fn stdvec_get_len(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecStd);
     core_read_field(loc, 4)
 }
 
 #[inline(always)]
-fn stdvec_get_cap(loc: *mut SlHead) -> u32 {
+fn stdvec_get_cap(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecStd);
     core_read_field(loc, 0)
 }
 
 #[inline(always)]
-pub fn stdvec_idx(loc: *mut SlHead, idx: u32) -> *mut SlHead {
+pub fn stdvec_idx(loc: SlHndl, idx: u32) -> SlHndl {
     coretypck!(loc ; VecStd);
-    read_ptr(loc, 4 + 4 + (idx * 8))
+    // all slots up to length must be filled
+    read_ptr(loc, 4 + 4 + (idx * 8)).unwrap()
 }
 
 #[inline(always)]
-pub fn stdvec_push(loc: *mut SlHead, item: *mut SlHead) {
-    let (len, cap) = (stdvec_get_len(loc), stdvec_get_cap(loc));
+pub fn stdvec_push(loc: SlHndl, item: SlHndl) {
+    let (len, cap) = (stdvec_get_len(loc.clone()), stdvec_get_cap(loc.clone()));
 
     if len < cap {
-        unsafe { write_ptr_unsafe_unchecked(loc, 4 + 4 + (len * 8), item) };
+        unsafe {
+            inc_refc(item.get_raw());
+            write_ptr_unsafe_unchecked(loc.clone(), 4 + 4 + (len * 8), item);
+        }
+
         stdvec_set_len(loc, len + 1);
     } else {
         panic!("not enough space in vec");
@@ -1390,34 +1410,34 @@ pub fn stdvec_push(loc: *mut SlHead, item: *mut SlHead) {
 }
 
 #[inline(always)]
-fn string_get_len(loc: *mut SlHead) -> u32 {
+fn string_get_len(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecStr);
     core_read_field(loc, NUM_32_LEN)
 }
 
 #[inline(always)]
-fn string_set_len(loc: *mut SlHead, len: u32) {
+fn string_set_len(loc: SlHndl, len: u32) {
     coretypck!(loc ; VecStr);
     core_write_field(loc, NUM_32_LEN, len)
 }
 
 #[inline(always)]
-fn string_get_cap(loc: *mut SlHead) -> u32 {
+fn string_get_cap(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecStr);
     core_read_field(loc, 0)
 }
 
 #[inline(always)]
-pub fn string_set(loc: *mut SlHead, val: &str) {
+pub fn string_set(loc: SlHndl, val: &str) {
     assert!(val.len() <= u32::MAX as usize - 8);
 
-    let cap = string_get_cap(loc);
+    let cap = string_get_cap(loc.clone());
     let len = val.len() as u32;
 
     // TODO: copy using a purpose-designed function
     if len <= cap {
         for (count, c) in val.bytes().enumerate() {
-            core_write_field(loc, 4 + 4 + count as u32, c);
+            core_write_field(loc.clone(), 4 + 4 + count as u32, c);
         }
         string_set_len(loc, len);
     } else {
@@ -1426,19 +1446,19 @@ pub fn string_set(loc: *mut SlHead, val: &str) {
 }
 
 #[inline(always)]
-pub fn string_get(loc: *mut SlHead) -> &'static str {
-    let len = string_get_len(loc);
+pub fn string_get(loc: SlHndl) -> &'static str {
+    let len = string_get_len(loc.clone());
 
     unsafe {
         std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            value_ptr(loc).offset(4 + 4) as *mut u8,
+            loc.value_ptr().offset(4 + 4) as *mut u8,
             len as usize,
         ))
     }
 }
 
 #[inline(always)]
-pub fn hashvec_get_size(loc: *mut SlHead) -> u32 {
+pub fn hashvec_get_size(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecHash);
     core_read_field(loc, 0)
 }
@@ -1447,7 +1467,7 @@ pub fn hashvec_get_size(loc: *mut SlHead) -> u32 {
 ///
 /// TODO: symbol handling etc
 #[inline(always)]
-fn id(fst: *mut SlHead, lst: *mut SlHead) -> bool {
+fn id(fst: SlHndl, lst: SlHndl) -> bool {
     fst == lst
 }
 
@@ -1455,22 +1475,20 @@ fn id(fst: *mut SlHead, lst: *mut SlHead) -> bool {
 ///
 /// TODO: make eq and hash actually function for all types
 #[inline(always)]
-pub fn core_eq(fst: *mut SlHead, lst: *mut SlHead) -> bool {
-    if id(fst, lst) {
+pub fn core_eq(fst: SlHndl, lst: SlHndl) -> bool {
+    if id(fst.clone(), lst.clone()) {
         true
     } else {
-        match core_type(fst) {
+        match fst.core_type() {
             Some(CoreType::Ref) => {
-                if ref_empty_p(fst) {
-                    nil_p(lst) || (core_type(lst).unwrap() == CoreType::Ref && ref_empty_p(lst))
+                if ref_get(fst).is_none() {
+                    coretypp!(lst ; Ref) && ref_get(lst).is_none()
                 } else {
                     false
                 }
             }
-            Some(CoreType::Nil) => {
-                nil_p(lst) || (core_type(lst).unwrap() == CoreType::Ref && ref_empty_p(lst))
-            }
-            Some(typ) if typ != core_type(lst).unwrap() => false,
+            Some(CoreType::Nil) => coretypp!(lst ; Ref) && ref_get(lst).is_none(),
+            Some(typ) if typ != lst.core_type().unwrap() => false,
             Some(CoreType::Symbol) => sym_get_id(fst) == sym_get_id(lst),
             Some(CoreType::VecStr) => string_get(fst) == string_get(lst),
             _ => false,
@@ -1480,8 +1498,8 @@ pub fn core_eq(fst: *mut SlHead, lst: *mut SlHead) -> bool {
 
 /// Computes a hash value for the provided object
 #[inline(always)]
-fn core_hash(loc: *mut SlHead) -> u32 {
-    match core_type(loc).expect("not a core type") {
+fn core_hash(loc: SlHndl) -> u32 {
+    match loc.core_type().expect("not a core type") {
         CoreType::Symbol => sym_get_id(loc),
         CoreType::VecStr => str_hash(string_get(loc)),
         _ => 0,
@@ -1500,21 +1518,24 @@ fn str_hash(slice: &str) -> u32 {
 
 // TODO: automatically resize as needed (probably as an option) (need "fill" field in subhead)
 // TODO: clean up shadowed entries sometime
-pub fn hash_map_insert(reg: *mut Region, loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
-    let entry = core_cons_copy(reg, key, val);
+pub fn hash_map_insert(reg: *mut Region, loc: SlHndl, key: SlHndl, val: SlHndl) {
+    let entry = core_cons_copy(reg, key.clone(), val);
 
-    let size = hashvec_get_size(loc);
+    let size = hashvec_get_size(loc.clone());
     let hash = core_hash(key) % size;
     let idx = 4 + 4 + (hash * PTR_LEN);
 
-    let next = read_ptr(loc, idx);
+    let next = read_ptr(loc.clone(), idx);
 
-    if !nil_p(next) {
-        unsafe { set_next_list_elt_unsafe_unchecked(entry, next) };
+    if let Some(nx) = next {
+        // total references to next entry unchanged by insertion
+        unsafe { set_next_list_elt_unsafe_unchecked(entry.clone(), nx) };
     }
 
-    unsafe { write_ptr_unsafe_unchecked(loc, idx, entry) }
-    inc_refc(entry);
+    unsafe {
+        inc_refc(entry.get_raw());
+        write_ptr_unsafe_unchecked(loc, idx, entry);
+    }
 }
 
 // fn alist_map_insert(reg: *mut Region, loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
@@ -1552,51 +1573,51 @@ pub fn hash_map_insert(reg: *mut Region, loc: *mut SlHead, key: *mut SlHead, val
 // }
 
 #[inline(always)]
-pub fn proc_get_argct(loc: *mut SlHead) -> u16 {
-    assert!({
-        let typ = core_type(loc).unwrap();
-        typ == CoreType::ProcLambda || typ == CoreType::ProcNative
-    });
+pub fn proc_get_argct(loc: SlHndl) -> u16 {
+    assert!(loc.proc_p());
     core_read_field(loc, 0)
 }
 
 #[inline(always)]
-pub fn proc_lambda_set_arg(loc: *mut SlHead, idx: u16, arg: u32) {
+pub fn proc_lambda_set_arg(loc: SlHndl, idx: u16, arg: u32) {
     coretypck!(loc ; ProcLambda);
     core_write_field(loc, (NUM_16_LEN + PTR_LEN) + (idx as u32 * SYMBOL_LEN), arg)
 }
 
 #[inline(always)]
-pub fn proc_lambda_get_arg(reg: *mut Region, loc: *mut SlHead, idx: u16) -> *mut SlHead {
+pub fn proc_lambda_get_arg(reg: *mut Region, loc: SlHndl, idx: u16) -> SlHndl {
     sym_init(reg, proc_lambda_get_arg_id(loc, idx))
 }
 
 #[inline(always)]
-pub fn proc_lambda_get_arg_id(loc: *mut SlHead, idx: u16) -> u32 {
+pub fn proc_lambda_get_arg_id(loc: SlHndl, idx: u16) -> u32 {
     coretypck!(loc ; ProcLambda);
     core_read_field(loc, (NUM_16_LEN + PTR_LEN) + (idx as u32 * SYMBOL_LEN))
 }
 
 #[inline(always)]
-pub fn proc_lambda_set_body(loc: *mut SlHead, body: *mut SlHead) {
+pub fn proc_lambda_set_body(loc: SlHndl, body: SlHndl) {
     coretypck!(loc ; ProcLambda);
-    unsafe { write_ptr_unsafe_unchecked(loc, NUM_16_LEN, body) }
+    unsafe {
+        inc_refc(body.get_raw());
+        write_ptr_unsafe_unchecked(loc, NUM_16_LEN, body);
+    }
 }
 
 #[inline(always)]
-pub fn proc_lambda_get_body(loc: *mut SlHead) -> *mut SlHead {
+pub fn proc_lambda_get_body(loc: SlHndl) -> Option<SlHndl> {
     coretypck!(loc ; ProcLambda);
     read_ptr(loc, NUM_16_LEN)
 }
 
 #[inline(always)]
-pub fn proc_native_set_body(loc: *mut SlHead, fun: NativeFn) {
+pub fn proc_native_set_body(loc: SlHndl, fun: NativeFn) {
     coretypck!(loc ; ProcNative);
     core_write_field(loc, NUM_16_LEN, fun as u64)
 }
 
 #[inline(always)]
-pub fn proc_native_get_body(loc: *mut SlHead) -> NativeFn {
+pub fn proc_native_get_body(loc: SlHndl) -> NativeFn {
     coretypck!(loc ; ProcNative);
     let ptr = core_read_field::<u64>(loc, NUM_16_LEN) as *const ();
     unsafe { mem::transmute::<_, NativeFn>(ptr) }
@@ -1607,12 +1628,17 @@ pub fn proc_native_get_body(loc: *mut SlHead) -> NativeFn {
 /// Copies the value from a Sail object of a core type into a newly
 /// allocated object
 #[inline(always)]
-pub fn core_copy_val(reg: *mut Region, src: *mut SlHead) -> *mut SlHead {
-    let (siz, cfg) = (core_size(src), get_cfg_byte(src));
+pub fn core_copy_val(reg: *mut Region, src: SlHndl) -> SlHndl {
+    let (siz, cfg) = (src.size(), src.cfg_byte());
 
     unsafe {
-        let dst = memmgt::alloc(reg, siz, memmgt::cap(cfg.try_into().unwrap()));
-        ptr::copy_nonoverlapping(value_ptr(src), value_ptr(dst), siz as usize);
+        let dst = SlHndl::from_raw_unchecked(memmgt::alloc(
+            reg,
+            siz,
+            memmgt::cap(cfg.try_into().unwrap()),
+        ));
+
+        ptr::copy_nonoverlapping(src.value_ptr(), dst.value_ptr(), siz as usize);
         dst
     }
 }
@@ -1620,12 +1646,14 @@ pub fn core_copy_val(reg: *mut Region, src: *mut SlHead) -> *mut SlHead {
 /// Copies the values from a pair of Sail objects of core types into a
 /// two element list structure
 #[inline(always)]
-fn core_cons_copy(reg: *mut Region, car: *mut SlHead, cdr: *mut SlHead) -> *mut SlHead {
+fn core_cons_copy(reg: *mut Region, car: SlHndl, cdr: SlHndl) -> SlHndl {
     let new_cdr = core_copy_val(reg, cdr);
     let new_car = core_copy_val(reg, car);
 
-    unsafe { set_next_list_elt_unsafe_unchecked(new_car, new_cdr) };
-    inc_refc(new_cdr);
+    unsafe {
+        inc_refc(new_cdr.get_raw());
+        set_next_list_elt_unsafe_unchecked(new_car.clone(), new_cdr);
+    }
 
     ref_init(reg, new_car)
 }
@@ -1677,22 +1705,23 @@ struct _EnvSlot {
 }
 
 const ENV_LAYER_SLOTS: u32 = 41;
+const ENV_MAX_PROBES: u32 = 5;
 
 /// Creates an environment, which is a list of structures containing
 /// distinct hash dictionaries for binding objects, modules, and types
 /// to symbols
-pub fn env_create(reg: *mut Region, parent: *mut SlHead) -> *mut SlHead {
+pub fn env_create(reg: *mut Region, parent: Option<SlHndl>) -> SlHndl {
     unsafe {
-        let env = memmgt::alloc(reg, 3 * PTR_LEN, super::T_ENV_ID.0);
-        set_next_list_elt_unsafe_unchecked(env, parent);
+        let env = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 3 * PTR_LEN, super::T_ENV_ID.0));
 
-        if !nil_p(parent) {
-            inc_refc(parent);
+        if let Some(par) = parent {
+            inc_refc(par.get_raw());
+            set_next_list_elt_unsafe_unchecked(env.clone(), par);
         }
 
-        write_ptr_unsafe_unchecked(env, 0, nil());
-        write_ptr_unsafe_unchecked(env, 8, nil());
-        write_ptr_unsafe_unchecked(env, 16, nil());
+        // write_ptr_unsafe_unchecked(env, 0, nil());
+        // write_ptr_unsafe_unchecked(env, 8, nil());
+        // write_ptr_unsafe_unchecked(env, 16, nil());
 
         // println!("<> environment created");
 
@@ -1700,16 +1729,16 @@ pub fn env_create(reg: *mut Region, parent: *mut SlHead) -> *mut SlHead {
     }
 }
 
-pub fn env_layer_make(reg: *mut Region) -> *mut SlHead {
+pub fn env_layer_make(reg: *mut Region) -> SlHndl {
     let layer = unsafe {
-        memmgt::alloc(
+        SlHndl::from_raw_unchecked(memmgt::alloc(
             reg,
             ENV_LAYER_SLOTS * (SYMBOL_LEN + PTR_LEN),
             super::T_ENV_LYR_ID.0,
-        )
+        ))
     };
 
-    let start = value_ptr(layer) as *mut u32;
+    let start = layer.value_ptr() as *mut u32;
 
     for i in 0..ENV_LAYER_SLOTS {
         unsafe {
@@ -1725,7 +1754,7 @@ pub fn env_layer_make(reg: *mut Region) -> *mut SlHead {
 /// Looks up the given symbol in the given environment, returning the
 /// object it refers to
 #[inline(always)]
-pub fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> Option<*mut SlHead> {
+pub fn env_lookup(env: SlHndl, sym: SlHndl) -> Option<SlHndl> {
     coretypck!(sym ; Symbol);
     env_lookup_by_id(env, sym_get_id(sym))
 }
@@ -1733,10 +1762,11 @@ pub fn env_lookup(env: *mut SlHead, sym: *mut SlHead) -> Option<*mut SlHead> {
 /// Looks up the given symbol ID in the given environment, returning
 /// the object it refers to
 #[inline(always)]
-pub fn env_lookup_by_id(env: *mut SlHead, sym_id: u32) -> Option<*mut SlHead> {
-    env_get_binding_loc(env, sym_id).map(|i| match i {
-        Some(loc) => unsafe { ptr::read_unaligned(loc) },
-        None => nil(),
+pub fn env_lookup_by_id(env: SlHndl, sym_id: u32) -> Option<SlHndl> {
+    env_get_binding_loc(env, sym_id).map(|l| unsafe {
+        let obj = ptr::read_unaligned(l);
+        inc_refc(obj);
+        SlHndl::from_raw_unchecked(obj)
     })
 }
 
@@ -1745,7 +1775,7 @@ pub fn env_lookup_by_id(env: *mut SlHead, sym_id: u32) -> Option<*mut SlHead> {
 ///
 /// Returns false if no mutation was performed, or true if it was
 #[inline(always)]
-pub fn env_scope_mut(env: *mut SlHead, sym: *mut SlHead, obj: *mut SlHead) -> bool {
+pub fn env_scope_mut(env: SlHndl, sym: SlHndl, obj: SlHndl) -> bool {
     coretypck!(sym ; Symbol);
     env_scope_mut_by_id(env, sym_get_id(sym), obj)
 }
@@ -1755,10 +1785,19 @@ pub fn env_scope_mut(env: *mut SlHead, sym: *mut SlHead, obj: *mut SlHead) -> bo
 ///
 /// Returns false if no mutation was performed, or true if it was
 #[inline(always)]
-pub fn env_scope_mut_by_id(env: *mut SlHead, sym_id: u32, obj: *mut SlHead) -> bool {
-    match env_get_binding_loc(env, sym_id).unwrap_or(None) {
+pub fn env_scope_mut_by_id(env: SlHndl, sym_id: u32, obj: SlHndl) -> bool {
+    match env_get_binding_loc(env.clone(), sym_id) {
         Some(loc) => {
-            unsafe { ptr::write_unaligned(loc, obj) };
+            unsafe {
+                let old = ptr::read_unaligned(loc);
+                if !nil_p(old) && dec_refc(old) {
+                    destroy_obj(env, old)
+                }
+
+                let new = obj.get_raw();
+                ptr::write_unaligned(loc, new);
+                inc_refc(new);
+            };
             true
         }
         None => false,
@@ -1768,7 +1807,7 @@ pub fn env_scope_mut_by_id(env: *mut SlHead, sym_id: u32, obj: *mut SlHead) -> b
 /// Inserts the given symbol into the environment, bound to the given
 /// object
 #[inline(always)]
-pub fn env_scope_ins(reg: *mut Region, env: *mut SlHead, sym: *mut SlHead, obj: *mut SlHead) {
+pub fn env_scope_ins(reg: *mut Region, env: SlHndl, sym: SlHndl, obj: SlHndl) {
     coretypck!(sym ; Symbol);
     env_scope_ins_by_id(reg, env, sym_get_id(sym), obj)
 }
@@ -1777,8 +1816,8 @@ pub fn env_scope_ins(reg: *mut Region, env: *mut SlHead, sym: *mut SlHead, obj: 
 
 /// Inserts a symbol with the given ID into the environment, bound to
 /// the given object
-pub fn env_scope_ins_by_id(reg: *mut Region, env: *mut SlHead, sym_id: u32, obj: *mut SlHead) {
-    assert_eq!(get_type_id(env), super::T_ENV_ID.0);
+pub fn env_scope_ins_by_id(reg: *mut Region, env: SlHndl, sym_id: u32, obj: SlHndl) {
+    assert_eq!(env.type_id(), super::T_ENV_ID.0);
 
     // println!("inserting sym {}", sym_id);
 
@@ -1791,26 +1830,30 @@ pub fn env_scope_ins_by_id(reg: *mut Region, env: *mut SlHead, sym_id: u32, obj:
 
     let entry_offset = sym_id % ENV_LAYER_SLOTS;
 
-    let top_layer = unsafe { read_ptr_unchecked(env, layer_offset) };
-    let mut layer_ptr = top_layer;
+    let top_layer = unsafe { read_ptr_unchecked(env.clone(), layer_offset) };
+    let mut layer_ptr = top_layer.clone();
 
     'layer: loop {
-        if nil_p(layer_ptr) {
+        if layer_ptr.is_none() {
             let new_layer = env_layer_make(reg);
-            set_next_list_elt(env, new_layer, top_layer);
-            write_ptr(env, env, layer_offset, new_layer);
-            layer_ptr = new_layer;
+            match top_layer.clone() {
+                Some(tl) => set_next_list_elt(env.clone(), new_layer.clone(), tl),
+                None => clr_next_list_elt(env.clone(), new_layer.clone()),
+            }
+            write_ptr(env.clone(), env.clone(), layer_offset, new_layer.clone());
+            layer_ptr = Some(new_layer.clone());
         }
 
-        assert_eq!(get_type_id(layer_ptr), super::T_ENV_LYR_ID.0);
+        assert_eq!(layer_ptr.as_ref().unwrap().type_id(), super::T_ENV_LYR_ID.0);
 
-        'entry: for o in 0..5 {
+        'entry: for o in 0..ENV_MAX_PROBES {
             let slot_offset = (entry_offset + o) % ENV_LAYER_SLOTS;
             let byte_offset = slot_offset * (SYMBOL_LEN + PTR_LEN);
 
             // println!("inserting: entry is {}, o is {}", entry_offset, o);
 
-            let slot_id: u32 = unsafe { read_field_unchecked(layer_ptr, byte_offset) };
+            let slot_id: u32 =
+                unsafe { read_field_unchecked(layer_ptr.clone().unwrap(), byte_offset) };
 
             // there needs to be a way to discern an empty slot in all
             // three environment sections
@@ -1819,14 +1862,14 @@ pub fn env_scope_ins_by_id(reg: *mut Region, env: *mut SlHead, sym_id: u32, obj:
             }
 
             unsafe {
-                write_field_unchecked(layer_ptr, byte_offset, sym_id);
-                write_ptr(env, layer_ptr, byte_offset + SYMBOL_LEN, obj);
+                write_field_unchecked(layer_ptr.clone().unwrap(), byte_offset, sym_id);
+                write_ptr(env, layer_ptr.unwrap(), byte_offset + SYMBOL_LEN, obj);
             }
 
             break 'layer;
         }
 
-        layer_ptr = get_next_list_elt(layer_ptr);
+        layer_ptr = get_next_list_elt(layer_ptr.unwrap());
     }
 
     ()
@@ -1836,13 +1879,9 @@ pub fn env_scope_ins_by_id(reg: *mut Region, env: *mut SlHead, sym_id: u32, obj:
 
 /// Looks up the given symbol ID in the given environment, returning
 /// the location in the environment of the object it refers to; None
-/// if no binding; Some(None) if no binding location
-fn env_get_binding_loc(env: *mut SlHead, sym_id: u32) -> Option<Option<*mut *mut SlHead>> {
-    if nil_p(env) {
-        return None;
-    }
-
-    assert_eq!(get_type_id(env), super::T_ENV_ID.0);
+/// if no binding
+fn env_get_binding_loc(env: SlHndl, sym_id: u32) -> Option<*mut *mut SlHead> {
+    assert_eq!(env.type_id(), super::T_ENV_ID.0);
 
     // println!("seeking sym {}", sym_id);
 
@@ -1850,35 +1889,36 @@ fn env_get_binding_loc(env: *mut SlHead, sym_id: u32) -> Option<Option<*mut *mut
         SymbolMode::Basic => 0,
         SymbolMode::Module => 8,
         SymbolMode::Type => 16,
-        SymbolMode::Keyword => return Some(None),
+        SymbolMode::Keyword => return None,
     };
 
     let entry_offset = sym_id % ENV_LAYER_SLOTS;
 
-    let mut scope_ptr: *mut SlHead = env;
-    let mut layer_ptr: *mut SlHead;
+    let mut scope_ptr: Option<SlHndl> = Some(env);
+    let mut layer_ptr: Option<SlHndl>;
 
     'scope: loop {
-        if nil_p(scope_ptr) {
+        if scope_ptr.is_none() {
             break 'scope;
         }
 
-        assert_eq!(get_type_id(scope_ptr), super::T_ENV_ID.0);
+        assert_eq!(scope_ptr.as_ref().unwrap().type_id(), super::T_ENV_ID.0);
 
-        layer_ptr = unsafe { read_ptr_unchecked(scope_ptr, layer_offset) };
+        layer_ptr = unsafe { read_ptr_unchecked(scope_ptr.clone().unwrap(), layer_offset) };
 
         'layer: loop {
-            if nil_p(layer_ptr) {
+            if layer_ptr.is_none() {
                 break 'layer;
             }
 
-            assert_eq!(get_type_id(layer_ptr), super::T_ENV_LYR_ID.0);
+            assert_eq!(layer_ptr.as_ref().unwrap().type_id(), super::T_ENV_LYR_ID.0);
 
-            'entry: for o in 0..5 {
+            'entry: for o in 0..ENV_MAX_PROBES {
                 let slot_offset = (entry_offset + o) % ENV_LAYER_SLOTS;
                 let byte_offset = slot_offset * (SYMBOL_LEN + PTR_LEN);
 
-                let slot_id: u32 = unsafe { read_field_unchecked(layer_ptr, byte_offset) };
+                let slot_id: u32 =
+                    unsafe { read_field_unchecked(layer_ptr.clone().unwrap(), byte_offset) };
 
                 if slot_id != sym_id {
                     if slot_id >> 30 == SymbolMode::Keyword as u32 {
@@ -1887,15 +1927,15 @@ fn env_get_binding_loc(env: *mut SlHead, sym_id: u32) -> Option<Option<*mut *mut
                     continue 'entry;
                 }
 
-                return Some(Some(unsafe {
-                    get_ptr_ptr_unchecked(layer_ptr, byte_offset + SYMBOL_LEN)
-                }));
+                return Some(unsafe {
+                    get_ptr_ptr_unchecked(layer_ptr.unwrap(), byte_offset + SYMBOL_LEN)
+                });
             }
 
-            layer_ptr = get_next_list_elt(layer_ptr);
+            layer_ptr = get_next_list_elt(layer_ptr.unwrap());
         }
 
-        scope_ptr = get_next_list_elt(scope_ptr);
+        scope_ptr = get_next_list_elt(scope_ptr.unwrap());
     }
 
     None
@@ -1907,7 +1947,7 @@ fn env_get_binding_loc(env: *mut SlHead, sym_id: u32) -> Option<Option<*mut *mut
 /// This should take the form of a bimap, a 1 to 1 association between strings and IDs.
 /// Two maps, one for each direction, pointing to the same set of cells: (id string).
 /// Must keep track of id to assign (counter) and reclaim unused slots if counter reaches max.
-fn sym_tab_create(reg: *mut Region, size: u32) -> *mut SlHead {
+fn sym_tab_create(reg: *mut Region, size: u32) -> SlHndl {
     let tbl = stdvec_make(reg, 3);
 
     let id_to_str = hashvec_make(reg, size);
@@ -1915,9 +1955,9 @@ fn sym_tab_create(reg: *mut Region, size: u32) -> *mut SlHead {
 
     let id_count = sym_init(reg, 0xC0000000);
 
-    stdvec_push(tbl, id_to_str);
-    stdvec_push(tbl, str_to_id);
-    stdvec_push(tbl, id_count);
+    stdvec_push(tbl.clone(), id_to_str);
+    stdvec_push(tbl.clone(), str_to_id);
+    stdvec_push(tbl.clone(), id_count);
 
     tbl
 }
@@ -1931,26 +1971,28 @@ fn sym_tab_create(reg: *mut Region, size: u32) -> *mut SlHead {
 // pure (no environment besides arguments), or closures (carrying
 // their creation environment with them)
 
-pub fn sym_tab_set_next_id(tbl: *mut SlHead, id: u32) {
+pub fn sym_tab_set_next_id(tbl: SlHndl, id: u32) {
     let id_slot = stdvec_idx(tbl, 2);
     sym_set_id(id_slot, id | 0xC0000000);
 }
 
 /// Inserts a string object into the symbol table with a particular
 /// ID; initialization and helper function only
-fn sym_tab_direct_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead, idn: u32) {
+fn sym_tab_direct_insert(reg: *mut Region, tbl: SlHndl, sym: SlHndl, idn: u32) {
     let entry = {
         let id = sym_init(reg, idn);
-        unsafe { set_next_list_elt_unsafe_unchecked(id, sym) };
-        inc_refc(sym);
+        unsafe {
+            inc_refc(sym.get_raw());
+            set_next_list_elt_unsafe_unchecked(id.clone(), sym.clone());
+        }
         id
     };
 
-    let id_to_str = stdvec_idx(tbl, 0);
+    let id_to_str = stdvec_idx(tbl.clone(), 0);
     let str_to_id = stdvec_idx(tbl, 1);
 
-    let id_size = hashvec_get_size(id_to_str);
-    let str_size = hashvec_get_size(str_to_id);
+    let id_size = hashvec_get_size(id_to_str.clone());
+    let str_size = hashvec_get_size(str_to_id.clone());
 
     let id_hash = idn % id_size;
     let str_hash = core_hash(sym) % str_size;
@@ -1958,33 +2000,33 @@ fn sym_tab_direct_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead, i
     let id_idx = (NUM_32_LEN + NUM_32_LEN) + (id_hash * PTR_LEN);
     let str_idx = (NUM_32_LEN + NUM_32_LEN) + (str_hash * PTR_LEN);
 
-    let mut id_pos = read_ptr(id_to_str, id_idx);
-    let mut str_pos = read_ptr(str_to_id, str_idx);
+    let mut id_pos = read_ptr(id_to_str.clone(), id_idx);
+    let mut str_pos = read_ptr(str_to_id.clone(), str_idx);
 
-    let id_entry = ref_init(reg, entry);
+    let id_entry = ref_init(reg, entry.clone());
     let str_entry = ref_init(reg, entry);
 
-    if nil_p(id_pos) {
-        unsafe { write_ptr_unsafe_unchecked(id_to_str, id_idx, id_entry) }
+    unsafe { inc_refc(id_entry.get_raw()) };
+    if id_pos.is_none() {
+        unsafe { write_ptr_unsafe_unchecked(id_to_str, id_idx, id_entry.clone()) }
     } else {
-        while !nil_p(get_next_list_elt(id_pos)) {
-            id_pos = get_next_list_elt(id_pos);
+        while get_next_list_elt(id_pos.clone().unwrap()).is_some() {
+            id_pos = get_next_list_elt(id_pos.unwrap());
         }
 
-        unsafe { set_next_list_elt_unsafe_unchecked(id_pos, id_entry) }
+        unsafe { set_next_list_elt_unsafe_unchecked(id_pos.unwrap(), id_entry) }
     }
-    inc_refc(id_entry);
 
-    if nil_p(str_pos) {
+    unsafe { inc_refc(str_entry.get_raw()) };
+    if str_pos.is_none() {
         unsafe { write_ptr_unsafe_unchecked(str_to_id, str_idx, str_entry) }
     } else {
-        while !nil_p(get_next_list_elt(str_pos)) {
-            str_pos = get_next_list_elt(str_pos);
+        while get_next_list_elt(str_pos.clone().unwrap()).is_some() {
+            str_pos = get_next_list_elt(str_pos.unwrap());
         }
 
-        unsafe { set_next_list_elt_unsafe_unchecked(str_pos, str_entry) }
+        unsafe { set_next_list_elt_unsafe_unchecked(str_pos.unwrap(), str_entry) }
     }
-    inc_refc(str_entry);
 }
 
 /// Takes the symbol table and a string object to insert, returning
@@ -1992,9 +2034,9 @@ fn sym_tab_direct_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead, i
 ///
 /// Uses a lock to ensure IDs are globally unique, even when called by
 /// multiple threads
-fn sym_tab_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
-    let id_slot = stdvec_idx(tbl, 2);
-    let lock_id = value_ptr(id_slot) as *mut u32;
+fn sym_tab_insert(reg: *mut Region, tbl: SlHndl, sym: SlHndl) -> u32 {
+    let id_slot = stdvec_idx(tbl.clone(), 2);
+    let lock_id = id_slot.value_ptr() as *mut u32;
 
     // we set the top two bits of the ID slot low; if they were not
     // high before this (locked), we try again until they are
@@ -2006,7 +2048,7 @@ fn sym_tab_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
 
     // since the ID slot holds only correct IDs while locked, we treat
     // it normally
-    let id_num = sym_get_id(id_slot);
+    let id_num = sym_get_id(id_slot.clone());
     assert!(id_num < 0x3FFFFFFF);
     sym_tab_direct_insert(reg, tbl, sym, id_num);
     sym_set_id(id_slot, id_num + 1);
@@ -2022,30 +2064,33 @@ fn sym_tab_insert(reg: *mut Region, tbl: *mut SlHead, sym: *mut SlHead) -> u32 {
 /// Retrieves and returns the string representation of the given symbol
 ///
 /// Looks up normally, by car, and returns cdr
-pub fn sym_tab_lookup_by_id(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
+pub fn sym_tab_lookup_by_id(tbl: SlHndl, qry: SlHndl) -> Option<SlHndl> {
     sym_tab_lookup_id_num(tbl, sym_get_id(qry))
 }
 
 /// Retrieves and returns the symbol referring to the given string
 ///
 /// Must look up by cdr, and return car
-fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
+fn sym_tab_lookup_by_str(tbl: SlHndl, qry: SlHndl) -> Option<SlHndl> {
     let map = stdvec_idx(tbl, 1);
-    let size = hashvec_get_size(map);
-    let hash = core_hash(qry) % size as u32;
+    let size = hashvec_get_size(map.clone());
+    let hash = core_hash(qry.clone()) % size as u32;
 
     let mut entry = read_ptr(map, 4 + 4 + (hash * PTR_LEN));
 
     loop {
-        if nil_p(entry) {
-            return nil();
+        if entry.is_none() {
+            return None;
         }
 
-        if core_eq(get_next_list_elt(ref_get(entry)), qry) {
-            return ref_get(entry);
+        if core_eq(
+            get_next_list_elt(ref_get(entry.clone().unwrap()).unwrap()).unwrap(),
+            qry.clone(),
+        ) {
+            return ref_get(entry.unwrap());
         }
 
-        entry = get_next_list_elt(entry);
+        entry = get_next_list_elt(entry.unwrap());
     }
 }
 
@@ -2053,40 +2098,40 @@ fn sym_tab_lookup_by_str(tbl: *mut SlHead, qry: *mut SlHead) -> *mut SlHead {
 /// the given symbol ID
 ///
 /// Looks up by ID number directly
-pub fn sym_tab_lookup_id_num(tbl: *mut SlHead, id: u32) -> *mut SlHead {
+pub fn sym_tab_lookup_id_num(tbl: SlHndl, id: u32) -> Option<SlHndl> {
     let map = stdvec_idx(tbl, 0);
-    let size = hashvec_get_size(map);
+    let size = hashvec_get_size(map.clone());
     let hash = id % size as u32;
 
     let mut entry = read_ptr(map, 4 + 4 + (hash * PTR_LEN));
 
     loop {
-        if nil_p(entry) {
-            return nil();
+        if entry.is_none() {
+            return None;
         }
 
-        if sym_get_id(ref_get(entry)) == id {
-            return get_next_list_elt(ref_get(entry));
+        if sym_get_id(ref_get(entry.clone().unwrap()).unwrap()) == id {
+            return get_next_list_elt(ref_get(entry.unwrap()).unwrap());
         }
 
-        entry = get_next_list_elt(entry);
+        entry = get_next_list_elt(entry.unwrap());
     }
 }
 
 /// Returns a unique ID for any symbol string; inserts symbol into the
 /// table if not already present
-pub fn sym_tab_get_id(reg: *mut Region, tbl: *mut SlHead, sym: &str) -> u32 {
-    let map = stdvec_idx(tbl, 1);
-    let size = hashvec_get_size(map);
+pub fn sym_tab_get_id(reg: *mut Region, tbl: SlHndl, sym: &str) -> u32 {
+    let map = stdvec_idx(tbl.clone(), 1);
+    let size = hashvec_get_size(map.clone());
     let hash = str_hash(sym) % size;
 
     let mut entry = read_ptr(map, 4 + 4 + (hash * PTR_LEN));
 
-    while !nil_p(entry) {
-        if sym == string_get(get_next_list_elt(ref_get(entry))) {
-            return sym_get_id(ref_get(entry));
+    while entry.is_some() {
+        if sym == string_get(get_next_list_elt(ref_get(entry.clone().unwrap()).unwrap()).unwrap()) {
+            return sym_get_id(ref_get(entry.unwrap()).unwrap());
         }
-        entry = get_next_list_elt(entry);
+        entry = get_next_list_elt(entry.unwrap());
     }
 
     let record = string_init(reg, sym);
@@ -2094,30 +2139,30 @@ pub fn sym_tab_get_id(reg: *mut Region, tbl: *mut SlHead, sym: &str) -> u32 {
     sym_tab_insert(reg, tbl, record)
 }
 
-pub fn sym_tab_add_with_id(reg: *mut Region, tbl: *mut SlHead, sym: &str, id: u32) {
+pub fn sym_tab_add_with_id(reg: *mut Region, tbl: SlHndl, sym: &str, id: u32) {
     let record = string_init(reg, sym);
     sym_tab_direct_insert(reg, tbl, record, id);
 }
 
 /// Creates a counter for global type IDs
-fn typ_ctr_create(reg: *mut Region) -> *mut SlHead {
+fn typ_ctr_create(reg: *mut Region) -> SlHndl {
     u32_init(reg, 0x80000000)
 }
 
-pub fn typ_ctr_set_next_id(ctr: *mut SlHead, id: u32) {
+pub fn typ_ctr_set_next_id(ctr: SlHndl, id: u32) {
     u32_set(ctr, id | 0x80000000)
 }
 
 /// Returns the next globally unique object type ID
-pub fn typ_ctr_get_id(ctr: *mut SlHead) -> u32 {
-    let lock_id = value_ptr(ctr) as *mut u32;
+pub fn typ_ctr_get_id(ctr: SlHndl) -> u32 {
+    let lock_id = ctr.value_ptr() as *mut u32;
 
     // the lock is the first bit of the value: high when available,
     // low when locked
 
     unsafe { while std::intrinsics::atomic_and_acquire(lock_id, 0x7FFFFFFF) >> 31 != 1 {} }
 
-    let id = u32_get(ctr);
+    let id = u32_get(ctr.clone());
     assert!(id < 0x7FFFFFFF);
     u32_set(ctr, id + 1);
 
@@ -2133,340 +2178,346 @@ pub fn typ_ctr_get_id(ctr: *mut SlHead) -> u32 {
 ///
 /// TODO: should regions know about their Sail environment?
 /// TODO: insert all the core type symbols
-pub fn prep_environment(reg: *mut Region) -> (*mut SlHead, *mut SlHead, *mut SlHead) {
+pub fn prep_environment(reg: *mut Region) -> (SlHndl, SlHndl, SlHndl) {
     (
         sym_tab_create(reg, 251),
         typ_ctr_create(reg),
-        env_create(reg, nil()),
+        env_create(reg, None),
     )
 }
 
 #[inline(always)]
-fn u8_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_8_LEN, memmgt::cap(Cfg::B1U8)) }
+fn u8_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_8_LEN, memmgt::cap(Cfg::B1U8))) }
 }
 
 #[inline(always)]
-fn u8_init(reg: *mut Region, val: u8) -> *mut SlHead {
+fn u8_init(reg: *mut Region, val: u8) -> SlHndl {
     let ptr = u8_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
 }
 
 #[inline(always)]
-fn u8_set(loc: *mut SlHead, val: u8) {
+fn u8_set(loc: SlHndl, val: u8) {
     coretypck!(loc ; U8);
     core_write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn u8_get(loc: *mut SlHead) -> u8 {
+fn u8_get(loc: SlHndl) -> u8 {
     coretypck!(loc ; U8);
     core_read_field(loc, 0)
 }
 
 #[inline(always)]
-fn u16_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_16_LEN, memmgt::cap(Cfg::B2U16)) }
+fn u16_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_16_LEN, memmgt::cap(Cfg::B2U16))) }
 }
 
 #[inline(always)]
-fn u16_init(reg: *mut Region, val: u16) -> *mut SlHead {
+fn u16_init(reg: *mut Region, val: u16) -> SlHndl {
     let ptr = u16_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
 }
 
 #[inline(always)]
-fn u16_set(loc: *mut SlHead, val: u16) {
+fn u16_set(loc: SlHndl, val: u16) {
     coretypck!(loc ; U16);
     core_write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn u16_get(loc: *mut SlHead) -> u16 {
+fn u16_get(loc: SlHndl) -> u16 {
     coretypck!(loc ; U16);
     core_read_field(loc, 0)
 }
 
 #[inline(always)]
-pub fn u32_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4U32)) }
+pub fn u32_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4U32))) }
 }
 
 #[inline(always)]
-pub fn u32_init(reg: *mut Region, val: u32) -> *mut SlHead {
+pub fn u32_init(reg: *mut Region, val: u32) -> SlHndl {
     let ptr = u32_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
 }
 
 #[inline(always)]
-pub fn u32_set(loc: *mut SlHead, val: u32) {
+pub fn u32_set(loc: SlHndl, val: u32) {
     coretypck!(loc ; U32);
     core_write_field(loc, 0, val)
 }
 
 #[inline(always)]
-pub fn u32_get(loc: *mut SlHead) -> u32 {
+pub fn u32_get(loc: SlHndl) -> u32 {
     coretypck!(loc ; U32);
     core_read_field(loc, 0)
 }
 
 #[inline(always)]
-fn u64_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8U64)) }
+fn u64_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8U64))) }
 }
 
 #[inline(always)]
-fn u64_init(reg: *mut Region, val: u64) -> *mut SlHead {
+fn u64_init(reg: *mut Region, val: u64) -> SlHndl {
     let ptr = u64_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
 }
 
 #[inline(always)]
-fn u64_set(loc: *mut SlHead, val: u64) {
+fn u64_set(loc: SlHndl, val: u64) {
     coretypck!(loc ; U64);
     core_write_field(loc, 0, val)
 }
 
 #[inline(always)]
-pub fn u64_get(loc: *mut SlHead) -> u64 {
+pub fn u64_get(loc: SlHndl) -> u64 {
     coretypck!(loc ; U64);
     core_read_field(loc, 0)
 }
 
 #[inline(always)]
-fn u128_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_128_LEN, memmgt::cap(Cfg::B16U128)) }
-}
-
-#[inline(always)]
-fn u128_init(reg: *mut Region, val: u128) -> *mut SlHead {
-    let ptr = u128_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
-    ptr
-}
-
-#[inline(always)]
-fn u128_set(loc: *mut SlHead, val: u128) {
-    coretypck!(loc ; U128);
-    core_write_field(loc, 0, val)
-}
-
-#[inline(always)]
-fn u128_get(loc: *mut SlHead) -> u128 {
-    coretypck!(loc ; U128);
-    core_read_field(loc, 0)
-}
-
-#[inline(always)]
-fn i8_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_8_LEN, memmgt::cap(Cfg::B1I8)) }
-}
-
-#[inline(always)]
-fn i8_init(reg: *mut Region, val: i8) -> *mut SlHead {
-    let ptr = i8_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
-    ptr
-}
-
-#[inline(always)]
-fn i8_set(loc: *mut SlHead, val: i8) {
-    coretypck!(loc ; I8);
-    core_write_field(loc, 0, val)
-}
-
-#[inline(always)]
-fn i8_get(loc: *mut SlHead) -> i8 {
-    coretypck!(loc ; I8);
-    core_read_field(loc, 0)
-}
-
-#[inline(always)]
-fn i16_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_16_LEN, memmgt::cap(Cfg::B2I16)) }
-}
-
-#[inline(always)]
-fn i16_init(reg: *mut Region, val: i16) -> *mut SlHead {
-    let ptr = i16_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
-    ptr
-}
-
-#[inline(always)]
-fn i16_set(loc: *mut SlHead, val: i16) {
-    coretypck!(loc ; I16);
-    core_write_field(loc, 0, val)
-}
-
-#[inline(always)]
-fn i16_get(loc: *mut SlHead) -> i16 {
-    coretypck!(loc ; I16);
-    core_read_field(loc, 0)
-}
-
-#[inline(always)]
-fn i32_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4I32)) }
-}
-
-#[inline(always)]
-fn i32_init(reg: *mut Region, val: i32) -> *mut SlHead {
-    let ptr = i32_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
-    ptr
-}
-
-#[inline(always)]
-fn i32_set(loc: *mut SlHead, val: i32) {
-    coretypck!(loc ; I32);
-    core_write_field(loc, 0, val)
-}
-
-#[inline(always)]
-fn i32_get(loc: *mut SlHead) -> i32 {
-    coretypck!(loc ; I32);
-    core_read_field(loc, 0)
-}
-
-#[inline(always)]
-pub fn i64_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8I64)) }
-}
-
-#[inline(always)]
-pub fn i64_init(reg: *mut Region, val: i64) -> *mut SlHead {
-    let ptr = i64_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
-    ptr
-}
-
-#[inline(always)]
-pub fn i64_set(loc: *mut SlHead, val: i64) {
-    coretypck!(loc ; I64);
-    core_write_field(loc, 0, val)
-}
-
-#[inline(always)]
-pub fn i64_get(loc: *mut SlHead) -> i64 {
-    coretypck!(loc ; I64);
-    core_read_field(loc, 0)
-}
-
-#[inline(always)]
-fn i128_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_128_LEN, memmgt::cap(Cfg::B16I128)) }
-}
-
-#[inline(always)]
-fn i128_init(reg: *mut Region, val: i128) -> *mut SlHead {
-    let ptr = i128_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
-    ptr
-}
-
-#[inline(always)]
-fn i128_set(loc: *mut SlHead, val: i128) {
-    coretypck!(loc ; I128);
-    core_write_field(loc, 0, val)
-}
-
-#[inline(always)]
-fn i128_get(loc: *mut SlHead) -> i128 {
-    coretypck!(loc ; I128);
-    core_read_field(loc, 0)
-}
-
-#[inline(always)]
-pub fn f32_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4F32)) }
-}
-
-#[inline(always)]
-pub fn f32_init(reg: *mut Region, val: f32) -> *mut SlHead {
-    let ptr = f32_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
-    ptr
-}
-
-#[inline(always)]
-pub fn f32_set(loc: *mut SlHead, val: f32) {
-    coretypck!(loc ; F32);
-    core_write_field(loc, 0, val)
-}
-
-#[inline(always)]
-pub fn f32_get(loc: *mut SlHead) -> f32 {
-    coretypck!(loc ; F32);
-    core_read_field(loc, 0)
-}
-
-#[inline(always)]
-pub fn f64_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8F64)) }
-}
-
-#[inline(always)]
-pub fn f64_init(reg: *mut Region, val: f64) -> *mut SlHead {
-    let ptr = f64_make(reg);
-    unsafe { write_field_unchecked(ptr, 0, val) };
-    ptr
-}
-
-#[inline(always)]
-pub fn f64_set(loc: *mut SlHead, val: f64) {
-    coretypck!(loc ; F64);
-    core_write_field(loc, 0, val)
-}
-
-#[inline(always)]
-pub fn f64_get(loc: *mut SlHead) -> f64 {
-    coretypck!(loc ; F64);
-    core_read_field(loc, 0)
-}
-
-#[inline(always)]
-pub fn bool_make(reg: *mut Region) -> *mut SlHead {
-    unsafe { memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0BoolF)) }
-}
-
-#[inline(always)]
-pub fn bool_init(reg: *mut Region, val: bool) -> *mut SlHead {
+fn u128_make(reg: *mut Region) -> SlHndl {
     unsafe {
-        memmgt::alloc(
-            reg,
-            0,
-            memmgt::cap(if val { Cfg::B0BoolT } else { Cfg::B0BoolF }),
-        )
+        SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_128_LEN, memmgt::cap(Cfg::B16U128)))
     }
 }
 
 #[inline(always)]
-pub fn bool_set(loc: *mut SlHead, val: bool) {
+fn u128_init(reg: *mut Region, val: u128) -> SlHndl {
+    let ptr = u128_make(reg);
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
+    ptr
+}
+
+#[inline(always)]
+fn u128_set(loc: SlHndl, val: u128) {
+    coretypck!(loc ; U128);
+    core_write_field(loc, 0, val)
+}
+
+#[inline(always)]
+fn u128_get(loc: SlHndl) -> u128 {
+    coretypck!(loc ; U128);
+    core_read_field(loc, 0)
+}
+
+#[inline(always)]
+fn i8_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_8_LEN, memmgt::cap(Cfg::B1I8))) }
+}
+
+#[inline(always)]
+fn i8_init(reg: *mut Region, val: i8) -> SlHndl {
+    let ptr = i8_make(reg);
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
+    ptr
+}
+
+#[inline(always)]
+fn i8_set(loc: SlHndl, val: i8) {
+    coretypck!(loc ; I8);
+    core_write_field(loc, 0, val)
+}
+
+#[inline(always)]
+fn i8_get(loc: SlHndl) -> i8 {
+    coretypck!(loc ; I8);
+    core_read_field(loc, 0)
+}
+
+#[inline(always)]
+fn i16_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_16_LEN, memmgt::cap(Cfg::B2I16))) }
+}
+
+#[inline(always)]
+fn i16_init(reg: *mut Region, val: i16) -> SlHndl {
+    let ptr = i16_make(reg);
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
+    ptr
+}
+
+#[inline(always)]
+fn i16_set(loc: SlHndl, val: i16) {
+    coretypck!(loc ; I16);
+    core_write_field(loc, 0, val)
+}
+
+#[inline(always)]
+fn i16_get(loc: SlHndl) -> i16 {
+    coretypck!(loc ; I16);
+    core_read_field(loc, 0)
+}
+
+#[inline(always)]
+fn i32_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4I32))) }
+}
+
+#[inline(always)]
+fn i32_init(reg: *mut Region, val: i32) -> SlHndl {
+    let ptr = i32_make(reg);
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
+    ptr
+}
+
+#[inline(always)]
+fn i32_set(loc: SlHndl, val: i32) {
+    coretypck!(loc ; I32);
+    core_write_field(loc, 0, val)
+}
+
+#[inline(always)]
+fn i32_get(loc: SlHndl) -> i32 {
+    coretypck!(loc ; I32);
+    core_read_field(loc, 0)
+}
+
+#[inline(always)]
+pub fn i64_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8I64))) }
+}
+
+#[inline(always)]
+pub fn i64_init(reg: *mut Region, val: i64) -> SlHndl {
+    let ptr = i64_make(reg);
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
+    ptr
+}
+
+#[inline(always)]
+pub fn i64_set(loc: SlHndl, val: i64) {
+    coretypck!(loc ; I64);
+    core_write_field(loc, 0, val)
+}
+
+#[inline(always)]
+pub fn i64_get(loc: SlHndl) -> i64 {
+    coretypck!(loc ; I64);
+    core_read_field(loc, 0)
+}
+
+#[inline(always)]
+fn i128_make(reg: *mut Region) -> SlHndl {
+    unsafe {
+        SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_128_LEN, memmgt::cap(Cfg::B16I128)))
+    }
+}
+
+#[inline(always)]
+fn i128_init(reg: *mut Region, val: i128) -> SlHndl {
+    let ptr = i128_make(reg);
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
+    ptr
+}
+
+#[inline(always)]
+fn i128_set(loc: SlHndl, val: i128) {
+    coretypck!(loc ; I128);
+    core_write_field(loc, 0, val)
+}
+
+#[inline(always)]
+fn i128_get(loc: SlHndl) -> i128 {
+    coretypck!(loc ; I128);
+    core_read_field(loc, 0)
+}
+
+#[inline(always)]
+pub fn f32_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4F32))) }
+}
+
+#[inline(always)]
+pub fn f32_init(reg: *mut Region, val: f32) -> SlHndl {
+    let ptr = f32_make(reg);
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
+    ptr
+}
+
+#[inline(always)]
+pub fn f32_set(loc: SlHndl, val: f32) {
+    coretypck!(loc ; F32);
+    core_write_field(loc, 0, val)
+}
+
+#[inline(always)]
+pub fn f32_get(loc: SlHndl) -> f32 {
+    coretypck!(loc ; F32);
+    core_read_field(loc, 0)
+}
+
+#[inline(always)]
+pub fn f64_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8F64))) }
+}
+
+#[inline(always)]
+pub fn f64_init(reg: *mut Region, val: f64) -> SlHndl {
+    let ptr = f64_make(reg);
+    unsafe { write_field_unchecked(ptr.clone(), 0, val) };
+    ptr
+}
+
+#[inline(always)]
+pub fn f64_set(loc: SlHndl, val: f64) {
+    coretypck!(loc ; F64);
+    core_write_field(loc, 0, val)
+}
+
+#[inline(always)]
+pub fn f64_get(loc: SlHndl) -> f64 {
+    coretypck!(loc ; F64);
+    core_read_field(loc, 0)
+}
+
+#[inline(always)]
+pub fn bool_make(reg: *mut Region) -> SlHndl {
+    unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0BoolF))) }
+}
+
+#[inline(always)]
+pub fn bool_init(reg: *mut Region, val: bool) -> SlHndl {
+    unsafe {
+        SlHndl::from_raw_unchecked(memmgt::alloc(
+            reg,
+            0,
+            memmgt::cap(if val { Cfg::B0BoolT } else { Cfg::B0BoolF }),
+        ))
+    }
+}
+
+// TODO: these change the config byte, could mess with head handling
+
+#[inline(always)]
+pub fn bool_set(loc: SlHndl, val: bool) {
     coretypck!(loc ; Bool);
     unsafe {
         if val {
             ptr::write_unaligned(
-                loc as *mut u8,
-                ptr::read_unaligned(loc as *mut u8) | 0b00000100,
+                loc.get_raw() as *mut u8,
+                ptr::read_unaligned(loc.get_raw() as *mut u8) | 0b00000100,
             )
         } else {
             ptr::write_unaligned(
-                loc as *mut u8,
-                ptr::read_unaligned(loc as *mut u8) & 0b11111011,
+                loc.get_raw() as *mut u8,
+                ptr::read_unaligned(loc.get_raw() as *mut u8) & 0b11111011,
             )
         }
     }
 }
 
 #[inline(always)]
-pub fn bool_get(loc: *mut SlHead) -> bool {
+pub fn bool_get(loc: SlHndl) -> bool {
     coretypck!(loc ; Bool);
-    unsafe { ptr::read_unaligned(loc as *mut u8) & 0b00000100 != 0 }
+    unsafe { ptr::read_unaligned(loc.get_raw() as *mut u8) & 0b00000100 != 0 }
 }
 
 // TODO: need a sort of "NsPath" type which stores an arbitrary-length

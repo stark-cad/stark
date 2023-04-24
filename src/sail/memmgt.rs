@@ -202,16 +202,24 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
             + (size_fld_p as u32 * NUM_32_LEN)) as usize
             + size as usize;
 
+        // TODO: unique block IDs for all objects with =memdbg=
+
         if cfg!(feature = "memdbg") {
             log::debug!("Allocating {} bytes with cfg: {:#010b}", length, cfg);
         }
 
-        // TODO: search the freelist!
+        // TODO: search the free tree!
 
         let region_ref = region.as_mut().unwrap();
         let mut zone_ref = region_ref.head.as_mut().unwrap();
 
-        while zone_ref.used as usize + length >= region_ref.zone_size as usize {
+        // the first condition is temporary (at least here) until we
+        // have free tree search logic; it may also be useful for an
+        // urgent / expedited allocation option
+        while zone_ref.top as usize + length > zone_ref.end as usize
+            || zone_ref.used as usize + length >= region_ref.zone_size as usize
+            || (zone_ref.lblk != 0 && length > zone_ref.lblk as usize)
+        {
             zone_ref = match zone_ref.next.as_mut() {
                 Some(refer) => refer,
                 None => {
@@ -227,6 +235,8 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
         }
 
         let out = zone_ref.top;
+
+        assert!(out < zone_ref.end);
 
         // TODO: turns out length always needs to be a u32 anyway; fix
         zone_ref.used += length as u32;
@@ -254,6 +264,8 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
         ptr::write_unaligned((ptr as *mut u32).add(2 + type_fld_p as usize), size);
     }
 
+    // log::info!("Allocated object");
+
     ptr
 }
 
@@ -264,9 +276,9 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
 /// Get total length of live block
 fn lblk_get_len(blk: *mut SlHead) -> u32 {
     (HEAD_LEN
-        + (super::type_fld_p(blk) as u32 * NUM_32_LEN)
-        + (super::size_fld_p(blk) as u32 * NUM_32_LEN))
-        + super::get_size(blk)
+        + (super::raw_typ_fld_p(blk) as u32 * NUM_32_LEN)
+        + (super::raw_siz_fld_p(blk) as u32 * NUM_32_LEN))
+        + super::raw_size(blk)
 }
 
 /// Adds memory that used to hold a Sail object to the freed memory
@@ -274,7 +286,7 @@ fn lblk_get_len(blk: *mut SlHead) -> u32 {
 pub unsafe fn dealloc(val: *mut SlHead) {
     // TODO: deallocations need to also handle objects' references
 
-    log::info!("running a deallocation");
+    // log::info!("Reclaiming object");
 
     let len = {
         let length = lblk_get_len(val);

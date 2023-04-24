@@ -17,6 +17,9 @@
 
 use super::{core::*, memmgt};
 
+// TODO: type checks and variable length arglists for native functions
+// TODO: generate these functions somehow else if macros won't cut it
+
 /// Generates a slice of native Sail function pointers along with
 /// names and argument counts
 ///
@@ -24,9 +27,6 @@ use super::{core::*, memmgt};
 /// used is quite similar to that of regular functions but eases
 /// access to arguments in the body. All native functions must return
 /// a valid Sail object.
-///
-/// TODO: type checks and variable length arglists for native functions
-/// TODO: generate these functions somehow else if macros won't cut it
 #[macro_export]
 macro_rules! sail_fn {
     ( const $array:ident; $reg:ident $tbl:ident $env:ident;
@@ -35,9 +35,9 @@ macro_rules! sail_fn {
         pub const $array: &[(&str, crate::sail::core::NativeFn, u16)] =
             &[$(($name, |
                 _reg: *mut crate::sail::memmgt::Region,
-                _tbl: *mut crate::sail::SlHead,
-                _env: *mut crate::sail::SlHead,
-                _args: &[*mut crate::sail::SlHead]
+                _tbl: crate::sail::SlHndl,
+                _env: crate::sail::SlHndl,
+                _args: &[crate::sail::SlHndl],
               | {
                     let $reg = _reg;
                     let $tbl = _tbl;
@@ -45,7 +45,7 @@ macro_rules! sail_fn {
 
                     let mut _ind = 0;
                     $(
-                        let $args = _args[_ind];
+                        let $args = _args[_ind].clone();
                         _ind += 1;
                     )*
 
@@ -60,9 +60,9 @@ macro_rules! sail_fn {
         let $array: &[(&str, crate::sail::core::NativeFn, u16)] =
             &[$(($name, |
                 _reg: *mut crate::sail::memmgt::Region,
-                _tbl: *mut crate::sail::SlHead,
-                _env: *mut crate::sail::SlHead,
-                _args: &[*mut crate::sail::SlHead]
+                _tbl: crate::sail::SlHndl,
+                _env: crate::sail::SlHndl,
+                _args: &[crate::sail::SlHndl],
                 | {
                     let $reg = _reg;
                     let $tbl = _tbl;
@@ -70,7 +70,7 @@ macro_rules! sail_fn {
 
                     let mut _ind = 0;
                     $(
-                        let $args = _args[_ind];
+                        let $args = _args[_ind].clone();
                         _ind += 1;
                     )*
 
@@ -89,20 +89,20 @@ sail_fn! {
     // TODO: use fixed point at times to avoid floating point errors?
 
     "+" 2 [fst, snd] {
-        let typ = core_type(fst);
-        assert_eq!(typ, core_type(snd));
+        let typ = fst.core_type();
+        assert_eq!(typ, snd.core_type());
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
                 let out = i64_make(_reg);
                 let result = i64_get(fst) + i64_get(snd);
-                i64_set(out, result);
+                i64_set(out.clone(), result);
                 return out;
             }
             CoreType::F32 => {
                 let out = f32_make(_reg);
                 let result = f32_get(fst) + f32_get(snd);
-                f32_set(out, result);
+                f32_set(out.clone(), result);
                 return out;
             }
             _ => panic!("type invalid for add"),
@@ -110,20 +110,20 @@ sail_fn! {
     }
 
     "-" 2 [fst, snd] {
-        let typ = core_type(fst);
-        assert_eq!(typ, core_type(snd));
+        let typ = fst.core_type();
+        assert_eq!(typ, snd.core_type());
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
                 let out = i64_make(_reg);
                 let result = i64_get(fst) - i64_get(snd);
-                i64_set(out, result);
+                i64_set(out.clone(), result);
                 return out;
             }
             CoreType::F32 => {
                 let out = f32_make(_reg);
                 let result = f32_get(fst) - f32_get(snd);
-                f32_set(out, result);
+                f32_set(out.clone(), result);
                 return out;
             }
             _ => panic!("type invalid for sub"),
@@ -131,20 +131,20 @@ sail_fn! {
     }
 
     "*" 2 [fst, snd] {
-        let typ = core_type(fst);
-        assert_eq!(typ, core_type(snd));
+        let typ = fst.core_type();
+        assert_eq!(typ, snd.core_type());
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
                 let out = i64_make(_reg);
                 let result = i64_get(fst) * i64_get(snd);
-                i64_set(out, result);
+                i64_set(out.clone(), result);
                 return out;
             }
             CoreType::F32 => {
                 let out = f32_make(_reg);
                 let result = f32_get(fst) * f32_get(snd);
-                f32_set(out, result);
+                f32_set(out.clone(), result);
                 return out;
             }
             _ => panic!("type invalid for mul"),
@@ -152,20 +152,20 @@ sail_fn! {
     }
 
     "/" 2 [fst, snd] {
-        let typ = core_type(fst);
-        assert_eq!(typ, core_type(snd));
+        let typ = fst.core_type();
+        assert_eq!(typ, snd.core_type());
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
                 let out = i64_make(_reg);
                 let result = i64_get(fst) / i64_get(snd);
-                i64_set(out, result);
+                i64_set(out.clone(), result);
                 return out;
             }
             CoreType::F32 => {
                 let out = f32_make(_reg);
                 let result = f32_get(fst) / f32_get(snd);
-                f32_set(out, result);
+                f32_set(out.clone(), result);
                 return out;
             }
             _ => panic!("type invalid for div"),
@@ -175,12 +175,12 @@ sail_fn! {
     "mod" 2 [fst, snd] {
         let out = i64_make(_reg);
         let result = i64_get(fst) % i64_get(snd);
-        i64_set(out, result);
+        i64_set(out.clone(), result);
         return out;
     }
 
     "neg" 1 [val] {
-        match core_type(val).expect("type invalid") {
+        match val.core_type().expect("type invalid") {
             CoreType::I64 => {
                 return i64_init(_reg, -i64_get(val));
             }
@@ -192,53 +192,50 @@ sail_fn! {
     }
 
     "=" 2 [fst, snd] {
-        // let out = init_bool(reg);
         let result = i64_get(fst) == i64_get(snd);
-        if result {
-            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        } else {
-            nil()
-        }
-        // bool_set(out, result);
-        // return out;
+        // if result {
+        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+        // } else {
+        //     nil()
+        // }
+        return bool_init(_reg, result);
     }
 
     "eq" 2 [fst, snd] {
-        // let out = init_bool(reg);
         let result = core_eq(fst, snd);
-        if result {
-            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        } else {
-            nil()
-        }
-        // bool_set(out, result);
-        // return out;
+        // if result {
+        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+        // } else {
+        //     nil()
+        // }
+        return bool_init(_reg, result);
     }
 
     "not" 1 [val] {
-        // let out = init_bool(reg);
-        if !truthy(val) {
-            // bool_set(out, false)
-            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+        let out = bool_make(_reg);
+        if val.truthy() {
+            bool_set(out.clone(), false)
+            // env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
         } else {
-            // bool_set(out, true)
-            nil()
+            bool_set(out.clone(), true)
+            // nil()
         }
-        // return out;
+        return out;
     }
 
     "qtx" 2 [sender, item] {
         super::queue::queue_tx(_env, sender, item);
 
-        // let out = init_bool(reg);
-        // bool_set(out, true);
-        // return out;
+        return bool_init(_reg, true);
 
-        return nil();
+        // return nil();
     }
 
     "qrx" 2 [receiver] {
-        return super::queue::queue_rx(_env, receiver);
+        return match super::queue::queue_rx(_env, receiver) {
+            Some(r) => r,
+            None => ref_make(_reg),
+        };
     }
 
     "as-f32" 1 [val] {
@@ -257,20 +254,20 @@ sail_fn! {
 
         unsafe {
             let size = vec_size(8, temp_get_size(typ), len);
-            let ptr = memmgt::alloc(_reg, size, memmgt::cap(Cfg::VecArr));
+            let out = SlHndl::from_raw_unchecked(memmgt::alloc(_reg, size, memmgt::cap(Cfg::VecArr)));
 
-            write_field_unchecked::<u32>(ptr, 0, typ);
-            write_field_unchecked::<u32>(ptr, 4, len);
+            write_field_unchecked::<u32>(out.clone(), 0, typ);
+            write_field_unchecked::<u32>(out.clone(), 4, len);
 
             for i in 0..len {
                 std::ptr::copy_nonoverlapping(
-                    value_ptr(init),
-                    value_ptr(ptr).add(8 + (temp_get_size(typ) * i) as usize),
+                    init.value_ptr(),
+                    out.value_ptr().add(8 + (temp_get_size(typ) * i) as usize),
                     temp_get_size(typ) as usize,
                 )
             }
 
-            return ptr;
+            return out;
         }
 
     }
@@ -278,31 +275,31 @@ sail_fn! {
     "arr-vec-get" 2 [target, idx] {
         coretypck!(target ; VecArr);
         coretypck!(idx ; I64);
-        let typ = super::arrvec_get_typ(target);
+        let typ = super::arrvec_get_typ(target.clone());
         assert!(temp_base_sized_p(typ));
 
         let idx = i64_get(idx) as u32;
-        assert!(idx < super::arrvec_get_len(target));
+        assert!(idx < super::arrvec_get_len(target.clone()));
 
         return temp_init_from(_reg, typ, unsafe {
-            value_ptr(target).add(8 + (temp_get_size(typ) * idx) as usize)
+            target.value_ptr().add(8 + (temp_get_size(typ) * idx) as usize)
         });
     }
 
     "arr-vec-set" 3 [target, idx, val] {
         coretypck!(target ; VecArr);
         coretypck!(idx ; I64);
-        let typ = super::arrvec_get_typ(target);
+        let typ = super::arrvec_get_typ(target.clone());
         assert!(temp_base_sized_p(typ));
         // assert_eq!(typ, super::get_self_type(val));
 
         let idx = i64_get(idx) as u32;
-        assert!(idx < super::arrvec_get_len(target));
+        assert!(idx < super::arrvec_get_len(target.clone()));
 
         unsafe {
             std::ptr::copy_nonoverlapping(
-                value_ptr(val),
-                value_ptr(target).add(8 + (temp_get_size(typ) * idx) as usize),
+                val.value_ptr(),
+                target.value_ptr().add(8 + (temp_get_size(typ) * idx) as usize),
                 temp_get_size(typ) as usize,
             )
         }
@@ -311,18 +308,18 @@ sail_fn! {
     }
 
     "print" 1 [arg] {
-        println!("{}", super::context(_tbl, arg).to_string());
-        return nil();
+        println!("{}", super::context(_tbl, arg.clone()).to_string());
+        return arg;
     }
 
     "dbg" 1 [arg] {
-        println!("{}", super::context(_tbl, arg).to_string());
+        println!("{}", super::context(_tbl, arg.clone()).to_string());
         return arg;
     }
 
     "printenv" 0 [] {
         println!("{}", super::context(_tbl, _env).to_string());
-        return nil();
+        return bool_init(_reg, false);
     }
 
     "parse" 1 [strin] {

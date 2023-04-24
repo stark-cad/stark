@@ -27,7 +27,7 @@
 
 // <>
 
-use crate::sail::{self, SlHead};
+use crate::sail::{self, SlHndl};
 use crate::FrameHandles;
 
 use ash::vk;
@@ -42,14 +42,11 @@ pub fn render_loop(
     size: [u32; 2],
     frame: FrameHandles,
     sl_reg: usize,
-    sl_tbl: usize,
-    sl_ctr: usize,
-    sl_env: usize,
+    sl_tbl: SlHndl,
+    sl_ctr: SlHndl,
+    sl_env: SlHndl,
 ) {
     let sl_reg = sl_reg as *mut sail::memmgt::Region;
-    let sl_tbl = sl_tbl as *mut SlHead;
-    let sl_ctr = sl_ctr as *mut SlHead;
-    let sl_env = sl_env as *mut SlHead;
 
     let mut engine = Engine::new(frame, name, size[0], size[1]);
 
@@ -61,29 +58,30 @@ pub fn render_loop(
 
     engine.lines.append(&mut test_glyph);
 
-    let eng_hdl = unsafe { sail::memmgt::alloc(sl_reg, 8, sail::T_ENG_HDL_ID.0) };
-    unsafe { sail::write_field_unchecked(eng_hdl, 0, (&mut engine as *mut _) as u64) };
-    sail::env_scope_ins_by_id(sl_reg, sl_env, sail::S_ENGINE.0, eng_hdl);
+    let eng_hdl =
+        unsafe { SlHndl::from_raw_unchecked(sail::memmgt::alloc(sl_reg, 8, sail::T_ENG_HDL_ID.0)) };
+    unsafe { sail::write_field_unchecked(eng_hdl.clone(), 0, (&mut engine as *mut _) as u64) };
+    sail::env_scope_ins_by_id(sl_reg, sl_env.clone(), sail::S_ENGINE.0, eng_hdl);
 
     crate::sail_fn! {
         let rndr_fns;
         _reg _tbl _env;
 
         "redraw" 1 [eng_ptr] {
-            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
-                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine)
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
 
             engine.draw_frame();
 
-            sail::nil()
+            eng_ptr
         }
 
         "frame-size" 3 [eng_ptr, w, h] {
-            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
-                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine)
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
 
             // let w = sail::u32_get(w);
@@ -91,49 +89,49 @@ pub fn render_loop(
 
             engine.need_surface_cfg = true;
 
-            sail::nil()
+            eng_ptr
         }
 
         "add-line" 3 [eng_ptr, points, colors] {
-            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
-                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine)
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
 
-            assert_eq!(sail::core_type(points), Some(sail::CoreType::VecArr));
-            assert_eq!(sail::core_read_field::<u32>(points, 0), sail::T_F32.0);
+            assert_eq!(points.core_type(), Some(sail::CoreType::VecArr));
+            assert_eq!(sail::core_read_field::<u32>(points.clone(), 0), sail::T_F32.0);
 
-            assert_eq!(sail::core_type(colors), Some(sail::CoreType::VecArr));
-            assert_eq!(sail::core_read_field::<u32>(colors, 0), sail::T_F32.0);
+            assert_eq!(colors.core_type(), Some(sail::CoreType::VecArr));
+            assert_eq!(sail::core_read_field::<u32>(colors.clone(), 0), sail::T_F32.0);
 
             let (ln, cl) = unsafe {
                 (
-                    std::ptr::read_unaligned::<[f32; 4]>(sail::value_ptr(points).add(8) as *mut _),
-                    std::ptr::read_unaligned::<[f32; 3]>(sail::value_ptr(colors).add(8) as *mut _)
+                    std::ptr::read_unaligned::<[f32; 4]>(points.value_ptr().add(8) as *mut _),
+                    std::ptr::read_unaligned::<[f32; 3]>(colors.value_ptr().add(8) as *mut _)
                 )
             };
 
             engine.add_line(ln, cl);
 
-            sail::nil()
+            eng_ptr
         }
 
         "pop-line" 1 [eng_ptr] {
-            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
-                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine)
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
 
             engine.lines.pop();
             engine.colors.pop();
 
-            sail::nil()
+            eng_ptr
         }
 
         "bg-col" 4 [eng_ptr, r, g, b] {
-            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
-                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine)
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
 
             engine.set_clear([
@@ -143,39 +141,39 @@ pub fn render_loop(
                 1.0,
             ]);
 
-            sail::nil()
+            eng_ptr
         }
 
         "clear" 1 [eng_ptr] {
-            assert_eq!(sail::get_cfg_spec(eng_ptr), sail::Cfg::B8Other);
+            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
-                &mut *(sail::read_field_unchecked::<u64>(eng_ptr, 0) as *mut Engine)
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
 
             engine.empty_lines();
 
-            sail::nil()
+            eng_ptr
         }
     }
 
-    sail::insert_native_procs(sl_reg, sl_tbl, sl_env, rndr_fns);
+    sail::insert_native_procs(sl_reg, sl_tbl.clone(), sl_env.clone(), rndr_fns);
 
     engine.setup();
     engine.set_clear([1.0, 1.0, 1.0, 1.0]);
 
     let prog_txt = &std::fs::read_to_string("scripts/rndr.sl").unwrap();
-    let prog_expr = sail::parser::parse(sl_reg, sl_tbl, prog_txt).unwrap();
+    let prog_expr = sail::parser::parse(sl_reg, sl_tbl.clone(), prog_txt).unwrap();
 
     let mut stack = sail::eval::EvalStack::new(10000);
 
     let mut ret_slot: usize = 0;
-    let ret_addr: *mut *mut SlHead = (&mut ret_slot as *mut usize) as *mut *mut SlHead;
+    let ret_addr: *mut *mut sail::SlHead = (&mut ret_slot as *mut usize) as _;
 
-    stack.start(ret_addr, sl_env, prog_expr);
+    stack.start(ret_addr, sl_env.clone(), prog_expr);
 
-    while stack.iter_once(sl_reg, sl_tbl) {}
+    while stack.iter_once(sl_reg, sl_tbl.clone()) {}
 
-    let rndr = sail::env_lookup_by_id(sl_env, sail::S_RNDR.0).expect("rndr script not in env");
+    let rndr = sail::env_lookup_by_id(sl_env.clone(), sail::S_RNDR.0).expect("rndr script not in env");
 
     stack.push_frame_head(ret_addr, sail::eval::Opcode::Apply, sl_env);
     stack.push(rndr);
@@ -187,7 +185,7 @@ pub fn render_loop(
             engine.need_surface_cfg = false;
         }
 
-        if !stack.iter_once(sl_reg, sl_tbl) {
+        if !stack.iter_once(sl_reg, sl_tbl.clone()) {
             println!("render thread ended");
             break;
         }

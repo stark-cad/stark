@@ -53,29 +53,35 @@ pub mod stdenv;
 // TODO: check whether type symbols are valid?
 fn make_val_type_mfst(
     reg: *mut memmgt::Region,
-    ctr: *mut SlHead,
+    ctr: SlHndl,
     fields: Vec<(u32, u32, u32)>,
-) -> *mut SlHead {
+) -> SlHndl {
     assert!(12 + fields.len() * 16 <= u32::MAX as usize);
 
     let fieldct = fields.len() as u32;
-    let mfst = unsafe { memmgt::alloc(reg, ty_manifest_size(fieldct), memmgt::cap(Cfg::TyMfst)) };
+    let mfst = unsafe {
+        SlHndl::from_raw_unchecked(memmgt::alloc(
+            reg,
+            ty_manifest_size(fieldct),
+            memmgt::cap(Cfg::TyMfst),
+        ))
+    };
 
-    core_write_field(mfst, 0, typ_ctr_get_id(ctr));
-    core_write_field(mfst, 4, fieldct);
+    core_write_field(mfst.clone(), 0, typ_ctr_get_id(ctr));
+    core_write_field(mfst.clone(), 4, fieldct);
 
     let mut val_ofst_acc: u32 = 0;
 
     for (i, f) in fields.iter().enumerate() {
         let ent_ofst = 16 * i as u32 + 12;
-        core_write_field(mfst, ent_ofst + 0, val_ofst_acc);
-        core_write_field(mfst, ent_ofst + 4, f.0);
-        core_write_field(mfst, ent_ofst + 8, f.1);
-        core_write_field(mfst, ent_ofst + 12, f.2);
+        core_write_field(mfst.clone(), ent_ofst + 0, val_ofst_acc);
+        core_write_field(mfst.clone(), ent_ofst + 4, f.0);
+        core_write_field(mfst.clone(), ent_ofst + 8, f.1);
+        core_write_field(mfst.clone(), ent_ofst + 12, f.2);
         val_ofst_acc += f.0;
     }
 
-    core_write_field(mfst, 8, val_ofst_acc);
+    core_write_field(mfst.clone(), 8, val_ofst_acc);
     mfst
 }
 
@@ -139,31 +145,31 @@ impl TryFrom<u16> for SlErrCode {
 }
 
 #[inline(always)]
-fn errcode_make(reg: *mut memmgt::Region) -> *mut SlHead {
+fn errcode_make(reg: *mut memmgt::Region) -> SlHndl {
     unsafe {
-        let ptr = memmgt::alloc(reg, 2, memmgt::cap(Cfg::B2Err));
-        write_field_unchecked::<u16>(ptr, 0, 0);
-        ptr
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 2, memmgt::cap(Cfg::B2Err)));
+        // write_field_unchecked::<u16>(ptr, 0, 0);
+        out
     }
 }
 
 #[inline(always)]
-fn errcode_init(reg: *mut memmgt::Region, err: SlErrCode) -> *mut SlHead {
+fn errcode_init(reg: *mut memmgt::Region, err: SlErrCode) -> SlHndl {
     unsafe {
-        let ptr = memmgt::alloc(reg, 2, memmgt::cap(Cfg::B2Err));
-        write_field_unchecked::<u16>(ptr, 0, err as u16);
-        ptr
+        let out = errcode_make(reg);
+        write_field_unchecked::<u16>(out.clone(), 0, err as u16);
+        out
     }
 }
 
 #[inline(always)]
-fn errcode_set(loc: *mut SlHead, err: SlErrCode) {
+fn errcode_set(loc: SlHndl, err: SlErrCode) {
     coretypck!(loc ; ErrCode);
     core_write_field(loc, 0, err as u16);
 }
 
 #[inline(always)]
-fn errcode_get(loc: *mut SlHead) -> SlErrCode {
+fn errcode_get(loc: SlHndl) -> SlErrCode {
     coretypck!(loc ; ErrCode);
     SlErrCode::try_from(core_read_field::<u16>(loc, 0)).unwrap()
 }
@@ -173,20 +179,20 @@ fn arrvec_make<T: SizedBase + Copy>(
     typ: u32,
     len: u32,
     fill: T,
-) -> *mut SlHead {
+) -> SlHndl {
     assert_eq!(temp_get_size(typ) as usize, mem::size_of::<T>());
     unsafe {
         let size = vec_size(8, temp_get_size(typ), len);
-        let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::VecArr));
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::VecArr)));
 
-        write_field_unchecked::<u32>(ptr, 0, typ);
-        write_field_unchecked::<u32>(ptr, 4, len);
+        write_field_unchecked::<u32>(out.clone(), 0, typ);
+        write_field_unchecked::<u32>(out.clone(), 4, len);
 
         for i in 0..len {
-            write_field_unchecked(ptr, 8 + (temp_get_size(typ) * i), fill)
+            write_field_unchecked(out.clone(), 8 + (temp_get_size(typ) * i), fill)
         }
 
-        ptr
+        out
     }
 }
 
@@ -195,43 +201,43 @@ pub fn arrvec_init<T: SizedBase + Copy>(
     typ: u32,
     len: u32,
     val: &[T],
-) -> *mut SlHead {
+) -> SlHndl {
     assert_eq!(len as usize, val.len());
     assert_eq!(temp_get_size(typ) as usize, mem::size_of::<T>());
 
     unsafe {
         let size = vec_size(8, temp_get_size(typ), len);
-        let ptr = memmgt::alloc(reg, size, memmgt::cap(Cfg::VecArr));
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::VecArr)));
 
-        write_field_unchecked::<u32>(ptr, 0, typ);
-        write_field_unchecked::<u32>(ptr, 4, len);
+        write_field_unchecked::<u32>(out.clone(), 0, typ);
+        write_field_unchecked::<u32>(out.clone(), 4, len);
 
         for (i, p) in val.iter().enumerate() {
-            write_field_unchecked(ptr, 8 + (temp_get_size(typ) * i as u32), *p)
+            write_field_unchecked(out.clone(), 8 + (temp_get_size(typ) * i as u32), *p)
         }
 
-        ptr
+        out
     }
 }
 
-fn arrvec_get_typ(loc: *mut SlHead) -> u32 {
+fn arrvec_get_typ(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecArr);
     core_read_field(loc, 0)
 }
 
-fn arrvec_get_len(loc: *mut SlHead) -> u32 {
+fn arrvec_get_len(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecArr);
     core_read_field(loc, 4)
 }
 
-pub fn arrvec_rplc<T: SizedBase + Copy>(loc: *mut SlHead, val: &[T]) {
-    let (len, typ) = (arrvec_get_len(loc), arrvec_get_typ(loc));
+pub fn arrvec_rplc<T: SizedBase + Copy>(loc: SlHndl, val: &[T]) {
+    let (len, typ) = (arrvec_get_len(loc.clone()), arrvec_get_typ(loc.clone()));
 
     assert_eq!(len, val.len() as u32);
     assert_eq!(temp_get_size(typ), mem::size_of::<T>() as u32);
 
     for (i, p) in val.iter().enumerate() {
-        unsafe { write_field_unchecked(loc, 8 + (temp_get_size(typ) * i as u32), *p) }
+        unsafe { write_field_unchecked(loc.clone(), 8 + (temp_get_size(typ) * i as u32), *p) }
     }
 }
 
@@ -380,12 +386,12 @@ incl_types! {
 
 /// Bundles together an object and associated symbol table for display
 pub struct SlContextVal {
-    tbl: *mut SlHead,
-    obj: *mut SlHead,
+    tbl: SlHndl,
+    obj: SlHndl,
 }
 
 /// Create a SlContextVal for display
-pub fn context(tbl: *mut SlHead, obj: *mut SlHead) -> SlContextVal {
+pub fn context(tbl: SlHndl, obj: SlHndl) -> SlContextVal {
     SlContextVal { tbl, obj }
 }
 
@@ -393,11 +399,11 @@ pub fn context(tbl: *mut SlHead, obj: *mut SlHead) -> SlContextVal {
 // TODO: just push characters into a byte vector (string) for display
 impl fmt::Display for SlContextVal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let table = self.tbl;
-        let value = self.obj;
+        let table = self.tbl.clone();
+        let value = self.obj.clone();
 
         use CoreType::*;
-        match core_type(value) {
+        match value.core_type() {
             Some(t) => match t {
                 Nil => write!(f, "()"),
                 Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
@@ -410,27 +416,43 @@ impl fmt::Display for SlContextVal {
                     let full_id = sym_get_id(value);
                     match mode_of_sym(full_id) {
                         SymbolMode::Basic => {
-                            write!(f, "{}", string_get(sym_tab_lookup_id_num(table, full_id)))
+                            write!(
+                                f,
+                                "{}",
+                                match sym_tab_lookup_id_num(table, full_id) {
+                                    Some(n) => string_get(n),
+                                    None => "<none>",
+                                }
+                            )
                         }
                         SymbolMode::Keyword => {
                             write!(
                                 f,
                                 ":{}",
-                                string_get(sym_tab_lookup_id_num(table, demodes_sym(full_id)))
+                                match sym_tab_lookup_id_num(table, demodes_sym(full_id)) {
+                                    Some(n) => string_get(n),
+                                    None => "<none>",
+                                }
                             )
                         }
                         SymbolMode::Module => {
                             write!(
                                 f,
                                 "@{}",
-                                string_get(sym_tab_lookup_id_num(table, demodes_sym(full_id)))
+                                match sym_tab_lookup_id_num(table, demodes_sym(full_id)) {
+                                    Some(n) => string_get(n),
+                                    None => "<none>",
+                                }
                             )
                         }
                         SymbolMode::Type => {
                             write!(
                                 f,
                                 "${}",
-                                string_get(sym_tab_lookup_id_num(table, demodes_sym(full_id)))
+                                match sym_tab_lookup_id_num(table, demodes_sym(full_id)) {
+                                    Some(n) => string_get(n),
+                                    None => "<none>",
+                                }
                             )
                         }
                     }
@@ -438,10 +460,10 @@ impl fmt::Display for SlContextVal {
                 Ref => {
                     write!(f, "(").unwrap();
                     let mut elt = ref_get(value);
-                    while !nil_p(elt) {
-                        write!(f, "{}", context(table, elt).to_string()).unwrap();
-                        elt = get_next_list_elt(elt);
-                        if !nil_p(elt) {
+                    while let Some(next) = elt {
+                        write!(f, "{}", context(table.clone(), next.clone()).to_string()).unwrap();
+                        elt = get_next_list_elt(next);
+                        if elt.is_some() {
                             write!(f, " ").unwrap();
                         }
                     }
@@ -449,10 +471,14 @@ impl fmt::Display for SlContextVal {
                 }
                 VecStd => {
                     write!(f, "[").unwrap();
-                    let len = stdvec_get_len(value);
+                    let len = stdvec_get_len(value.clone());
                     for idx in 0..len {
-                        write!(f, "{}", context(table, stdvec_idx(value, idx)).to_string())
-                            .unwrap();
+                        write!(
+                            f,
+                            "{}",
+                            context(table.clone(), stdvec_idx(value.clone(), idx)).to_string()
+                        )
+                        .unwrap();
                         if idx < len - 1 {
                             write!(f, " ").unwrap();
                         }
@@ -464,24 +490,33 @@ impl fmt::Display for SlContextVal {
                     // TODO: function to access all map pairs somehow
                     write!(f, "{{").unwrap();
                     // visit every position and traverse each entry list as below
-                    let size = hashvec_get_size(value);
+                    let size = hashvec_get_size(value.clone());
                     let mut fst = true;
                     for idx in 0..size {
-                        let mut pos = read_ptr(value, 4 + 4 + (PTR_LEN * idx));
-                        while !nil_p(pos) {
+                        let mut pos = read_ptr(value.clone(), 4 + 4 + (PTR_LEN * idx));
+                        while let Some(next) = pos {
                             if !fst {
                                 write!(f, " ").unwrap()
                                 // TODO: keep commas / parse them in maps?
                                 // write!(f, ", ").unwrap()
                             }
-                            write!(f, "{} ", context(table, ref_get(pos)).to_string()).unwrap();
+                            write!(
+                                f,
+                                "{} ",
+                                context(table.clone(), ref_get(next.clone()).unwrap()).to_string()
+                            )
+                            .unwrap();
                             write!(
                                 f,
                                 "{}",
-                                context(table, get_next_list_elt(ref_get(pos))).to_string()
+                                context(
+                                    table.clone(),
+                                    get_next_list_elt(ref_get(next.clone()).unwrap()).unwrap()
+                                )
+                                .to_string()
                             )
                             .unwrap();
-                            pos = get_next_list_elt(pos);
+                            pos = get_next_list_elt(next);
                             fst = false;
                         }
                     }
@@ -506,7 +541,7 @@ pub fn repl(stream_in: std::io::Stdin) {
     let (tbl, ctr, env) = prep_environment(region);
 
     // Load standard / base definitions into environment and symbol table
-    environment_setup(region, tbl, ctr, env);
+    environment_setup(region, tbl.clone(), ctr, env.clone());
 
     let mut stack = eval::EvalStack::new(10000);
 
@@ -517,7 +552,7 @@ pub fn repl(stream_in: std::io::Stdin) {
         let mut input = String::new();
         stream_in.read_line(&mut input).expect("Failure");
 
-        let expr = match parser::parse(region, tbl, &input) {
+        let expr = match parser::parse(region, tbl.clone(), &input) {
             Ok(out) => out,
             Err(err) => {
                 println!("{:?}\n", err);
@@ -525,11 +560,14 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         };
 
-        stack.start(ret_addr, env, expr);
+        stack.start(ret_addr, env.clone(), expr);
 
-        while stack.iter_once(region, tbl) {}
+        while stack.iter_once(region, tbl.clone()) {}
 
-        println!("{}\n", context(tbl, ret_slot).to_string());
+        println!(
+            "{}\n",
+            context(tbl.clone(), unsafe { SlHndl::from_raw(ret_slot).unwrap() }).to_string()
+        );
     }
 }
 
@@ -548,30 +586,25 @@ pub fn interpret(code: &str) -> Result<String, SlErrCode> {
 
     let (tbl, ctr, env) = prep_environment(region);
 
-    environment_setup(region, tbl, ctr, env);
+    environment_setup(region, tbl.clone(), ctr, env.clone());
 
-    let expr = parser::parse(region, tbl, code)?;
-    let result = eval::eval(region, tbl, env, expr);
+    let expr = parser::parse(region, tbl.clone(), code)?;
+    let result = eval::eval(region, tbl.clone(), env, expr);
 
     Ok(context(tbl, result).to_string())
 }
 
 /// Set up the symbol table and environment before interpreting Sail code
-pub fn environment_setup(
-    reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    ctr: *mut SlHead,
-    env: *mut SlHead,
-) {
+pub fn environment_setup(reg: *mut memmgt::Region, tbl: SlHndl, ctr: SlHndl, env: SlHndl) {
     for (n, s) in SYM_ARRAY.into_iter().enumerate() {
-        sym_tab_add_with_id(reg, tbl, s, n as u32);
+        sym_tab_add_with_id(reg, tbl.clone(), s, n as u32);
     }
 
-    sym_tab_set_next_id(tbl, SYM_ARRAY.len() as u32);
+    sym_tab_set_next_id(tbl.clone(), SYM_ARRAY.len() as u32);
     typ_ctr_set_next_id(ctr, TID_COUNT as u32);
 
     let true_intern = bool_init(reg, true);
-    env_scope_ins_by_id(reg, env, S_T_INTERN.0, true_intern);
+    env_scope_ins_by_id(reg, env.clone(), S_T_INTERN.0, true_intern);
 
     insert_native_procs(reg, tbl, env, stdenv::ENVFNS);
 }
@@ -579,16 +612,16 @@ pub fn environment_setup(
 /// Insert a slice of native procedures into the symbol table and environment
 pub fn insert_native_procs(
     reg: *mut memmgt::Region,
-    tbl: *mut SlHead,
-    env: *mut SlHead,
+    tbl: SlHndl,
+    env: SlHndl,
     fns: &[(&str, NativeFn, u16)],
 ) {
     for entry in fns {
-        let proc_id = sym_tab_get_id(reg, tbl, entry.0);
+        let proc_id = sym_tab_get_id(reg, tbl.clone(), entry.0);
 
         let proc_fn = proc_native_init(reg, entry.2, entry.1);
 
-        env_scope_ins_by_id(reg, env, proc_id, proc_fn);
+        env_scope_ins_by_id(reg, env.clone(), proc_id, proc_fn);
     }
 }
 
@@ -616,18 +649,18 @@ mod tests {
         };
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
-        let val = parser::parse(reg, tbl, &exp).unwrap();
-        let out = context(tbl, val).to_string();
+        let val = parser::parse(reg, tbl.clone(), &exp).unwrap();
+        let out = context(tbl.clone(), val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("(() (()) ((((() ())))))");
-        let val = parser::parse(reg, tbl, &exp).unwrap();
-        let out = context(tbl, val).to_string();
+        let val = parser::parse(reg, tbl.clone(), &exp).unwrap();
+        let out = context(tbl.clone(), val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("((1 2 3 4) ;Comment\n5)");
         let gnd = String::from("((1 2 3 4) 5)");
-        let val = parser::parse(reg, tbl, &exp).unwrap();
+        let val = parser::parse(reg, tbl.clone(), &exp).unwrap();
         let out = context(tbl, val).to_string();
         assert_eq!(gnd, out);
     }
