@@ -102,13 +102,173 @@ struct _SlListPtr {
 
 // TODO: use this type to manage Sail object references on the main
 // stack using the Rust lifetime system
-struct SlHndl {
-    ptr: *mut SlHead,
+
+#[derive(PartialEq)]
+#[repr(C)]
+pub struct SlHndl {
+    raw: *mut SlHead,
+}
+
+impl Clone for SlHndl {
+    fn clone(&self) -> Self {
+        // log::debug!("Cloning object handle");
+        inc_refc(self.raw);
+        SlHndl { raw: self.raw }
+    }
 }
 
 impl Drop for SlHndl {
     fn drop(&mut self) {
-        todo!()
+        // log::debug!("Dropping object handle");
+        // __dbg_head_info(self.raw);
+        if dec_refc(self.raw) {
+            destroy_obj_core(self.raw)
+        }
+    }
+}
+
+unsafe impl Send for SlHndl {}
+unsafe impl Sync for SlHndl {}
+
+impl SlHndl {
+    pub unsafe fn get_raw(&self) -> *mut SlHead {
+        self.raw
+    }
+
+    pub unsafe fn from_raw(loc: *mut SlHead) -> Option<Self> {
+        if nil_p(loc) {
+            None
+        } else {
+            // log::debug!("Creating object handle");
+            inc_refc(loc);
+            Some(SlHndl { raw: loc })
+        }
+    }
+
+    pub unsafe fn from_raw_unchecked(loc: *mut SlHead) -> Self {
+        debug_assert!(!nil_p(loc));
+        // log::debug!("Creating object handle");
+        SlHndl { raw: loc }
+    }
+
+    #[inline(always)]
+    pub fn nnil_ref_p(&self) -> bool {
+        match self.core_type() {
+            Some(t) if t == CoreType::Ref => ref_get(self.clone()).is_some(),
+            _ => false,
+        }
+    }
+
+    #[inline(always)]
+    pub fn basic_sym_p(&self) -> bool {
+        match self.core_type() {
+            Some(t) if t == CoreType::Symbol => {
+                mode_of_sym(sym_get_id(self.clone())) == SymbolMode::Basic
+            }
+            _ => false,
+        }
+    }
+
+    #[inline(always)]
+    pub fn proc_p(&self) -> bool {
+        match self.core_type() {
+            Some(t) if t == CoreType::ProcLambda || t == CoreType::ProcNative => true,
+            _ => false,
+        }
+    }
+
+    #[inline(always)]
+    pub fn type_fld_p(&self) -> bool {
+        let head = self.cfg_byte();
+        (head & 0b00011100) >> 2 == 7
+    }
+
+    #[inline(always)]
+    pub fn size_fld_p(&self) -> bool {
+        let head = self.cfg_byte();
+        head >> 5 > 5
+    }
+
+    #[inline(always)]
+    pub fn type_id(&self) -> u32 {
+        assert!(self.type_fld_p());
+        unsafe { ptr::read_unaligned((self.raw as *mut u8).add(HEAD_LEN as usize) as *const u32) }
+    }
+
+    #[inline(always)]
+    pub fn size(&self) -> u32 {
+        let code = self.cfg_byte() >> 5;
+        if code <= 5 {
+            0x80000000_u32.rotate_left(code as u32) & 31
+        } else {
+            assert!(self.size_fld_p());
+            unsafe {
+                ptr::read_unaligned(
+                    (self.raw as *mut u8)
+                        .add((HEAD_LEN + (NUM_32_LEN * self.type_fld_p() as u32)) as usize)
+                        as *const u32,
+                )
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn __dbg_head_info(&self) {
+        println!(
+            "type field?: {}; size field?: {}; size: {}",
+            self.type_fld_p(),
+            self.size_fld_p(),
+            self.size()
+        )
+    }
+
+    #[inline(always)]
+    pub fn truthy(&self) -> bool {
+        !((coretypp!(self ; Bool) && !bool_get(self.clone()))
+            || (coretypp!(self ; Ref) && ref_get(self.clone()).is_none()))
+    }
+
+    #[inline(always)]
+    fn cfg_byte(&self) -> u8 {
+        unsafe { ptr::read_unaligned(self.raw as *const u8) }
+    }
+
+    #[inline(always)]
+    fn refc_byte(&self) -> u8 {
+        unsafe { ptr::read_unaligned((self.raw as *const u8).add(1)) }
+    }
+
+    #[inline(always)]
+    pub fn cfg_spec(&self) -> Cfg {
+        let top_byte = self.cfg_byte();
+        match Cfg::try_from(top_byte & 0b11111100) {
+            Ok(out) => out,
+            Err(_) => panic!("invalid cfg specifier: {:08b}", top_byte),
+        }
+    }
+
+    #[inline(always)]
+    pub fn base_size(&self) -> BaseSize {
+        match BaseSize::try_from(self.cfg_byte() >> 5) {
+            Ok(out) => out,
+            Err(_) => unreachable!(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn value_ptr(&self) -> *mut u8 {
+        let offset = (HEAD_LEN
+            + (self.type_fld_p() as u32 * NUM_32_LEN)
+            + (self.size_fld_p() as u32 * NUM_32_LEN)) as usize;
+        unsafe { (self.raw as *mut u8).add(offset) }
+    }
+
+    #[inline(always)]
+    pub fn core_type(&self) -> Option<CoreType> {
+        match CoreType::try_from(self.cfg_spec()) {
+            Ok(out) => Some(out),
+            Err(_) => None,
+        }
     }
 }
 
