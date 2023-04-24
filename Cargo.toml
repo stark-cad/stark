@@ -5,7 +5,9 @@ authors = ["Matthew Rothlisberger <mattjrothlis@gmail.com>"]
 edition = "2021"
 
 [features]
+# intensive Sail memory debugging
 memdbg = []
+# Sail stack debug readouts
 stkdbg = []
 
 [dependencies]
@@ -17,7 +19,7 @@ raw-window-handle = "0.5"
 shaderc = "0.8"
 
 png = "0.17"
-ttf-parser = "0.18"
+ttf-parser = "0.19"
 
 log = "0.4"
-simple_logger = "2.3"
+simple_logger = "4.1"

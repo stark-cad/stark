@@ -850,6 +850,94 @@ pub fn destroy_obj(env: SlHndl, loc: *mut SlHead) {
     unsafe { memmgt::dealloc(loc) }
 }
 
+#[cfg(test)]
+mod refc_tests {
+    use super::*;
+
+    #[test]
+    fn up_down() {
+        unsafe {
+            let reg = memmgt::acquire_mem_region(100);
+            let item = memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0BoolF));
+
+            let adrs = item as usize;
+
+            assert_eq!(raw_refc_byte(item), 1);
+
+            inc_refc(item);
+            inc_refc(item);
+
+            assert_eq!(raw_refc_byte(item), 3);
+
+            dec_refc(item);
+            dec_refc(item);
+
+            assert_eq!(raw_refc_byte(item), 1);
+
+            if dec_refc(item) {
+                println!("count reached 0");
+                destroy_obj_core(item)
+            }
+
+            let new = memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0BoolT));
+
+            assert_eq!(adrs, new as usize);
+        }
+    }
+
+    #[test]
+    fn stack_refs() {
+        unsafe {
+            let reg = memmgt::acquire_mem_region(100);
+
+            let dme = env_create(reg, None);
+
+            let hdl_a_1 = u64_make(reg);
+            let ptr_a = hdl_a_1.get_raw();
+            println!("Object at {:x}", ptr_a as usize);
+
+            assert_eq!(raw_refc_byte(ptr_a), 1);
+
+            let hdl_a_2 = hdl_a_1.clone();
+            let hdl_a_3 = hdl_a_1.clone();
+
+            assert_eq!(raw_refc_byte(ptr_a), 3);
+
+            let hdl_b_1 = ref_init(reg, hdl_a_1);
+
+            assert_eq!(raw_refc_byte(ptr_a), 3);
+
+            let hdl_c_1 = bool_make(reg);
+            let hdl_c_2 = hdl_c_1.clone();
+
+            println!("All objects created");
+
+            set_next_list_elt(dme, hdl_c_1, hdl_a_2);
+
+            println!("Bool next elt set to u64");
+
+            assert_eq!(raw_refc_byte(ptr_a), 3);
+
+            drop(hdl_b_1);
+
+            println!("Ref to u64 dropped");
+
+            assert_eq!(raw_refc_byte(ptr_a), 2);
+
+            drop(hdl_c_2);
+
+            println!("Bool handle dropped");
+
+            assert_eq!(raw_refc_byte(ptr_a), 1);
+
+            drop(hdl_a_3);
+
+            println!("u64 handle dropped");
+
+            assert_eq!(raw_refc_byte(ptr_a), 0);
+        }
+    }
+}
 
 pub fn write_ptr(env: SlHndl, loc: SlHndl, offset: u32, pto: SlHndl) {
     assert!(offset + PTR_LEN <= loc.size());

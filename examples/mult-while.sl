@@ -3,6 +3,7 @@
 
 ; run time, April 21 2021: ~0.07 seconds
 ; run time, October 10 2022: negligible
+; run time, April 23 2023: ~0.01 seconds
 
 (do
 (def max 1000)

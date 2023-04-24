@@ -5,6 +5,7 @@
 ; run time, April 13 2021: ~4 seconds
 ; run time, April 21 2021: ~3.3 seconds
 ; run time, October 10 2022: ~0.02 seconds
+; run time, April 23 2023: ~0.09 seconds
 
 (do
 (def mult (fn [max acc cur]
@@ -15,7 +16,6 @@
                           (if (= (mod cur 5) 0)
                               (set acc (+ acc cur))
                               ()))
-                      ;(print cur)
                       (mult max acc (+ cur 1))))))
 (mult 1000 0 1)
 )
