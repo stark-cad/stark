@@ -168,6 +168,10 @@ pub fn run_loop<Ij: 'static>(
                     );
 
                     let moved = sail::sym_init(sl_reg, sail::K_CX_CURMV.0);
+
+                    // TODO: intern symbols by default, copy out into
+                    // lists as necessary
+
                     sail::queue::queue_tx(dummy_env.clone(), rndr_tx.clone(), moved);
                 }
                 _ => {}

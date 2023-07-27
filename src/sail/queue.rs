@@ -45,10 +45,10 @@ pub fn queue_create(
         inc_refc(sender.get_raw());
 
         write_ptr_unsafe_unchecked(sender.clone(), 0, receiver.clone());
-        write_field_unchecked(sender.clone(), 8, rx_region as u64);
+        write_field_unchecked(sender.clone(), PTR_LEN, rx_region as u64);
 
         // write_field_unchecked(receiver, 0, 0u64);
-        write_ptr_unsafe_unchecked(receiver.clone(), 8, sender.clone());
+        write_ptr_unsafe_unchecked(receiver.clone(), PTR_LEN, sender.clone());
 
         (sender, receiver)
     }
@@ -63,7 +63,7 @@ pub fn queue_tx(env: SlHndl, loc: SlHndl, item: SlHndl) {
         // create new list element containing the item
         // TODO: must change to permit copying arbitrary values
         let elt = core_copy_val(
-            read_field_unchecked::<u64>(loc.clone(), 8) as *mut memmgt::Region,
+            read_field_unchecked::<u64>(loc.clone(), PTR_LEN) as *mut memmgt::Region,
             item,
         );
 
@@ -116,7 +116,7 @@ pub fn queue_rx(env: SlHndl, loc: SlHndl) -> Option<SlHndl> {
         let head = read_ptr_atomic(loc.clone(), 0);
 
         // get the tail of the queue list
-        let sender = read_ptr(loc.clone(), 8).unwrap();
+        let sender = read_ptr(loc.clone(), PTR_LEN).unwrap();
         let tail = read_ptr_atomic(sender.clone(), 0);
 
         if head == read_ptr_atomic(loc.clone(), 0) {

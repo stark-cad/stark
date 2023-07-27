@@ -22,6 +22,8 @@ use std::alloc;
 use std::mem;
 use std::ptr;
 
+static mut OBJECT_ID_CTR: u32 = 0;
+
 /// TODO: allow the user to handle atomic operations if needed?
 /// TODO: global memory, thread local memory
 
@@ -206,15 +208,13 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
     let cfg: u8 = (((size_code << 5) + 28) * type_fld_p as u8) | (maybe_cfg * !(type_fld_p) as u8);
 
     let ptr = {
-        let length = (HEAD_LEN
+        let obj_len = (HEAD_LEN
             + (type_fld_p as u32 * NUM_32_LEN)
             + (size_fld_p as u32 * NUM_32_LEN)) as usize
             + size as usize;
 
-        // TODO: unique block IDs for all objects with =memdbg=
-
         if cfg!(feature = "memdbg") {
-            log::debug!("Allocating {} bytes with cfg: {:#010b}", length, cfg);
+            // log::debug!("Allocating {} bytes with cfg: {:#010b}", length, cfg);
         }
 
         // TODO: search the free tree!
@@ -266,11 +266,21 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
     ptr::write_unaligned(ptr, head);
 
     if type_fld_p {
-        ptr::write_unaligned((ptr as *mut u32).add(2), typ_id);
+        ptr::write_unaligned((ptr as *mut u8).add(HEAD_LEN as usize) as *mut _, typ_id);
     }
 
     if size_fld_p {
-        ptr::write_unaligned((ptr as *mut u32).add(2 + type_fld_p as usize), size);
+        ptr::write_unaligned(
+            (ptr as *mut u8).add(HEAD_LEN as usize + (type_fld_p as usize * NUM_32_LEN as usize))
+                as *mut _,
+            size,
+        );
+    }
+
+    if cfg!(feature = "memdbg") {
+        let obj_id = std::intrinsics::atomic_xadd_acqrel(&mut OBJECT_ID_CTR, 1);
+        ptr::write_unaligned((ptr as *mut u32).add(2), obj_id);
+        println!("O {obj_id} BIRTH (p {:x} c {typ_id:b})", ptr as usize);
     }
 
     // log::info!("Allocated object");
@@ -296,6 +306,11 @@ pub unsafe fn dealloc(val: *mut SlHead) {
     // TODO: deallocations need to also handle objects' references
 
     // log::info!("Reclaiming object");
+
+    if cfg!(feature = "memdbg") {
+        let obj_id = ptr::read_unaligned((val as *mut u32).add(2));
+        println!("O {obj_id} RECLAIM")
+    }
 
     let len = {
         let length = lblk_get_len(val);
@@ -428,6 +443,8 @@ pub unsafe fn dealloc(val: *mut SlHead) {
     }
 
     const BD_MAX: usize = FBLK_NULL_OFFSET as usize;
+    const MIN_FB: usize = HEAD_LEN as usize;
+    const LTM_FB: usize = HEAD_LEN as usize - 1;
 
     let prior_merge = 'p: {
         if lower_bound.is_null() {
@@ -442,8 +459,8 @@ pub unsafe fn dealloc(val: *mut SlHead) {
 
         match diff {
             0 => true,
-            1..=7 => panic!("memory management failed"),
-            8..=BD_MAX => false,
+            1..=LTM_FB => panic!("memory management failed"),
+            MIN_FB..=BD_MAX => false,
             _ => panic!(),
         }
     };
@@ -461,8 +478,8 @@ pub unsafe fn dealloc(val: *mut SlHead) {
 
         match diff {
             0 => true,
-            1..=7 => panic!("memory management failed"),
-            8..=BD_MAX => false,
+            1..=LTM_FB => panic!("memory management failed"),
+            MIN_FB..=BD_MAX => false,
             _ => panic!(),
         }
     };
@@ -649,9 +666,9 @@ pub unsafe fn dealloc(val: *mut SlHead) {
 /// Set the length of a free memory block in a zone
 unsafe fn fblk_set_len(block: *mut FreeBlock, length: u32) {
     assert!(!block.is_null());
-    assert!(length >= 8);
+    assert!(length >= HEAD_LEN);
 
-    let exceeds_head = length > 8;
+    let exceeds_head = length > HEAD_LEN;
     let exceeds_tag = length > 255;
     let exceeds_temporary_limit = length > (1 << 31) - 1;
 
@@ -710,7 +727,7 @@ unsafe fn fblk_get_len(block: *const FreeBlock) -> u32 {
             tag as u32
         }
     } else {
-        8
+        HEAD_LEN
     }
 }
 
@@ -954,11 +971,11 @@ mod free_tree_tests {
         unsafe {
             let block_ptr = &mut test_block;
 
-            fblk_set_len(block_ptr, 8);
+            fblk_set_len(block_ptr, HEAD_LEN);
             fblk_set_prev_ofs(block_ptr, 101);
             fblk_set_next_ofs(block_ptr, 202);
 
-            assert_eq!(8, fblk_get_len(block_ptr));
+            assert_eq!(HEAD_LEN, fblk_get_len(block_ptr));
             assert_eq!(101, fblk_get_prev_ofs(block_ptr));
             assert_eq!(202, fblk_get_next_ofs(block_ptr));
         }
@@ -979,15 +996,15 @@ mod free_tree_tests {
             fblk_set_len(ptr, 42);
 
             assert_eq!(42, fblk_get_len(ptr));
-            assert_eq!(42, ptr::read((ptr as *mut u8).add(8)));
+            assert_eq!(42, ptr::read((ptr as *mut u8).add(HEAD_LEN as _)));
 
             fblk_set_len(ptr, 1234567);
 
             assert_eq!(1234567, fblk_get_len(ptr));
-            assert_eq!(0, ptr::read((ptr as *mut u8).add(8)));
+            assert_eq!(0, ptr::read((ptr as *mut u8).add(HEAD_LEN as _)));
             assert_eq!(
                 1234567,
-                ptr::read_unaligned((ptr as *mut u8).add(9) as *mut u32)
+                ptr::read_unaligned((ptr as *mut u8).add(HEAD_LEN as usize + 1) as *mut u32)
             );
 
             assert_eq!(222222, fblk_get_prev_ofs(ptr));

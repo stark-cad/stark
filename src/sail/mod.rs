@@ -56,6 +56,7 @@ fn make_val_type_mfst(
     ctr: SlHndl,
     fields: Vec<(u32, u32, u32)>,
 ) -> SlHndl {
+    // TODO: define and impose proper object size maximums
     assert!(12 + fields.len() * 16 <= u32::MAX as usize);
 
     let fieldct = fields.len() as u32;
@@ -311,24 +312,25 @@ incl_symbols! {
     51 S_RNDR        "rndr"    Basic;
     52 S_ENGINE      "engine"  Basic;
     53 S_T_INTERN    "%true"   Basic;
-    54 S_FR_DIMS     "fr-dims" Basic;
-    55 S_CUR_POS     "cur-pos" Basic;
-    56 K_CX_DESTR    "cx-dstr" Keyword;
-    57 K_CX_RESIZ    "cx-resz" Keyword;
-    58 K_CX_RECRD    "cx-rcrd" Keyword;
-    59 K_CX_REDRW    "cx-rdrw" Keyword;
-    60 K_CX_CURMV    "cx-crmv" Keyword;
-    61 K_CX_SHELL    "cx-shel" Keyword;
-    62 K_CX_KEY_U    "cx-kb-u" Keyword;
-    63 K_CX_KEY_D    "cx-kb-d" Keyword;
-    64 K_CX_KEY_F    "cx-kb-f" Keyword;
-    65 K_CX_KEY_B    "cx-kb-b" Keyword;
-    66 K_CX_KEY_L    "cx-kb-l" Keyword;
-    67 K_CX_KEY_S    "cx-kb-s" Keyword;
-    68 K_CX_KEY_E    "cx-kb-e" Keyword;
-    69 K_CX_KEY_K    "cx-kb-k" Keyword;
-    70 K_CX_KEY_M    "cx-kb-m" Keyword
     71
+    54 S_F_INTERN    "%false"  Basic;
+    55 S_FR_DIMS     "fr-dims" Basic;
+    56 S_CUR_POS     "cur-pos" Basic;
+    57 K_CX_DESTR    "cx-dstr" Keyword;
+    58 K_CX_RESIZ    "cx-resz" Keyword;
+    59 K_CX_RECRD    "cx-rcrd" Keyword;
+    60 K_CX_REDRW    "cx-rdrw" Keyword;
+    61 K_CX_CURMV    "cx-crmv" Keyword;
+    62 K_CX_SHELL    "cx-shel" Keyword;
+    63 K_CX_KEY_U    "cx-kb-u" Keyword;
+    64 K_CX_KEY_D    "cx-kb-d" Keyword;
+    65 K_CX_KEY_F    "cx-kb-f" Keyword;
+    66 K_CX_KEY_B    "cx-kb-b" Keyword;
+    67 K_CX_KEY_L    "cx-kb-l" Keyword;
+    68 K_CX_KEY_S    "cx-kb-s" Keyword;
+    69 K_CX_KEY_E    "cx-kb-e" Keyword;
+    70 K_CX_KEY_K    "cx-kb-k" Keyword;
+    71 K_CX_KEY_M    "cx-kb-m" Keyword;
 }
 
 macro_rules! incl_types {
@@ -601,11 +603,15 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: SlHndl, ctr: SlHndl, env
     }
 
     sym_tab_set_next_id(tbl.clone(), SYM_ARRAY.len() as u32);
-    typ_ctr_set_next_id(ctr, TID_COUNT as u32);
+    typ_ctr_set_next_id(ctr.clone(), TID_COUNT as u32);
+
+    // TODO: interning is temporary, will crash in lists
 
     let true_intern = bool_init(reg, true);
     env_scope_ins_by_id(reg, env.clone(), S_T_INTERN.0, true_intern);
 
+    let false_intern = bool_init(reg, false);
+    env_scope_ins_by_id(reg, env.clone(), S_F_INTERN.0, false_intern);
     insert_native_procs(reg, tbl, env, stdenv::ENVFNS);
 }
 

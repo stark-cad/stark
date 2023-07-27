@@ -62,7 +62,11 @@ sized_base! {
 }
 
 /// Head includes pointer to next list element
+#[cfg(not(feature = "memdbg"))]
 pub const HEAD_LEN: u32 = 8;
+#[cfg(feature = "memdbg")]
+pub const HEAD_LEN: u32 = 12;
+
 pub const PTR_LEN: u32 = 8;
 pub const SYMBOL_LEN: u32 = 4;
 pub const NUM_8_LEN: u32 = 1;
@@ -84,6 +88,10 @@ pub struct SlHead {
 
 // TODO: potential change: add a "shared" bit to indicate that an object
 // may be read and / or written by other threads
+
+// TODO: add an "interned" bit to indicate that the object must be
+// copied before any list structure manipulation; also could mean
+// "loner" or "read-only"
 
 // TODO / NOTE: There are now two spare, unused bits in the Sail head:
 // the lowest two bits
@@ -271,6 +279,10 @@ impl SlHndl {
         }
     }
 }
+
+// do we require that SlHndl is always non-null? could use the same
+// guaranteed non-null optimization for Option as certain standard
+// library types do
 
 /// Generates TryFrom implementations for important enums
 macro_rules! enum_and_tryfrom {
@@ -688,6 +700,10 @@ fn proc_native_size() -> u32 {
 }
 
 // TODO: separate out pointer writes for garbage collection
+
+// TODO: could avoid multithreaded reference count handlers by
+// requiring that all objects are known to only one evaluation unit;
+// queue objects would be the main concern
 
 /// Increment the reference count stored in a Sail object, up to a
 /// maximum of 255; if the count is at 255, return true

@@ -193,48 +193,50 @@ sail_fn! {
 
     "=" 2 [fst, snd] {
         let result = i64_get(fst) == i64_get(snd);
-        // if result {
-        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        // } else {
-        //     nil()
-        // }
-        return bool_init(_reg, result);
+        if result {
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
+        }
+        // return bool_init(_reg, result);
     }
 
     "eq" 2 [fst, snd] {
         let result = core_eq(fst, snd);
-        // if result {
-        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        // } else {
-        //     nil()
-        // }
-        return bool_init(_reg, result);
+        if result {
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
+        }
+        // return bool_init(_reg, result);
     }
 
     "not" 1 [val] {
-        let out = bool_make(_reg);
+        // let out = bool_make(_reg);
         if val.truthy() {
-            bool_set(out.clone(), false)
-            // env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+            // bool_set(out.clone(), false)
+            env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
         } else {
-            bool_set(out.clone(), true)
-            // nil()
+            // bool_set(out.clone(), true)
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
         }
-        return out;
+        // return out;
     }
 
     "qtx" 2 [sender, item] {
-        super::queue::queue_tx(_env, sender, item);
+        super::queue::queue_tx(_env.clone(), sender, item);
 
-        return bool_init(_reg, true);
+        env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
 
+        // return bool_init(_reg, true);
         // return nil();
     }
 
     "qrx" 2 [receiver] {
-        return match super::queue::queue_rx(_env, receiver) {
+        return match super::queue::queue_rx(_env.clone(), receiver) {
             Some(r) => r,
-            None => ref_make(_reg),
+            // None => ref_make(_reg),
+            None => env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
         };
     }
 
