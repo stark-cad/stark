@@ -348,6 +348,8 @@ enum_and_tryfrom! {
         // ProcLbdaCk = 0b11101000,
         // ProcNatvCk = 0b11101100,
         TyMfst = 0b11110000,
+        EnvScope = 0b11110100,
+        EnvLayer = 0b11111000,
         Other = 0b11111100,
     }
 }
@@ -416,6 +418,8 @@ pub enum CoreType {
     VecHash,
     ProcLambda,
     ProcNative,
+    EnvScope,
+    EnvLayer,
 }
 
 impl TryFrom<Cfg> for CoreType {
@@ -449,6 +453,8 @@ impl TryFrom<Cfg> for CoreType {
             Cfg::ProcLambda => Ok(Self::ProcLambda),
             Cfg::ProcNative => Ok(Self::ProcNative),
             Cfg::TyMfst => Ok(Self::TyMfst),
+            Cfg::EnvScope => Ok(Self::EnvScope),
+            Cfg::EnvLayer => Ok(Self::EnvLayer),
             _ => Err(()),
         }
     }
@@ -781,6 +787,31 @@ fn discern_refs_core(loc: *mut SlHead) -> Vec<*mut SlHead> {
                 let nest = ptr::read_unaligned(raw_val_ptr(loc).add(2) as _);
                 if !nil_p(nest) {
                     acc.push(nest)
+                }
+            }
+            Some(CoreType::TyDsc) => {
+                let nest = ptr::read_unaligned(raw_val_ptr(loc).add(8) as _);
+                if !nil_p(nest) {
+                    acc.push(nest)
+                }
+            }
+            Some(CoreType::EnvScope) => {
+                for l in 0..3 {
+                    let nest = ptr::read_unaligned(raw_val_ptr(loc).add(l * PTR_LEN as usize) as _);
+                    if !nil_p(nest) {
+                        acc.push(nest)
+                    }
+                }
+            }
+            Some(CoreType::EnvLayer) => {
+                for ety in 0..ENV_LAYER_SLOTS {
+                    let nest = ptr::read_unaligned(
+                        raw_val_ptr(loc).add((ety * (PTR_LEN + SYMBOL_LEN) + SYMBOL_LEN) as usize)
+                            as _,
+                    );
+                    if !nil_p(nest) {
+                        acc.push(nest)
+                    }
                 }
             }
             Some(CoreType::VecStd) => {
@@ -1155,6 +1186,8 @@ pub unsafe fn write_field_cmpxcg_unchecked<T: SizedBase + Copy>(
     let dst = loc.value_ptr().add(offset as usize) as *mut T;
     std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, src).1
 }
+
+// TODO: pretty sure this function is now universal
 
 /// Read from a field of a Sail object of a core type
 #[inline(always)]
@@ -1816,16 +1849,14 @@ const ENV_MAX_PROBES: u32 = 5;
 /// to symbols
 pub fn env_create(reg: *mut Region, parent: Option<SlHndl>) -> SlHndl {
     unsafe {
-        let env = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 3 * PTR_LEN, super::T_ENV_ID.0));
+        let env =
+            SlHndl::from_raw_unchecked(memmgt::alloc(reg, 3 * PTR_LEN, memmgt::cap(Cfg::EnvScope)));
 
+        // TODO: write_into / write_next macro that handles reference count
         if let Some(par) = parent {
             inc_refc(par.get_raw());
             set_next_list_elt_unsafe_unchecked(env.clone(), par);
         }
-
-        // write_ptr_unsafe_unchecked(env, 0, nil());
-        // write_ptr_unsafe_unchecked(env, 8, nil());
-        // write_ptr_unsafe_unchecked(env, 16, nil());
 
         // println!("<> environment created");
 
@@ -1838,7 +1869,7 @@ pub fn env_layer_make(reg: *mut Region) -> SlHndl {
         SlHndl::from_raw_unchecked(memmgt::alloc(
             reg,
             ENV_LAYER_SLOTS * (SYMBOL_LEN + PTR_LEN),
-            super::T_ENV_LYR_ID.0,
+            memmgt::cap(Cfg::EnvLayer),
         ))
     };
 
@@ -1921,8 +1952,8 @@ pub fn env_scope_ins(reg: *mut Region, env: SlHndl, sym: SlHndl, obj: SlHndl) {
 /// Inserts a symbol with the given ID into the environment, bound to
 /// the given object
 pub fn env_scope_ins_by_id(reg: *mut Region, env: SlHndl, sym_id: u32, obj: SlHndl) {
-    assert_eq!(env.type_id(), super::T_ENV_ID.0);
-
+    // assert_eq!(env.type_id(), super::T_ENV_ID.0);
+    coretypck!(env ; EnvScope);
     // println!("inserting sym {}", sym_id);
 
     let layer_offset = match mode_of_sym(sym_id) {
@@ -1940,6 +1971,7 @@ pub fn env_scope_ins_by_id(reg: *mut Region, env: SlHndl, sym_id: u32, obj: SlHn
     'layer: loop {
         if layer_ptr.is_none() {
             let new_layer = env_layer_make(reg);
+            // TODO: r!() macro instead of clone?
             match top_layer.clone() {
                 Some(tl) => set_next_list_elt(env.clone(), new_layer.clone(), tl),
                 None => clr_next_list_elt(env.clone(), new_layer.clone()),
@@ -1948,7 +1980,9 @@ pub fn env_scope_ins_by_id(reg: *mut Region, env: SlHndl, sym_id: u32, obj: SlHn
             layer_ptr = Some(new_layer.clone());
         }
 
-        assert_eq!(layer_ptr.as_ref().unwrap().type_id(), super::T_ENV_LYR_ID.0);
+        // assert_eq!(layer_ptr.as_ref().unwrap().type_id(), super::T_ENV_LYR_ID.0);
+        let lytt = layer_ptr.as_ref().unwrap();
+        coretypck!(lytt ; EnvLayer);
 
         'entry: for o in 0..ENV_MAX_PROBES {
             let slot_offset = (entry_offset + o) % ENV_LAYER_SLOTS;
@@ -1985,8 +2019,8 @@ pub fn env_scope_ins_by_id(reg: *mut Region, env: SlHndl, sym_id: u32, obj: SlHn
 /// the location in the environment of the object it refers to; None
 /// if no binding
 fn env_get_binding_loc(env: SlHndl, sym_id: u32) -> Option<*mut *mut SlHead> {
-    assert_eq!(env.type_id(), super::T_ENV_ID.0);
-
+    // assert_eq!(env.type_id(), super::T_ENV_ID.0);
+    coretypck!(env ; EnvScope);
     // println!("seeking sym {}", sym_id);
 
     let layer_offset = match mode_of_sym(sym_id) {
@@ -2006,7 +2040,9 @@ fn env_get_binding_loc(env: SlHndl, sym_id: u32) -> Option<*mut *mut SlHead> {
             break 'scope;
         }
 
-        assert_eq!(scope_ptr.as_ref().unwrap().type_id(), super::T_ENV_ID.0);
+        // assert_eq!(scope_ptr.as_ref().unwrap().type_id(), super::T_ENV_ID.0);
+        let sctt = scope_ptr.as_ref().unwrap();
+        coretypck!(sctt ; EnvScope);
 
         layer_ptr = unsafe { read_ptr_unchecked(scope_ptr.clone().unwrap(), layer_offset) };
 
@@ -2015,7 +2051,9 @@ fn env_get_binding_loc(env: SlHndl, sym_id: u32) -> Option<*mut *mut SlHead> {
                 break 'layer;
             }
 
-            assert_eq!(layer_ptr.as_ref().unwrap().type_id(), super::T_ENV_LYR_ID.0);
+            // assert_eq!(layer_ptr.as_ref().unwrap().type_id(), super::T_ENV_LYR_ID.0);
+            let lytt = layer_ptr.as_ref().unwrap();
+            coretypck!(lytt ; EnvLayer);
 
             'entry: for o in 0..ENV_MAX_PROBES {
                 let slot_offset = (entry_offset + o) % ENV_LAYER_SLOTS;
@@ -2628,10 +2666,11 @@ pub fn bool_get(loc: SlHndl) -> bool {
 // path of symbol IDs, used for resolution of "path symbols" (?)
 
 struct _TypeDesc {
-    type_sort_and_sym: u32, // type symbol of the described type (first bit denotes manifest or predicate)
+    type_sort_and_sym: u32, // type symbol of the described type (first bit HIGH denotes manifest or LOW predicate)
     parent_type: u32,       // type symbol of parent
-    manifest_or_predicate: *mut SlHead, // pointer to description data
+    predicate_or_manifest: *mut SlHead, // pointer to description data
 }
+
 // TODO: What are our uses / dependencies for type symbol and type ID?
 // objects like this are immutable once created
 struct _TypeManifest {

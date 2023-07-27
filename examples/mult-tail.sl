@@ -6,6 +6,7 @@
 ; run time, April 21 2021: ~3.3 seconds
 ; run time, October 10 2022: ~0.02 seconds
 ; run time, April 23 2023: ~0.09 seconds
+; run time, July 26 2023: ~1.7 seconds
 
 (do
 (def mult (fn [max acc cur]
