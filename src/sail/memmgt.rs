@@ -217,18 +217,146 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
             // log::debug!("Allocating {} bytes with cfg: {:#010b}", length, cfg);
         }
 
-        // TODO: search the free tree!
-
         let region_ref = region.as_mut().unwrap();
         let mut zone_ref = region_ref.head.as_mut().unwrap();
 
-        // the first condition is temporary (at least here) until we
-        // have free tree search logic; it may also be useful for an
-        // urgent / expedited allocation option
-        while zone_ref.top as usize + length > zone_ref.end as usize
-            || zone_ref.used as usize + length >= region_ref.zone_size as usize
-            || (zone_ref.lblk != 0 && length > zone_ref.lblk as usize)
-        {
+        // TODO: clean up the below wildly-indented mess
+
+        let out = 'zonesearch: loop {
+            if zone_ref.used as usize + obj_len < region_ref.zone_size as usize {
+                // search free tree
+                let mut cursor: *mut FreeBlock = zone_ref.free;
+                let mut parent: *mut FreeBlock = ptr::null_mut();
+                let mut precedes_parent = false;
+                let mut stack = vec![];
+
+                if !cursor.is_null() {
+                    'treesearch: loop {
+                        let fb_len_cur = fblk_get_len(cursor);
+                        if fb_len_cur as usize == obj_len {
+                            // replace free block with new object
+
+                            // TODO: is it necessary to acquire locks? where?
+                            let lock: *mut u8 = &mut zone_ref.lock;
+                            while !std::intrinsics::atomic_cxchg_acquire_acquire(
+                                lock,
+                                false as u8,
+                                true as u8,
+                            )
+                            .1
+                            {
+                                std::hint::spin_loop();
+                            }
+
+                            let (cur_prev, cur_next) = (
+                                fblk_get_prev_blk(zone_ref, cursor),
+                                fblk_get_next_blk(zone_ref, cursor),
+                            );
+
+                            if parent.is_null() {
+                                match (cur_prev.is_null(), cur_next.is_null()) {
+                                    (true, true) => zone_ref.free = ptr::null_mut(),
+                                    (true, false) => zone_ref.free = cur_next,
+                                    (false, true) => zone_ref.free = cur_prev,
+                                    (false, false) => {
+                                        zone_ref.free = cur_prev;
+                                        insert_fblk_at(zone_ref, cur_prev, cur_next);
+                                    }
+                                }
+                            } else {
+                                if precedes_parent {
+                                    fblk_set_prev_blk(zone_ref, parent, ptr::null_mut())
+                                } else {
+                                    fblk_set_next_blk(zone_ref, parent, ptr::null_mut())
+                                }
+
+                                if !cur_prev.is_null() {
+                                    insert_fblk_at(zone_ref, parent, cur_prev)
+                                }
+                                if !cur_next.is_null() {
+                                    insert_fblk_at(zone_ref, parent, cur_next)
+                                }
+                            }
+
+                            zone_ref.used += obj_len as u32;
+
+                            std::intrinsics::atomic_store_release(lock, false as u8);
+
+                            break 'zonesearch (cursor as _);
+                        } else if fb_len_cur as usize >= obj_len + HEAD_LEN as usize {
+                            let lock: *mut u8 = &mut zone_ref.lock;
+                            while !std::intrinsics::atomic_cxchg_acquire_acquire(
+                                lock,
+                                false as u8,
+                                true as u8,
+                            )
+                            .1
+                            {
+                                std::hint::spin_loop();
+                            }
+
+                            let fb_len_new = fb_len_cur as usize - obj_len;
+                            fblk_set_len(cursor, fb_len_new as u32);
+
+                            zone_ref.used += obj_len as u32;
+
+                            std::intrinsics::atomic_store_release(lock, false as u8);
+
+                            break 'zonesearch (cursor as *mut u8).add(fb_len_new as _);
+                        }
+
+                        let prev = fblk_get_prev_blk(zone_ref, cursor);
+                        if !prev.is_null() {
+                            stack.push((cursor, prev))
+                        }
+
+                        let next = fblk_get_next_blk(zone_ref, cursor);
+                        if !next.is_null() {
+                            (parent, cursor) = (cursor, next);
+                            // parent = cursor;
+                            // cursor = next;
+                            precedes_parent = false;
+                            continue;
+                        }
+
+                        if !stack.is_empty() {
+                            (parent, cursor) = stack.pop().unwrap();
+                            precedes_parent = true;
+                            continue;
+                        }
+
+                        break 'treesearch;
+                    }
+                }
+
+                // try empty space
+                if zone_ref.top.add(obj_len) <= zone_ref.end {
+                    let lock: *mut u8 = &mut zone_ref.lock;
+                    while !std::intrinsics::atomic_cxchg_acquire_acquire(
+                        lock,
+                        false as u8,
+                        true as u8,
+                    )
+                    .1
+                    {
+                        std::hint::spin_loop();
+                    }
+
+                    let ptr = zone_ref.top;
+
+                    // TODO: turns out length always needs to be a u32 anyway; fix
+                    zone_ref.used += obj_len as u32;
+                    zone_ref.top = ptr.add(obj_len);
+
+                    std::intrinsics::atomic_store_release(lock, false as u8);
+
+                    break 'zonesearch ptr;
+                }
+            }
+
+            // __dbg_visualize_zone(zone_ref);
+
+            // advance to a new zone
             zone_ref = match zone_ref.next.as_mut() {
                 Some(refer) => refer,
                 None => {
@@ -236,25 +364,26 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
                     region_ref.head.as_mut().unwrap()
                 }
             };
-        }
-
-        let lock: *mut u8 = &mut zone_ref.lock;
-        while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
-            std::hint::spin_loop();
-        }
-
-        let out = zone_ref.top;
+        };
 
         assert!(out < zone_ref.end);
 
-        // TODO: turns out length always needs to be a u32 anyway; fix
-        zone_ref.used += length as u32;
-        zone_ref.top = out.add(length);
+        // let lock: *mut u8 = &mut zone_ref.lock;
+        // while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
+        //     std::hint::spin_loop();
+        // }
 
-        std::intrinsics::atomic_store_release(lock, false as u8);
+        // // let out = zone_ref.top;
+        // // assert!(out < zone_ref.end);
+
+        // // TODO: turns out length always needs to be a u32 anyway; fix
+        // zone_ref.used += length as u32;
+        // zone_ref.top = out.add(length);
+
+        // std::intrinsics::atomic_store_release(lock, false as u8);
 
         // zero the whole object
-        ptr::write_bytes(out, 0, length);
+        ptr::write_bytes(out, 0, obj_len);
 
         out as *mut SlHead
     };
@@ -325,8 +454,15 @@ pub unsafe fn dealloc(val: *mut SlHead) {
     // TODO: panic if object appears to exceed zone's max obj size
 
     let zone = which_mem_area(val).1;
+    let zone_ref = zone.as_mut().unwrap();
 
     let newblk = val as *mut FreeBlock;
+
+    // TODO: establish concurrency characteristics of alloc / dealloc
+    let lock: *mut u8 = &mut zone_ref.lock;
+    while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
+        std::hint::spin_loop();
+    }
 
     let trunk = {
         let f_trunk = (*zone).free;
@@ -336,12 +472,13 @@ pub unsafe fn dealloc(val: *mut SlHead) {
                 (*zone).top = newblk as _;
 
                 std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, len);
-                std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, 0);
+                // std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, 0);
 
                 if cfg!(feature = "memdbg") {
-                    __dbg_visualize_zone(zone)
+                    // __dbg_visualize_zone(zone)
                 }
 
+                std::intrinsics::atomic_store_release(lock, false as u8);
                 return;
             }
 
@@ -369,12 +506,13 @@ pub unsafe fn dealloc(val: *mut SlHead) {
 
             if done {
                 std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, len);
-                std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, len);
+                // std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, len);
 
                 if cfg!(feature = "memdbg") {
-                    __dbg_visualize_zone(zone)
+                    // __dbg_visualize_zone(zone)
                 }
 
+                std::intrinsics::atomic_store_release(lock, false as u8);
                 return;
             } else {
                 n_trunk
@@ -405,14 +543,14 @@ pub unsafe fn dealloc(val: *mut SlHead) {
             let prospect = fblk_get_next_blk(zone, lower_bound);
             if prospect.is_null() {
             } else if prospect > lower_bound && prospect < newblk {
-                if prospect != lb_last {
-                    lb_parent = lower_bound
-                }
+                // if prospect != lb_last {
+                lb_parent = lower_bound;
+                // }
                 lower_bound = prospect;
             } else if prospect > lower_bound && prospect > newblk {
-                if prospect != ub_last {
-                    ub_parent = lower_bound
-                }
+                // if prospect != lb_last {
+                ub_parent = lower_bound;
+                // }
                 upper_bound = prospect;
             } else {
                 panic!()
@@ -423,14 +561,14 @@ pub unsafe fn dealloc(val: *mut SlHead) {
             let prospect = fblk_get_prev_blk(zone, upper_bound);
             if prospect.is_null() {
             } else if prospect < upper_bound && prospect < newblk {
-                if prospect != ub_last {
-                    lb_parent = upper_bound
-                }
+                // if prospect != ub_last {
+                lb_parent = upper_bound;
+                // }
                 lower_bound = prospect;
             } else if prospect < upper_bound && prospect > newblk {
-                if prospect != ub_last {
-                    ub_parent = upper_bound
-                }
+                // if prospect != ub_last {
+                ub_parent = upper_bound;
+                // }
                 upper_bound = prospect;
             } else {
                 panic!()
@@ -483,31 +621,6 @@ pub unsafe fn dealloc(val: *mut SlHead) {
             _ => panic!(),
         }
     };
-
-    unsafe fn insert_fblk_at(zone: *const Zone, tgt: *mut FreeBlock, blk: *mut FreeBlock) {
-        let mut cursor = tgt;
-        loop {
-            if blk < cursor {
-                let prospect = fblk_get_prev_blk(zone, cursor);
-                if prospect.is_null() {
-                    fblk_set_prev_blk(zone, cursor, blk);
-                    break;
-                } else {
-                    cursor = prospect
-                }
-            } else if blk > cursor {
-                let prospect = fblk_get_next_blk(zone, cursor);
-                if prospect.is_null() {
-                    fblk_set_next_blk(zone, cursor, blk);
-                    break;
-                } else {
-                    cursor = prospect
-                }
-            } else {
-                unreachable!()
-            }
-        }
-    }
 
     // All tree manipulation is restricted to this block
     let final_len = match (prior_merge, follow_merge) {
@@ -643,7 +756,8 @@ pub unsafe fn dealloc(val: *mut SlHead) {
                 {
                     fblk_set_prev_blk(zone, upper_bound, newblk)
                 } else {
-                    panic!("neither neighbor had an available field")
+                    // panic!("neither neighbor had an available field")
+                    insert_fblk_at(zone, trunk, newblk)
                 }
 
                 fblk_set_prev_ofs(newblk, FBLK_NULL_OFFSET);
@@ -656,10 +770,40 @@ pub unsafe fn dealloc(val: *mut SlHead) {
     };
 
     std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, len);
-    std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, final_len);
+    // std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, final_len);
 
     if cfg!(feature = "memdbg") {
-        __dbg_visualize_zone(zone)
+        // __dbg_visualize_zone(zone)
+    }
+
+    std::intrinsics::atomic_store_release(lock, false as u8);
+}
+
+unsafe fn insert_fblk_at(zone: *const Zone, tgt: *mut FreeBlock, blk: *mut FreeBlock) {
+    assert_ne!(tgt, ptr::null_mut());
+    assert_ne!(blk, ptr::null_mut());
+
+    let mut cursor = tgt;
+    loop {
+        if blk < cursor {
+            let prospect = fblk_get_prev_blk(zone, cursor);
+            if prospect.is_null() {
+                fblk_set_prev_blk(zone, cursor, blk);
+                break;
+            } else {
+                cursor = prospect
+            }
+        } else if blk > cursor {
+            let prospect = fblk_get_next_blk(zone, cursor);
+            if prospect.is_null() {
+                fblk_set_next_blk(zone, cursor, blk);
+                break;
+            } else {
+                cursor = prospect
+            }
+        } else {
+            unreachable!()
+        }
     }
 }
 
@@ -838,7 +982,9 @@ unsafe fn fblk_get_prev_blk(zone: *const Zone, block: *const FreeBlock) -> *mut 
 
     assert!(prev_ofs < FBLK_NULL_OFFSET);
 
-    (start as u64 + prev_ofs as u64) as *mut FreeBlock
+    let out = (start as u64 + prev_ofs as u64) as *mut FreeBlock;
+    debug_assert_eq!(which_mem_area(out as *mut _).1 as *const _, zone);
+    out
 }
 
 /// Set which block a free block points to as the following block
@@ -873,7 +1019,9 @@ unsafe fn fblk_get_next_blk(zone: *const Zone, block: *const FreeBlock) -> *mut 
 
     assert!(next_ofs < FBLK_NULL_OFFSET);
 
-    (start as u64 + next_ofs as u64) as *mut FreeBlock
+    let out = (start as u64 + next_ofs as u64) as *mut FreeBlock;
+    debug_assert_eq!(which_mem_area(out as *mut _).1 as *const _, zone);
+    out
 }
 
 fn __dbg_visualize_zone(zone: *const Zone) {
@@ -1079,8 +1227,8 @@ pub struct Region {
 struct Zone {
     /// Size of used portion
     used: u32,
-    /// Size of largest free block
-    lblk: u32,
+    // /// Size of largest free block
+    // lblk: u32,
     /// Pointer to start of working memory
     bot: *mut u8,
     /// Pointer to last of used portion
@@ -1199,7 +1347,7 @@ unsafe fn new_mem_zone(region: *mut Region) {
     let new_head = Zone {
         used: 0,
         free: ptr::null_mut(),
-        lblk: 0,
+        // lblk: 0,
         next: cur_head,
         top: start,
         end,
