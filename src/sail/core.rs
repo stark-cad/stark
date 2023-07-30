@@ -79,7 +79,6 @@ pub const NUM_128_LEN: u32 = 16;
 ///
 /// **Handle ONLY using methods that operate on pointers to SlHead**
 /// Should only store information that every referenced Sail object needs
-/// TODO: Think about references, memory management, and associative table support
 #[repr(C)]
 pub struct SlHead {
     pub cfg: u8,
@@ -108,9 +107,6 @@ struct _SlListPtr {
     ptr: *mut SlHead,
 }
 
-// TODO: use this type to manage Sail object references on the main
-// stack using the Rust lifetime system
-
 #[derive(PartialEq)]
 #[repr(C)]
 pub struct SlHndl {
@@ -129,6 +125,9 @@ impl Drop for SlHndl {
     fn drop(&mut self) {
         // log::debug!("Dropping object handle");
         // __dbg_head_info(self.raw);
+        if cfg!(feature = "memdbg") {
+            println!("O {} DROP", self.memdbg_obj_id())
+        }
         if dec_refc(self.raw) {
             destroy_obj_core(self.raw)
         }
@@ -195,6 +194,14 @@ impl SlHndl {
     pub fn size_fld_p(&self) -> bool {
         let head = self.cfg_byte();
         head >> 5 > 5
+    }
+
+    pub fn memdbg_obj_id(&self) -> u32 {
+        if cfg!(feature = "memdbg") {
+            unsafe { ptr::read_unaligned((self.raw as *mut u32).add(2)) }
+        } else {
+            panic!("Memory debug mode not active")
+        }
     }
 
     #[inline(always)]
@@ -602,7 +609,7 @@ pub fn raw_core_type(loc: *mut SlHead) -> Option<CoreType> {
 // a VecArr has head of type, length
 // a VecAny has head of type, capacity, length
 
-// TODO: the lack of a real type system needs to be rectified
+// TODO: rectify the lack of a real type system
 
 /// Identifies whether a given type ID refers to a base sized type
 pub fn temp_base_sized_p(typ: u32) -> bool {
@@ -705,8 +712,6 @@ fn proc_native_size() -> u32 {
     NUM_16_LEN + PTR_LEN
 }
 
-// TODO: separate out pointer writes for garbage collection
-
 // TODO: could avoid multithreaded reference count handlers by
 // requiring that all objects are known to only one evaluation unit;
 // queue objects would be the main concern
@@ -732,6 +737,14 @@ pub fn inc_refc(loc: *mut SlHead) -> bool {
         if sp {
             break;
         }
+    }
+
+    if cfg!(feature = "memdbg") {
+        println!(
+            "O {} INC (c {})",
+            unsafe { ptr::read_unaligned((loc as *mut u32).add(2)) },
+            cur + 1
+        )
     }
 
     false
@@ -760,6 +773,14 @@ pub fn dec_refc(loc: *mut SlHead) -> bool {
         if sp {
             break;
         }
+    }
+
+    if cfg!(feature = "memdbg") {
+        println!(
+            "O {} DEC (c {})",
+            unsafe { ptr::read_unaligned((loc as *mut u32).add(2)) },
+            cur - 1
+        )
     }
 
     out
@@ -860,11 +881,10 @@ fn discern_refs(env: SlHndl, loc: *mut SlHead) -> Vec<*mut SlHead> {
     acc
 }
 
-// TODO: if the object points to non-core objects, this may cause leakage
+// TODO: if the object points to non-core objects, this causes leakage
 
-// TODO: there are some non-core types used in the core logic, but
-// their layout is known; we must use this knowledge to properly
-// handle those types
+// TODO: ALL types used in core logic (setup, evaluation, teardown)
+// must be properly handled by this function
 fn destroy_obj_core(loc: *mut SlHead) {
     assert!(!nil_p(loc));
 
@@ -1107,8 +1127,6 @@ pub unsafe fn write_ptr_unsafe_unchecked(loc: SlHndl, offset: u32, pto: SlHndl) 
     }
 }
 
-// TODO: shouldn't reads always increase the reference count?
-
 pub fn read_ptr(loc: SlHndl, offset: u32) -> Option<SlHndl> {
     assert!(offset + PTR_LEN <= loc.size());
     unsafe {
@@ -1143,6 +1161,7 @@ unsafe fn get_ptr_ptr_unchecked(loc: SlHndl, offset: u32) -> *mut *mut SlHead {
 }
 
 // TODO: check that the given offset matches a valid field offset in the object?
+// TODO: pretty sure this function is now universal
 
 /// Write to a field of a Sail object of a core type
 #[inline(always)]
@@ -1234,9 +1253,7 @@ pub fn set_next_list_elt(env: SlHndl, loc: SlHndl, next: SlHndl) {
 
         ptr::write_unaligned(loc.get_raw() as *mut u64, ((tgt as u64) << 16) + cfg);
 
-        // if !nil_p(next) {
         inc_refc(tgt);
-        // }
 
         if !nil_p(prev_ptr) && dec_refc(prev_ptr) {
             destroy_obj(env, prev_ptr)
@@ -1301,9 +1318,7 @@ pub fn set_next_list_elt_cmpxcg(
         };
 
         if p {
-            // if !nil_p(new) {
             inc_refc(nwp);
-            // }
 
             if !nil_p(olp) && dec_refc(olp) {
                 destroy_obj(env, olp)
@@ -1323,7 +1338,7 @@ pub unsafe fn set_next_list_elt_unsafe_unchecked(loc: SlHndl, next: SlHndl) {
     );
 }
 
-// TODO: in future, handle redirects?
+// TODO: handle redirects due to reallocation
 
 /// Gets the pointer to the next element from a list element
 #[inline(always)]
@@ -1335,8 +1350,6 @@ pub fn get_next_list_elt(loc: SlHndl) -> Option<SlHndl> {
 pub fn ref_make(reg: *mut Region) -> SlHndl {
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr))) }
 }
-
-// TODO: disallow null pointers to make sure that nil and the empty list are the same?
 
 #[inline(always)]
 pub fn ref_init(reg: *mut Region, val: SlHndl) -> SlHndl {
@@ -1477,13 +1490,9 @@ pub fn proc_native_init(reg: *mut Region, argct: u16, fun: NativeFn) -> SlHndl {
     out
 }
 
-// TODO: this implementation will **easily** cause memory leaks
-// TODO: decrement the reference count of previous object
-
 #[inline(always)]
 pub fn ref_set(env: SlHndl, loc: SlHndl, dst: SlHndl) {
     coretypck!(loc ; Ref);
-    // core_write_field(loc, 0, dst)
     write_ptr(env, loc, 0, dst)
 }
 
@@ -1571,11 +1580,16 @@ pub fn string_set(loc: SlHndl, val: &str) {
     let cap = string_get_cap(loc.clone());
     let len = val.len() as u32;
 
-    // TODO: copy using a purpose-designed function
     if len <= cap {
-        for (count, c) in val.bytes().enumerate() {
-            core_write_field(loc.clone(), 4 + 4 + count as u32, c);
+        unsafe {
+            std::slice::from_raw_parts_mut(loc.value_ptr().add(2 * NUM_32_LEN as usize), len as _)
+                .copy_from_slice(val.as_bytes())
         }
+
+        // for (count, c) in val.bytes().enumerate() {
+        //     core_write_field(loc.clone(), 4 + 4 + count as u32, c);
+        // }
+
         string_set_len(loc, len);
     } else {
         panic!("not enough space in string");
@@ -1760,7 +1774,7 @@ pub fn proc_native_get_body(loc: SlHndl) -> NativeFn {
     unsafe { mem::transmute::<_, NativeFn>(ptr) }
 }
 
-// TODO: there are better ways to do the below, maybe in memmgt
+// TODO: do the below in a better way, maybe in memmgt
 
 /// Copies the value from a Sail object of a core type into a newly
 /// allocated object
@@ -1852,7 +1866,6 @@ pub fn env_create(reg: *mut Region, parent: Option<SlHndl>) -> SlHndl {
         let env =
             SlHndl::from_raw_unchecked(memmgt::alloc(reg, 3 * PTR_LEN, memmgt::cap(Cfg::EnvScope)));
 
-        // TODO: write_into / write_next macro that handles reference count
         if let Some(par) = parent {
             inc_refc(par.get_raw());
             set_next_list_elt_unsafe_unchecked(env.clone(), par);
@@ -2013,8 +2026,6 @@ pub fn env_scope_ins_by_id(reg: *mut Region, env: SlHndl, sym_id: u32, obj: SlHn
     ()
 }
 
-// TODO: simpler return type here?
-
 /// Looks up the given symbol ID in the given environment, returning
 /// the location in the environment of the object it refers to; None
 /// if no binding
@@ -2107,11 +2118,11 @@ fn sym_tab_create(reg: *mut Region, size: u32) -> SlHndl {
 // TODO: change the symtab structure to use purpose-specific types
 
 
-// TODO: I probably need to switch the system to lexical binding,
-// which prevents "spooky action from within", or procedures changing
-// variables in the calling scope; procedures should always either be
-// pure (no environment besides arguments), or closures (carrying
-// their creation environment with them)
+// TODO: switch the system to lexical binding, to prevent "spooky
+// action from within", or procedures changing variables in the
+// calling scope; procedures should always either be pure (no
+// environment besides arguments), or closures (carrying their
+// creation environment with them)
 
 pub fn sym_tab_set_next_id(tbl: SlHndl, id: u32) {
     let id_slot = stdvec_idx(tbl, 2);
@@ -2671,7 +2682,7 @@ struct _TypeDesc {
     predicate_or_manifest: *mut SlHead, // pointer to description data
 }
 
-// TODO: What are our uses / dependencies for type symbol and type ID?
+// TODO: establish uses / dependencies for type symbol and type ID
 // objects like this are immutable once created
 struct _TypeManifest {
     id: u32,    // global ID of this object type

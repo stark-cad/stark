@@ -59,9 +59,11 @@ pub fn queue_tx(env: SlHndl, loc: SlHndl, item: SlHndl) {
     assert_eq!(loc.type_id(), super::T_QUEUE_TX_ID.0);
     assert_eq!(loc.base_size(), BaseSize::B16);
 
+    // TODO: change to permit copying arbitrary values, could use
+    // similar machinery to destroy_obj
+
     unsafe {
         // create new list element containing the item
-        // TODO: must change to permit copying arbitrary values
         let elt = core_copy_val(
             read_field_unchecked::<u64>(loc.clone(), PTR_LEN) as *mut memmgt::Region,
             item,

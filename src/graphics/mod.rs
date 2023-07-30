@@ -191,7 +191,7 @@ pub fn render_loop(
         }
     }
 
-    // TODO: dispose of Sail environment first (reverse creation order)
+    // TODO: dispose of Sail stack, region, etc
     drop(engine);
 }
 

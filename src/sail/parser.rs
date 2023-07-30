@@ -207,8 +207,8 @@ fn read_list(
     Ok(head)
 }
 
-// TODO: What about lists, which need to be evaluated even if they appear in a vec or map
-// TODO: Tighter integration between parser and evaluator likely necessary for this & symbols
+// TODO: lists may need to be evaluated even if they appear in a vec or map
+// TODO: tighter parser-evaluator integration likely necessary for this & symbols
 
 /// Reads a vector from the input stream and creates the corresponding
 /// Sail object
@@ -218,8 +218,7 @@ fn read_vec(
     reg: *mut memmgt::Region,
     tbl: SlHndl,
 ) -> Result<SlHndl, SlErrCode> {
-    // TODO: allow vectors of arbitrary length
-    let vec = stdvec_make(reg, 8);
+    let mut tvc = vec![];
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while c != b']' {
         match c {
@@ -227,10 +226,11 @@ fn read_vec(
             _ if c.is_ascii_whitespace() => {
                 chars.next();
             }
-            _ => stdvec_push(vec.clone(), read_value(chars, acc, reg, tbl.clone())?),
+            _ => tvc.push(read_value(chars, acc, reg, tbl.clone())?),
         }
         c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
+    let vec = stdvec_init(reg, &tvc.into_boxed_slice());
     chars.next();
     Ok(vec)
 }

@@ -91,13 +91,6 @@ pub fn run_loop<Ij: 'static>(
     let main_tx = m_send;
     let rndr_tx = r_send;
 
-    // TODO: use a small region with space for a queue sender;
-    // allocate objects to send in region, send them, and then
-    // deallocate them to leave space for more
-
-    // TODO: this will allow this thread and the stdin thread to be
-    // much simpler
-
     let mut frame_dims: [u32; 2] = [0, 0];
 
     let mut focus = false;
@@ -171,6 +164,11 @@ pub fn run_loop<Ij: 'static>(
 
                     // TODO: intern symbols by default, copy out into
                     // lists as necessary
+
+                    // TODO: in context thread, maintain one copy of
+                    // each keyword symbol, that gets "dispatched"
+                    // every time there is a message; the queue system
+                    // copies symbols into the receiving environment
 
                     sail::queue::queue_tx(dummy_env.clone(), rndr_tx.clone(), moved);
                 }

@@ -353,39 +353,6 @@ incl_types! {
     6
 }
 
-// TODO: MINIMIZE the use of *pub* and *unsafe* functions
-
-// /// TODO: eliminate as much write_unaligned as possible
-// fn write_field<T: SizedBase>(
-//     reg: *mut memmgt::Region,
-//     tbl: *mut SlHead,
-//     env: *mut SlHead,
-//     loc: *mut SlHead,
-//     offset: usize,
-//     src: T,
-// ) {
-//     unsafe {
-//         let dst = value_ptr(loc).add(offset) as *mut T;
-//         assert!(offset + std::mem::size_of::<T>() <= get_size(reg, tbl, env, loc));
-//         ptr::write_unaligned(dst, src)
-//     }
-// }
-
-// /// TODO: eliminate as much read_unaligned as possible
-// fn read_field<T: SizedBase>(
-//     reg: *mut memmgt::Region,
-//     tbl: *mut SlHead,
-//     env: *mut SlHead,
-//     loc: *mut SlHead,
-//     offset: usize,
-// ) -> T {
-//     unsafe {
-//         let src = value_ptr(loc).add(offset) as *mut T;
-//         assert!(offset + std::mem::size_of::<T>() <= get_size(reg, tbl, env, loc));
-//         ptr::read_unaligned(src)
-//     }
-// }
-
 /// Bundles together an object and associated symbol table for display
 pub struct SlContextVal {
     tbl: SlHndl,
@@ -397,7 +364,7 @@ pub fn context(tbl: SlHndl, obj: SlHndl) -> SlContextVal {
     SlContextVal { tbl, obj }
 }
 
-// TODO: this is a mess; need Sail native display functions
+// TODO: this is a mess; write Sail native display functions
 // TODO: just push characters into a byte vector (string) for display
 impl fmt::Display for SlContextVal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -534,8 +501,8 @@ impl fmt::Display for SlContextVal {
 
 /// Accepts an input stream and runs a read - evaluate - print loop perpetually
 pub fn repl(stream_in: std::io::Stdin) {
-    // TODO: Consider stack-like environment per function
-    // TODO: Start to think about namespaces etc
+    // TODO: consider stack-like environment per function
+    // TODO: design module / namespace mechanisms
 
     let region = unsafe { memmgt::acquire_mem_region(100000) };
 
@@ -645,6 +612,12 @@ mod tests {
     fn adds() {
         let exp = String::from("(+ 2 2)");
         assert_eq!("4", interpret(&exp).unwrap());
+    }
+
+    #[test]
+    fn lambda() {
+        let exp = String::from("((fn [a b] (- a (- 0 b))) 3 3)");
+        assert_eq!("6", interpret(&exp).unwrap());
     }
 
     #[test]

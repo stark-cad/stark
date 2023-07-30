@@ -24,8 +24,8 @@ use std::alloc;
 use std::convert::TryInto;
 use std::ptr;
 
-// TODO: reference counting and garbage collection have to work with
-// the references kept by the evaluation machinery
+// TODO: make reference counting and garbage collection work with all
+// references kept by the evaluation machinery
 
 /// Sail evaluation stack
 pub struct EvalStack {
@@ -361,7 +361,7 @@ impl EvalStack {
             let out = if expr.basic_sym_p() {
                 match env_lookup(env, expr) {
                     Some(obj) => unsafe { obj.get_raw() },
-                    None => nil(),
+                    None => panic!("symbol not bound in env"),
                 }
             } else {
                 unsafe { expr.get_raw() }
@@ -440,7 +440,7 @@ impl EvalStack {
                         }
                         id if id == SP_FN.0 => {
                             // needs: nothing else evaluated
-                            // TODO: type annotations
+                            // TODO: type annotation syntax / handling
                             let argvec = raw_args.unwrap();
                             let argct = stdvec_get_len(argvec.clone()) as u16;
                             let proc = proc_lambda_make(reg, argct);
@@ -540,23 +540,19 @@ impl EvalStack {
                     }
                     let apply_start = self.frame_start;
 
-                    // TODO: loop below could probably be much simpler
-
-                    'tr: for i in 0..proc_get_argct(proc.clone()) {
-                        let mut arg = raw_args.clone().unwrap();
-                        for _ in 0..i {
-                            if let Some(a) = get_next_list_elt(arg) {
-                                arg = a
-                            } else {
-                                continue 'tr;
-                            }
+                    let mut arg = raw_args.clone();
+                    for i in 0..proc_get_argct(proc.clone()) {
+                        if arg.is_none() {
+                            continue;
                         }
 
                         let return_to = unsafe {
                             apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize)
                         } as *mut *mut SlHead;
 
-                        self.eval_expr(return_to, env.clone(), arg);
+                        self.eval_expr(return_to, env.clone(), arg.clone().unwrap());
+
+                        arg = get_next_list_elt(arg.unwrap())
                     }
                 }
             }
@@ -659,15 +655,15 @@ impl EvalStack {
                 }
                 let apply_start = self.frame_start;
 
-                let mut arg = raw_args;
+                let mut arg = Some(raw_args);
                 for i in 0..proc_get_argct(proc.clone()) {
                     let return_to =
                         unsafe { apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize) }
                             as *mut *mut SlHead;
 
-                    self.eval_expr(return_to, env.clone(), arg.clone());
+                    self.eval_expr(return_to, env.clone(), arg.clone().unwrap());
 
-                    arg = get_next_list_elt(arg).unwrap();
+                    arg = get_next_list_elt(arg.unwrap());
                 }
             }
             Opcode::Apply => {
