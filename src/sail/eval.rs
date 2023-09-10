@@ -31,9 +31,9 @@ use std::ptr;
 pub struct EvalStack {
     /// First (bottom) element of the stack
     stack_start: *mut usize,
-    /// Maximum stack element address
+    /// Just after the highest possible stack element address
     stack_max: *mut usize,
-    /// Current top of the stack (frame_start is more useful)
+    /// Just after the stack's topmost word (frame_start is more useful)
     stack_top: *mut usize,
     /// Start of the stack's top frame
     frame_start: *mut usize,
@@ -112,15 +112,18 @@ impl EvalStack {
         }
 
         unsafe {
-            if self.stack_top as usize + 8 >= self.stack_max as usize - 8 {
+            if self.stack_top.add(1) > self.stack_max {
                 self.resize((self.stack_max as usize - self.stack_start as usize) / 4)
             }
-            let new_top = self.stack_top.add(1);
-            self.stack_top = new_top;
 
             let wordr = word.get_raw();
             inc_refc(wordr);
-            ptr::write(new_top, wordr as usize);
+            ptr::write(self.stack_top as *mut _, wordr);
+
+            // let new_top = self.stack_top.add(1);
+            // self.stack_top = new_top;
+
+            self.stack_top = self.stack_top.add(1);
         }
 
         if cfg!(feature = "stkdbg") {
@@ -132,7 +135,13 @@ impl EvalStack {
     }
 
     fn push_slot(&mut self) {
-        unsafe { self.stack_top = self.stack_top.add(1) }
+        unsafe {
+            if self.stack_top.add(1) > self.stack_max {
+                self.resize((self.stack_max as usize - self.stack_start as usize) / 4)
+            }
+
+            self.stack_top = self.stack_top.add(1)
+        }
     }
 
     /// Pops a single word off the stack
@@ -143,13 +152,15 @@ impl EvalStack {
         }
 
         unsafe {
-            let word = *(self.stack_top) as *mut SlHead;
+            let doomed_slot = self.stack_top.sub(1);
+
+            let word = *doomed_slot as *mut SlHead;
 
             if !nil_p(word) && dec_refc(word) {
                 destroy_obj(self.frame_top().1, word)
             }
 
-            self.stack_top = self.stack_top.sub(1);
+            self.stack_top = doomed_slot;
         }
 
         if cfg!(feature = "stkdbg") {
@@ -173,27 +184,34 @@ impl EvalStack {
         }
 
         unsafe {
-            if self.stack_top as usize + 24 >= self.stack_max as usize - 8 {
-                let old_top = self.stack_top as usize;
+            if self.stack_top.add(3) > self.stack_max {
+                let old_start = self.stack_start as usize;
                 self.resize((self.stack_max as usize - self.stack_start as usize) / 4);
-                ret = ((ret as usize - old_top) + self.stack_top as usize) as *mut *mut SlHead;
+                if !ret.is_null() {
+                    ret = ((ret as usize - old_start) + self.stack_start as usize)
+                        as *mut *mut SlHead;
+                }
             }
-            let new_start = self.stack_top.add(1);
-            self.stack_top = new_start.add(2);
+
+            let new_frame_start = self.stack_top;
+            self.stack_top = new_frame_start.add(3);
 
             ptr::write(
-                new_start.add(FrameOffset::LastTop as usize),
+                new_frame_start.add(FrameOffset::LastFrm as usize),
                 self.frame_start as usize,
             );
-            ptr::write(new_start.add(FrameOffset::Return as usize), ret as usize);
             ptr::write(
-                new_start.add(FrameOffset::EnvOpc as usize),
+                new_frame_start.add(FrameOffset::Return as usize),
+                ret as usize,
+            );
+            ptr::write(
+                new_frame_start.add(FrameOffset::EnvOpc as usize),
                 ((env.get_raw() as usize) << 16) + opc as usize,
             );
 
             inc_refc(env.get_raw());
 
-            self.frame_start = new_start;
+            self.frame_start = new_frame_start;
         }
 
         if cfg!(feature = "stkdbg") {
@@ -211,24 +229,21 @@ impl EvalStack {
             print!("POP: {:?}; ", self.frame_opc());
         }
 
-        // TODO: IMPORTANT: decrement reference counts of all Sail
-        // objects referenced by the frame, then of the frame
-        // environment
-
         let env = self.frame_top().1;
 
         unsafe {
-            let this_frame_top = self.frame_start;
-            let this_frame_bot = self.stack_top;
+            // the frame is entirely between these addresses
+            let doomed_frame = self.frame_start;
+            let doomed_frame_end = self.stack_top;
 
-            let last_frame_top = ptr::read(this_frame_top);
+            let prev_frame = ptr::read(doomed_frame);
 
-            // TODO: ...
-
+            // decrement reference count of all Sail objects which the
+            // frame points to
             for p in std::slice::from_raw_parts_mut(
-                (this_frame_top.add(FrameOffset::ArgZero as usize)) as *mut *mut SlHead,
-                (this_frame_bot as usize
-                    - (this_frame_top as usize + (FrameOffset::ArgZero as usize * 8)))
+                (doomed_frame.add(FrameOffset::ArgZero as usize)) as *mut *mut SlHead,
+                (doomed_frame_end as usize
+                    - doomed_frame.add(FrameOffset::ArgZero as usize) as usize)
                     / 8,
             ) {
                 let o = *p;
@@ -237,10 +252,13 @@ impl EvalStack {
                 }
             }
 
-            dec_refc(env.get_raw());
+            // decrement reference count of the frame's environment
+            if dec_refc(env.get_raw()) {
+                destroy_obj_core(env.get_raw());
+            }
 
-            self.stack_top = this_frame_top.sub(1);
-            self.frame_start = last_frame_top as *mut usize;
+            self.stack_top = doomed_frame;
+            self.frame_start = prev_frame as *mut usize;
         }
 
         if cfg!(feature = "stkdbg") {
@@ -357,6 +375,8 @@ impl EvalStack {
         if expr.nnil_ref_p() {
             self.push_frame_head(ret, Opcode::Eval, env);
             self.push(ref_get(expr).unwrap());
+        } else if ret.is_null() {
+            return;
         } else {
             let out = if expr.basic_sym_p() {
                 match env_lookup(env, expr) {
@@ -372,6 +392,21 @@ impl EvalStack {
             }
 
             unsafe { ptr::write(ret, out) };
+        }
+    }
+
+    /// Writes the address of a Sail object to an aligned position;
+    /// use for returning results
+    #[inline(always)]
+    fn write_addr_to(&mut self, pos: *mut *mut SlHead, out: SlHndl) {
+        if pos.is_null() {
+            return;
+        }
+
+        unsafe {
+            let out = out.get_raw();
+            ptr::write(pos, out);
+            inc_refc(out);
         }
     }
 
@@ -406,8 +441,8 @@ impl EvalStack {
                 let list = self.frame_obj(0);
                 self.pop_frame();
 
-                let raw_op = list.clone();
-                let raw_args = get_next_list_elt(list);
+                let raw_op = list;
+                let raw_args = get_next_list_elt(raw_op.clone());
 
                 if raw_op.basic_sym_p() {
                     match sym_get_id(raw_op.clone()) {
@@ -452,11 +487,9 @@ impl EvalStack {
                                 );
                             }
                             proc_lambda_set_body(proc.clone(), get_next_list_elt(argvec).unwrap());
-                            unsafe {
-                                let out = proc.get_raw();
-                                ptr::write(ret, out);
-                                inc_refc(out);
-                            }
+
+                            self.write_addr_to(ret, proc);
+
                             return true;
                         }
                         id if id == SP_IF.0 => {
@@ -478,11 +511,8 @@ impl EvalStack {
                         }
                         id if id == SP_QUOTE.0 => {
                             // needs: nothing else evaluated
-                            unsafe {
-                                let out = raw_args.unwrap().get_raw();
-                                ptr::write(ret, out);
-                                inc_refc(out);
-                            }
+                            self.write_addr_to(ret, raw_args.unwrap());
+
                             return true;
                         }
                         id if id == SP_SET.0 => {
@@ -523,29 +553,27 @@ impl EvalStack {
                     self.push(ref_get(raw_op).unwrap());
                 } else {
                     let proc = if raw_op.basic_sym_p() {
-                        match env_lookup(env.clone(), raw_op) {
+                        match env_lookup(env.clone(), raw_op.clone()) {
                             Some(obj) => obj,
                             None => panic!("symbol not bound in env"),
                         }
                     } else {
-                        raw_op
+                        raw_op.clone()
                     };
                     assert!(proc.proc_p());
+                    let arg_ct = proc_get_argct(proc.clone());
 
+                    // construct application frame; slots must come first!
                     self.push_frame_head(ret, Opcode::Apply, env.clone());
-
-                    self.push(proc.clone());
-                    for _ in 0..proc_get_argct(proc.clone()) {
-                        self.push_slot();
+                    self.push(proc);
+                    for _ in 0..arg_ct {
+                        self.push_slot()
                     }
+
                     let apply_start = self.frame_start;
 
-                    let mut arg = raw_args.clone();
-                    for i in 0..proc_get_argct(proc.clone()) {
-                        if arg.is_none() {
-                            continue;
-                        }
-
+                    let mut arg = raw_args;
+                    for i in 0..arg_ct {
                         let return_to = unsafe {
                             apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize)
                         } as *mut *mut SlHead;
@@ -561,52 +589,37 @@ impl EvalStack {
                 assert!(symbol.basic_sym_p());
                 let value = self.frame_obj(1);
 
-                env_scope_ins(reg, env, symbol.clone(), value);
                 self.pop_frame();
+                env_scope_ins(reg, env, symbol.clone(), value);
 
-                unsafe {
-                    let out = symbol.get_raw();
-                    ptr::write(ret, out);
-                    inc_refc(out);
-                }
+                self.write_addr_to(ret, symbol);
             }
             Opcode::Mutate => {
                 let symbol = self.frame_obj(0);
                 assert!(symbol.basic_sym_p());
                 let value = self.frame_obj(1);
 
+                self.pop_frame();
                 if !env_scope_mut(env, symbol.clone(), value) {
                     panic!("symbol not in env")
                 }
 
-                self.pop_frame();
-
-                unsafe {
-                    let out = symbol.get_raw();
-                    ptr::write(ret, out);
-                    inc_refc(out);
-                }
+                self.write_addr_to(ret, symbol);
             }
             Opcode::DoSeq => {
                 let remainder = self.frame_obj(0);
                 let second = get_next_list_elt(remainder.clone());
-                match second {
-                    None => {
-                        self.pop_frame();
-                        self.eval_expr(ret, env, remainder);
+
+                if let Some(sob) = second {
+                    self.pop();
+                    self.push(sob);
+                    if remainder.nnil_ref_p() {
+                        self.push_frame_head(ptr::null_mut() as _, Opcode::Eval, env);
+                        self.push(ref_get(remainder).unwrap());
                     }
-                    Some(sob) => {
-                        self.pop();
-                        self.push(sob);
-                        if remainder.nnil_ref_p() {
-                            self.push_frame_head(
-                                self.stack_max as *mut *mut SlHead,
-                                Opcode::Eval,
-                                env,
-                            );
-                            self.push(ref_get(remainder).unwrap());
-                        }
-                    }
+                } else {
+                    self.pop_frame();
+                    self.eval_expr(ret, env, remainder);
                 }
             }
             Opcode::While => {
@@ -618,15 +631,18 @@ impl EvalStack {
                     let return_to = self.frame_addr(1);
                     self.eval_expr(return_to, env.clone(), pred);
 
-                    self.push_frame_head(self.stack_max as *mut *mut SlHead, Opcode::DoSeq, env);
+                    // TODO: this sort of thing should be a macro!
+                    unsafe {
+                        if dec_refc(result.get_raw()) {
+                            destroy_obj(env.clone(), result.get_raw())
+                        }
+                    };
+
+                    self.push_frame_head(ptr::null_mut() as _, Opcode::DoSeq, env);
                     self.push(body);
                 } else {
                     self.pop_frame();
-                    unsafe {
-                        let out = result.get_raw();
-                        ptr::write(ret, out);
-                        inc_refc(out);
-                    }
+                    self.write_addr_to(ret, result);
                 }
             }
             Opcode::Branch => {
@@ -647,16 +663,17 @@ impl EvalStack {
                 let raw_args = self.frame_obj(1);
                 self.pop_frame();
 
+                // construct application frame; slots must come first!
                 self.push_frame_head(ret, Opcode::Apply, env.clone());
-
                 self.push(proc.clone());
                 for _ in 0..proc_get_argct(proc.clone()) {
-                    self.push_slot();
+                    self.push_slot()
                 }
+
                 let apply_start = self.frame_start;
 
                 let mut arg = Some(raw_args);
-                for i in 0..proc_get_argct(proc.clone()) {
+                for i in 0..proc_get_argct(proc) {
                     let return_to =
                         unsafe { apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize) }
                             as *mut *mut SlHead;
@@ -699,11 +716,7 @@ impl EvalStack {
 
                     let fn_rslt = proc_native_get_body(proc)(reg, tbl, env, args);
 
-                    unsafe {
-                        let out = fn_rslt.get_raw();
-                        ptr::write(ret, out);
-                        inc_refc(out);
-                    }
+                    self.write_addr_to(ret, fn_rslt);
 
                     self.pop_frame();
                 }
@@ -729,7 +742,7 @@ impl Drop for EvalStack {
 /// Evaluates a Sail expression in a freshly created stack
 pub fn eval(reg: *mut memmgt::Region, tbl: SlHndl, env: SlHndl, expr: SlHndl) -> SlHndl {
     let mut result: *mut SlHead = ptr::null_mut();
-    let ret_addr: *mut *mut SlHead = &mut result as *mut *mut SlHead;
+    let ret_addr = &mut result as *mut *mut SlHead;
 
     let mut stack = EvalStack::new(10000);
 
@@ -737,8 +750,52 @@ pub fn eval(reg: *mut memmgt::Region, tbl: SlHndl, env: SlHndl, expr: SlHndl) ->
 
     while stack.iter_once(reg, tbl.clone()) {}
 
-    inc_refc(result);
     unsafe { SlHndl::from_raw_unchecked(result) }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sail::{environment_setup, parser};
+
+    use super::*;
+
+    #[test]
+    fn rec_check() {
+        let region = unsafe { memmgt::acquire_mem_region(20000) };
+
+        let (tbl, ctr, env) = prep_environment(region);
+
+        environment_setup(region, tbl.clone(), ctr, env.clone());
+
+        let expr = parser::parse(region, tbl.clone(), &"(+ (- 8 6) 2)").unwrap();
+
+        let result = eval(region, tbl, env, expr);
+
+        assert_eq!(i64_get(result), 4);
+
+        unsafe {
+            assert_eq!(0, (*((*region).head)).used);
+        }
+    }
+
+    #[test]
+    fn do_check() {
+        let region = unsafe { memmgt::acquire_mem_region(20000) };
+
+        let (tbl, ctr, env) = prep_environment(region);
+
+        environment_setup(region, tbl.clone(), ctr, env.clone());
+
+        let expr = parser::parse(region, tbl.clone(), &"(do (+ 1 2) (- 4 3))").unwrap();
+
+        let result = eval(region, tbl, env, expr);
+
+        assert_eq!(i64_get(result), 1);
+
+        unsafe {
+            assert_eq!(0, (*((*region).head)).used);
+        }
+    }
 }
 
 enum_and_tryfrom! {
@@ -793,11 +850,13 @@ struct _Frame {
     env_and_opcode: usize,
 }
 
+// TODO: Temporarily (?) add a frame length tag to the first word
+
 /// Offsets into an evaluation stack frame (header included)
 #[repr(u8)]
 enum FrameOffset {
-    /// Top of the last frame
-    LastTop = 0,
+    /// Start of the preceding frame
+    LastFrm = 0,
     /// Return address
     Return = 1,
     /// Environment and opcode (tagged pointer)

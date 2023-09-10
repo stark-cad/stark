@@ -1208,7 +1208,7 @@ mod free_tree_tests {
 #[derive(Debug)]
 #[repr(C)]
 pub struct Region {
-    head: *mut Zone,
+    pub head: *mut Zone,
     zone_size: u32,
 }
 
@@ -1220,9 +1220,9 @@ pub struct Region {
 /// be allocated
 #[derive(Debug)]
 #[repr(C)]
-struct Zone {
+pub struct Zone {
     /// Size of used portion
-    used: u32,
+    pub used: u32,
     // /// Size of largest free block
     // lblk: u32,
     /// Pointer to start of working memory

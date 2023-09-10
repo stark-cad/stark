@@ -232,7 +232,7 @@ sail_fn! {
         // return nil();
     }
 
-    "qrx" 2 [receiver] {
+    "qrx" 1 [receiver] {
         return match super::queue::queue_rx(_env.clone(), receiver) {
             Some(r) => r,
             // None => ref_make(_reg),
