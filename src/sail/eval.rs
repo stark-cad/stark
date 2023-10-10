@@ -56,6 +56,13 @@ impl EvalStack {
         }
     }
 
+    /// Returns length of stack area, in words
+    pub fn size(&self) -> usize {
+        let bytes = self.stack_max as usize - self.stack_start as usize;
+        debug_assert_eq!(bytes % 8, 0);
+        bytes / 8
+    }
+
     /// Resize the stack, acquiring new memory if necessary
     fn resize(&mut self, size: usize) {
         let size_bytes = size * 8;
@@ -373,13 +380,13 @@ impl EvalStack {
     #[inline(always)]
     fn eval_expr(&mut self, ret: *mut *mut SlHead, env: SlHndl, expr: SlHndl) {
         if expr.nnil_ref_p() {
-            self.push_frame_head(ret, Opcode::Eval, env);
+            self.push_frame_head(ret, Opcode::Eval, env.clone());
             self.push(ref_get(expr).unwrap());
         } else if ret.is_null() {
             return;
         } else {
             let out = if expr.basic_sym_p() {
-                match env_lookup(env, expr) {
+                match env_lookup(env.clone(), expr) {
                     Some(obj) => unsafe { obj.get_raw() },
                     None => panic!("symbol not bound in env"),
                 }
@@ -393,6 +400,9 @@ impl EvalStack {
 
             unsafe { ptr::write(ret, out) };
         }
+
+        // guarantee env stays alive until write-out is done
+        drop(env);
     }
 
     /// Writes the address of a Sail object to an aligned position;
@@ -767,7 +777,7 @@ mod tests {
 
         environment_setup(region, tbl.clone(), ctr, env.clone());
 
-        let expr = parser::parse(region, tbl.clone(), &"(+ (- 8 6) 2)").unwrap();
+        let expr = parser::parse(region, tbl.clone(), &"(+ (- 8 6) 2)", false).unwrap();
 
         let result = eval(region, tbl, env, expr);
 
@@ -786,7 +796,7 @@ mod tests {
 
         environment_setup(region, tbl.clone(), ctr, env.clone());
 
-        let expr = parser::parse(region, tbl.clone(), &"(do (+ 1 2) (- 4 3))").unwrap();
+        let expr = parser::parse(region, tbl.clone(), &"(do (+ 1 2) (- 4 3))", false).unwrap();
 
         let result = eval(region, tbl, env, expr);
 

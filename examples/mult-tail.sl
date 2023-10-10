@@ -8,7 +8,6 @@
 ; run time, April 23 2023: ~0.09 seconds
 ; run time, July 26 2023: ~1.7 seconds
 
-(do
 (def mult (fn [max acc cur]
               (if (= cur max)
                   acc
@@ -19,4 +18,3 @@
                               ()))
                       (mult max acc (+ cur 1))))))
 (mult 1000 0 1)
-)

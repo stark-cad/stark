@@ -68,21 +68,21 @@ fn make_val_type_mfst(
         ))
     };
 
-    core_write_field(mfst.clone(), 0, typ_ctr_get_id(ctr));
-    core_write_field(mfst.clone(), 4, fieldct);
+    write_field(mfst.clone(), 0, typ_ctr_get_id(ctr));
+    write_field(mfst.clone(), 4, fieldct);
 
     let mut val_ofst_acc: u32 = 0;
 
     for (i, f) in fields.iter().enumerate() {
         let ent_ofst = 16 * i as u32 + 12;
-        core_write_field(mfst.clone(), ent_ofst + 0, val_ofst_acc);
-        core_write_field(mfst.clone(), ent_ofst + 4, f.0);
-        core_write_field(mfst.clone(), ent_ofst + 8, f.1);
-        core_write_field(mfst.clone(), ent_ofst + 12, f.2);
+        write_field(mfst.clone(), ent_ofst + 0, val_ofst_acc);
+        write_field(mfst.clone(), ent_ofst + 4, f.0);
+        write_field(mfst.clone(), ent_ofst + 8, f.1);
+        write_field(mfst.clone(), ent_ofst + 12, f.2);
         val_ofst_acc += f.0;
     }
 
-    core_write_field(mfst.clone(), 8, val_ofst_acc);
+    write_field(mfst.clone(), 8, val_ofst_acc);
     mfst
 }
 
@@ -166,13 +166,13 @@ fn errcode_init(reg: *mut memmgt::Region, err: SlErrCode) -> SlHndl {
 #[inline(always)]
 fn errcode_set(loc: SlHndl, err: SlErrCode) {
     coretypck!(loc ; ErrCode);
-    core_write_field(loc, 0, err as u16);
+    write_field(loc, 0, err as u16);
 }
 
 #[inline(always)]
 fn errcode_get(loc: SlHndl) -> SlErrCode {
     coretypck!(loc ; ErrCode);
-    SlErrCode::try_from(core_read_field::<u16>(loc, 0)).unwrap()
+    SlErrCode::try_from(read_field::<u16>(loc, 0)).unwrap()
 }
 
 fn arrvec_make<T: SizedBase + Copy>(
@@ -223,12 +223,12 @@ pub fn arrvec_init<T: SizedBase + Copy>(
 
 fn arrvec_get_typ(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecArr);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 fn arrvec_get_len(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecArr);
-    core_read_field(loc, 4)
+    read_field(loc, 4)
 }
 
 pub fn arrvec_rplc<T: SizedBase + Copy>(loc: SlHndl, val: &[T]) {
@@ -312,7 +312,6 @@ incl_symbols! {
     51 S_RNDR        "rndr"    Basic;
     52 S_ENGINE      "engine"  Basic;
     53 S_T_INTERN    "%true"   Basic;
-    71
     54 S_F_INTERN    "%false"  Basic;
     55 S_FR_DIMS     "fr-dims" Basic;
     56 S_CUR_POS     "cur-pos" Basic;
@@ -330,7 +329,8 @@ incl_symbols! {
     68 K_CX_KEY_S    "cx-kb-s" Keyword;
     69 K_CX_KEY_E    "cx-kb-e" Keyword;
     70 K_CX_KEY_K    "cx-kb-k" Keyword;
-    71 K_CX_KEY_M    "cx-kb-m" Keyword;
+    71 K_CX_KEY_M    "cx-kb-m" Keyword
+    72
 }
 
 macro_rules! incl_types {
@@ -515,13 +515,13 @@ pub fn repl(stream_in: std::io::Stdin) {
     let mut stack = eval::EvalStack::new(10000);
 
     let mut ret_slot: *mut SlHead = ptr::null_mut();
-    let ret_addr: *mut *mut SlHead = &mut ret_slot as *mut *mut SlHead;
+    let ret_addr: *mut *mut SlHead = &mut ret_slot;
 
     loop {
         let mut input = String::new();
         stream_in.read_line(&mut input).expect("Failure");
 
-        let expr = match parser::parse(region, tbl.clone(), &input) {
+        let expr = match parser::parse(region, tbl.clone(), &input, false) {
             Ok(out) => out,
             Err(err) => {
                 println!("{:?}\n", err);
@@ -542,10 +542,16 @@ pub fn repl(stream_in: std::io::Stdin) {
 
 /// Runs a Sail file in its own context
 pub fn run_file(filename: &str) -> Result<String, SlErrCode> {
-    let file = match std::fs::read_to_string(filename) {
-        Ok(s) => s,
-        Err(_) => return Err(SlErrCode::FileCouldNotRead),
+    let file = {
+        let mut tmpfl = match std::fs::read_to_string(filename) {
+            Ok(s) => s,
+            Err(_) => return Err(SlErrCode::FileCouldNotRead),
+        };
+        tmpfl.insert_str(0, "(do ");
+        tmpfl.push(')');
+        tmpfl
     };
+
     interpret(&file)
 }
 
@@ -557,7 +563,7 @@ pub fn interpret(code: &str) -> Result<String, SlErrCode> {
 
     environment_setup(region, tbl.clone(), ctr, env.clone());
 
-    let expr = parser::parse(region, tbl.clone(), code)?;
+    let expr = parser::parse(region, tbl.clone(), code, false)?;
     let result = eval::eval(region, tbl.clone(), env, expr);
 
     Ok(context(tbl, result).to_string())
@@ -628,18 +634,18 @@ mod tests {
         };
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
-        let val = parser::parse(reg, tbl.clone(), &exp).unwrap();
+        let val = parser::parse(reg, tbl.clone(), &exp, false).unwrap();
         let out = context(tbl.clone(), val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("(() (()) ((((() ())))))");
-        let val = parser::parse(reg, tbl.clone(), &exp).unwrap();
+        let val = parser::parse(reg, tbl.clone(), &exp, false).unwrap();
         let out = context(tbl.clone(), val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("((1 2 3 4) ;Comment\n5)");
         let gnd = String::from("((1 2 3 4) 5)");
-        let val = parser::parse(reg, tbl.clone(), &exp).unwrap();
+        let val = parser::parse(reg, tbl.clone(), &exp, false).unwrap();
         let out = context(tbl, val).to_string();
         assert_eq!(gnd, out);
     }

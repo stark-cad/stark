@@ -14,9 +14,6 @@
 
 ; <>
 
-; TODO: read files without having to wrap in `do`
-(do
-
 (def drawing #F)
 (def point (arr-vec-make $f32 2 (as-f32 0.0)))
 
@@ -131,5 +128,3 @@
 (print "main end")
 
 ))
-
-)

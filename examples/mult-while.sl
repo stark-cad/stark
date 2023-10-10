@@ -6,7 +6,6 @@
 ; run time, April 23 2023: ~0.01 seconds
 ; run time, July 26 2023: ~0.05 seconds
 
-(do
 (def max 1000)
 (def acc 0)
 (def cur 1)
@@ -17,5 +16,5 @@
                (set acc (+ acc cur))
                ()))
        (set cur (+ cur 1)))
+;(print acc)
 acc
-)

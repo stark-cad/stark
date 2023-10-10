@@ -328,9 +328,17 @@ sail_fn! {
         coretypck!(strin ; VecStr);
         let strsl = string_get(strin);
 
-        return match super::parser::parse(_reg, _tbl, strsl) {
+        return match super::parser::parse(_reg, _tbl, strsl, false) {
             Ok(head) => head,
             Err(err) => super::errcode_init(_reg, err),
         };
+    }
+
+    "_itsp_mdbg_id" 1 [obj] {
+        let id = obj.memdbg_obj_id();
+
+        let out = super::i64_init(_reg, id as _);
+
+        out
     }
 }

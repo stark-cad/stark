@@ -26,12 +26,24 @@ use std::str;
 // }
 
 /// Parses a textual Sail expression into a structure of Sail objects
-pub fn parse(reg: *mut memmgt::Region, tbl: SlHndl, code: &str) -> Result<SlHndl, SlErrCode> {
+pub fn parse(
+    reg: *mut memmgt::Region,
+    tbl: SlHndl,
+    code: &str,
+    file: bool,
+) -> Result<SlHndl, SlErrCode> {
     // Accumulator for collecting string values
     let mut acc: Vec<u8> = Vec::new();
-    let mut chars = code.bytes().peekable();
 
-    let val = read_value(&mut chars, &mut acc, reg, tbl)?;
+    let chars = if file {
+        String::from("(do ") + code + ")"
+    } else {
+        code.to_string()
+    };
+
+    let mut cit = chars.bytes().peekable();
+
+    let val = read_value(&mut cit, &mut acc, reg, tbl)?;
 
     Ok(val)
 }
@@ -92,6 +104,11 @@ fn read_value(
         b'$' => {
             chars.next();
             value = read_spec_sym(chars, acc, reg, tbl, SymbolMode::Type)?;
+            acc.clear();
+        }
+        b'@' => {
+            chars.next();
+            value = read_spec_sym(chars, acc, reg, tbl, SymbolMode::Module)?;
             acc.clear();
         }
         b'"' => {

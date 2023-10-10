@@ -249,7 +249,7 @@ impl SlHndl {
     }
 
     #[inline(always)]
-    fn refc_byte(&self) -> u8 {
+    pub fn refc_byte(&self) -> u8 {
         unsafe { ptr::read_unaligned((self.raw as *const u8).add(1)) }
     }
 
@@ -712,9 +712,9 @@ fn proc_native_size() -> u32 {
     NUM_16_LEN + PTR_LEN
 }
 
-// TODO: could avoid multithreaded reference count handlers by
-// requiring that all objects are known to only one evaluation unit;
-// queue objects would be the main concern
+// TODO: could avoid multithreaded / reentrance-safe reference count
+// handlers by requiring that all objects are known to only one
+// evaluation unit; queue objects would be the main concern
 
 /// Increment the reference count stored in a Sail object, up to a
 /// maximum of 255; if the count is at 255, return true
@@ -727,7 +727,14 @@ pub fn inc_refc(loc: *mut SlHead) -> bool {
     loop {
         match cur {
             0 => panic!("attempted reference to dead object"),
-            255 => return true,
+            255 => {
+                if cfg!(feature = "memdbg") {
+                    println!("O {} SAT", unsafe {
+                        ptr::read_unaligned((loc as *const u32).add(2))
+                    })
+                }
+                return true;
+            }
             _ => (),
         }
 
@@ -742,7 +749,7 @@ pub fn inc_refc(loc: *mut SlHead) -> bool {
     if cfg!(feature = "memdbg") {
         println!(
             "O {} INC (c {})",
-            unsafe { ptr::read_unaligned((loc as *mut u32).add(2)) },
+            unsafe { ptr::read_unaligned((loc as *const u32).add(2)) },
             cur + 1
         )
     }
@@ -763,7 +770,14 @@ pub fn dec_refc(loc: *mut SlHead) -> bool {
         match cur {
             0 => panic!("too many reference count decrements"),
             1 => out = true,
-            255 => return false,
+            255 => {
+                if cfg!(feature = "memdbg") {
+                    println!("O {} ESC", unsafe {
+                        ptr::read_unaligned((loc as *const u32).add(2))
+                    })
+                }
+                return false;
+            }
             _ => out = false,
         }
 
@@ -778,7 +792,7 @@ pub fn dec_refc(loc: *mut SlHead) -> bool {
     if cfg!(feature = "memdbg") {
         println!(
             "O {} DEC (c {})",
-            unsafe { ptr::read_unaligned((loc as *mut u32).add(2)) },
+            unsafe { ptr::read_unaligned((loc as *const u32).add(2)) },
             cur - 1
         )
     }
@@ -836,14 +850,22 @@ fn discern_refs_core(loc: *mut SlHead) -> Vec<*mut SlHead> {
                 }
             }
             Some(CoreType::VecStd) => {
-                for i in 0..ptr::read_unaligned(raw_val_ptr(loc).add(4) as *mut u32) {
-                    let nest = ptr::read_unaligned(raw_val_ptr(loc).add(8 * (i as usize + 1)) as _);
+                for i in 1..=ptr::read_unaligned(raw_val_ptr(loc).add(4) as *mut u32) {
+                    let nest = ptr::read_unaligned(raw_val_ptr(loc).add(8 * i as usize) as _);
                     if !nil_p(nest) {
                         acc.push(nest)
                     }
                 }
             }
-            // TODO: Handle VecArr and VecAny possibilities?
+            Some(CoreType::VecHash) => {
+                for i in 1..=ptr::read_unaligned(raw_val_ptr(loc) as *mut u32) {
+                    let nest = ptr::read_unaligned(raw_val_ptr(loc).add(8 * i as usize) as _);
+                    if !nil_p(nest) {
+                        acc.push(nest)
+                    }
+                }
+            }
+            // TODO: Handle VecArr?
             _ => (),
         }
     }
@@ -885,7 +907,7 @@ fn discern_refs(env: SlHndl, loc: *mut SlHead) -> Vec<*mut SlHead> {
 
 // TODO: ALL types used in core logic (setup, evaluation, teardown)
 // must be properly handled by this function
-fn destroy_obj_core(loc: *mut SlHead) {
+pub fn destroy_obj_core(loc: *mut SlHead) {
     assert!(!nil_p(loc));
 
     // log::debug!("Destroying object at {:x}", loc as usize);
@@ -1161,11 +1183,10 @@ unsafe fn get_ptr_ptr_unchecked(loc: SlHndl, offset: u32) -> *mut *mut SlHead {
 }
 
 // TODO: check that the given offset matches a valid field offset in the object?
-// TODO: pretty sure this function is now universal
 
 /// Write to a field of a Sail object of a core type
 #[inline(always)]
-pub fn core_write_field<T: SizedBase>(loc: SlHndl, offset: u32, src: T) {
+pub fn write_field<T: SizedBase>(loc: SlHndl, offset: u32, src: T) {
     assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
     unsafe {
         let dst = loc.value_ptr().add(offset as usize) as *mut T;
@@ -1206,11 +1227,9 @@ pub unsafe fn write_field_cmpxcg_unchecked<T: SizedBase + Copy>(
     std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, src).1
 }
 
-// TODO: pretty sure this function is now universal
-
 /// Read from a field of a Sail object of a core type
 #[inline(always)]
-pub fn core_read_field<T: SizedBase>(loc: SlHndl, offset: u32) -> T {
+pub fn read_field<T: SizedBase>(loc: SlHndl, offset: u32) -> T {
     assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
     unsafe {
         let src = loc.value_ptr().add(offset as usize) as *mut T;
@@ -1505,31 +1524,31 @@ pub fn ref_get(loc: SlHndl) -> Option<SlHndl> {
 #[inline(always)]
 pub fn sym_set_id(loc: SlHndl, id: u32) {
     coretypck!(loc ; Symbol);
-    core_write_field(loc, 0, id)
+    write_field(loc, 0, id)
 }
 
 #[inline(always)]
 pub fn sym_get_id(loc: SlHndl) -> u32 {
     coretypck!(loc ; Symbol);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
 fn stdvec_set_len(loc: SlHndl, len: u32) {
     coretypck!(loc ; VecStd);
-    core_write_field(loc, 4, len)
+    write_field(loc, 4, len)
 }
 
 #[inline(always)]
 pub fn stdvec_get_len(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecStd);
-    core_read_field(loc, 4)
+    read_field(loc, 4)
 }
 
 #[inline(always)]
 fn stdvec_get_cap(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecStd);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -1558,19 +1577,19 @@ pub fn stdvec_push(loc: SlHndl, item: SlHndl) {
 #[inline(always)]
 fn string_get_len(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecStr);
-    core_read_field(loc, NUM_32_LEN)
+    read_field(loc, NUM_32_LEN)
 }
 
 #[inline(always)]
 fn string_set_len(loc: SlHndl, len: u32) {
     coretypck!(loc ; VecStr);
-    core_write_field(loc, NUM_32_LEN, len)
+    write_field(loc, NUM_32_LEN, len)
 }
 
 #[inline(always)]
 fn string_get_cap(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecStr);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -1611,7 +1630,7 @@ pub fn string_get(loc: SlHndl) -> &'static str {
 #[inline(always)]
 pub fn hashvec_get_size(loc: SlHndl) -> u32 {
     coretypck!(loc ; VecHash);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 /// Returns true if both arguments are the same Sail object
@@ -1726,13 +1745,13 @@ pub fn hash_map_insert(reg: *mut Region, loc: SlHndl, key: SlHndl, val: SlHndl) 
 #[inline(always)]
 pub fn proc_get_argct(loc: SlHndl) -> u16 {
     assert!(loc.proc_p());
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
 pub fn proc_lambda_set_arg(loc: SlHndl, idx: u16, arg: u32) {
     coretypck!(loc ; ProcLambda);
-    core_write_field(loc, (NUM_16_LEN + PTR_LEN) + (idx as u32 * SYMBOL_LEN), arg)
+    write_field(loc, (NUM_16_LEN + PTR_LEN) + (idx as u32 * SYMBOL_LEN), arg)
 }
 
 #[inline(always)]
@@ -1743,7 +1762,7 @@ pub fn proc_lambda_get_arg(reg: *mut Region, loc: SlHndl, idx: u16) -> SlHndl {
 #[inline(always)]
 pub fn proc_lambda_get_arg_id(loc: SlHndl, idx: u16) -> u32 {
     coretypck!(loc ; ProcLambda);
-    core_read_field(loc, (NUM_16_LEN + PTR_LEN) + (idx as u32 * SYMBOL_LEN))
+    read_field(loc, (NUM_16_LEN + PTR_LEN) + (idx as u32 * SYMBOL_LEN))
 }
 
 #[inline(always)]
@@ -1764,13 +1783,13 @@ pub fn proc_lambda_get_body(loc: SlHndl) -> Option<SlHndl> {
 #[inline(always)]
 pub fn proc_native_set_body(loc: SlHndl, fun: NativeFn) {
     coretypck!(loc ; ProcNative);
-    core_write_field(loc, NUM_16_LEN, fun as u64)
+    write_field(loc, NUM_16_LEN, fun as u64)
 }
 
 #[inline(always)]
 pub fn proc_native_get_body(loc: SlHndl) -> NativeFn {
     coretypck!(loc ; ProcNative);
-    let ptr = core_read_field::<u64>(loc, NUM_16_LEN) as *const ();
+    let ptr = read_field::<u64>(loc, NUM_16_LEN) as *const ();
     unsafe { mem::transmute::<_, NativeFn>(ptr) }
 }
 
@@ -2100,7 +2119,7 @@ fn env_get_binding_loc(env: SlHndl, sym_id: u32) -> Option<*mut *mut SlHead> {
 /// This should take the form of a bimap, a 1 to 1 association between strings and IDs.
 /// Two maps, one for each direction, pointing to the same set of cells: (id string).
 /// Must keep track of id to assign (counter) and reclaim unused slots if counter reaches max.
-fn sym_tab_create(reg: *mut Region, size: u32) -> SlHndl {
+pub fn sym_tab_create(reg: *mut Region, size: u32) -> SlHndl {
     let tbl = stdvec_make(reg, 3);
 
     let id_to_str = hashvec_make(reg, size);
@@ -2298,7 +2317,7 @@ pub fn sym_tab_add_with_id(reg: *mut Region, tbl: SlHndl, sym: &str, id: u32) {
 }
 
 /// Creates a counter for global type IDs
-fn typ_ctr_create(reg: *mut Region) -> SlHndl {
+pub fn typ_ctr_create(reg: *mut Region) -> SlHndl {
     u32_init(reg, 0x80000000)
 }
 
@@ -2354,13 +2373,13 @@ fn u8_init(reg: *mut Region, val: u8) -> SlHndl {
 #[inline(always)]
 fn u8_set(loc: SlHndl, val: u8) {
     coretypck!(loc ; U8);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 fn u8_get(loc: SlHndl) -> u8 {
     coretypck!(loc ; U8);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2378,13 +2397,13 @@ fn u16_init(reg: *mut Region, val: u16) -> SlHndl {
 #[inline(always)]
 fn u16_set(loc: SlHndl, val: u16) {
     coretypck!(loc ; U16);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 fn u16_get(loc: SlHndl) -> u16 {
     coretypck!(loc ; U16);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2402,13 +2421,13 @@ pub fn u32_init(reg: *mut Region, val: u32) -> SlHndl {
 #[inline(always)]
 pub fn u32_set(loc: SlHndl, val: u32) {
     coretypck!(loc ; U32);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 pub fn u32_get(loc: SlHndl) -> u32 {
     coretypck!(loc ; U32);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2426,13 +2445,13 @@ fn u64_init(reg: *mut Region, val: u64) -> SlHndl {
 #[inline(always)]
 fn u64_set(loc: SlHndl, val: u64) {
     coretypck!(loc ; U64);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 pub fn u64_get(loc: SlHndl) -> u64 {
     coretypck!(loc ; U64);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2452,13 +2471,13 @@ fn u128_init(reg: *mut Region, val: u128) -> SlHndl {
 #[inline(always)]
 fn u128_set(loc: SlHndl, val: u128) {
     coretypck!(loc ; U128);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 fn u128_get(loc: SlHndl) -> u128 {
     coretypck!(loc ; U128);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2476,13 +2495,13 @@ fn i8_init(reg: *mut Region, val: i8) -> SlHndl {
 #[inline(always)]
 fn i8_set(loc: SlHndl, val: i8) {
     coretypck!(loc ; I8);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 fn i8_get(loc: SlHndl) -> i8 {
     coretypck!(loc ; I8);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2500,13 +2519,13 @@ fn i16_init(reg: *mut Region, val: i16) -> SlHndl {
 #[inline(always)]
 fn i16_set(loc: SlHndl, val: i16) {
     coretypck!(loc ; I16);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 fn i16_get(loc: SlHndl) -> i16 {
     coretypck!(loc ; I16);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2524,13 +2543,13 @@ fn i32_init(reg: *mut Region, val: i32) -> SlHndl {
 #[inline(always)]
 fn i32_set(loc: SlHndl, val: i32) {
     coretypck!(loc ; I32);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 fn i32_get(loc: SlHndl) -> i32 {
     coretypck!(loc ; I32);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2548,13 +2567,13 @@ pub fn i64_init(reg: *mut Region, val: i64) -> SlHndl {
 #[inline(always)]
 pub fn i64_set(loc: SlHndl, val: i64) {
     coretypck!(loc ; I64);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 pub fn i64_get(loc: SlHndl) -> i64 {
     coretypck!(loc ; I64);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2574,13 +2593,13 @@ fn i128_init(reg: *mut Region, val: i128) -> SlHndl {
 #[inline(always)]
 fn i128_set(loc: SlHndl, val: i128) {
     coretypck!(loc ; I128);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 fn i128_get(loc: SlHndl) -> i128 {
     coretypck!(loc ; I128);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2598,13 +2617,13 @@ pub fn f32_init(reg: *mut Region, val: f32) -> SlHndl {
 #[inline(always)]
 pub fn f32_set(loc: SlHndl, val: f32) {
     coretypck!(loc ; F32);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 pub fn f32_get(loc: SlHndl) -> f32 {
     coretypck!(loc ; F32);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]
@@ -2622,13 +2641,13 @@ pub fn f64_init(reg: *mut Region, val: f64) -> SlHndl {
 #[inline(always)]
 pub fn f64_set(loc: SlHndl, val: f64) {
     coretypck!(loc ; F64);
-    core_write_field(loc, 0, val)
+    write_field(loc, 0, val)
 }
 
 #[inline(always)]
 pub fn f64_get(loc: SlHndl) -> f64 {
     coretypck!(loc ; F64);
-    core_read_field(loc, 0)
+    read_field(loc, 0)
 }
 
 #[inline(always)]

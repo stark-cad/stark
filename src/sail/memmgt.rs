@@ -1209,7 +1209,7 @@ mod free_tree_tests {
 #[repr(C)]
 pub struct Region {
     pub head: *mut Zone,
-    zone_size: u32,
+    pub zone_size: u32,
 }
 
 // Maximum zone size: 2GiB
@@ -1251,6 +1251,8 @@ struct FreeBlock {
 
 // const MEM_REGION_HEAD_SIZE: usize = mem::size_of::<Region>();
 const MEM_ZONE_HEAD_SIZE: usize = mem::size_of::<Zone>();
+
+// TODO: does this really need to start out as just a pointer?
 
 /// Creates a new memory region and accompanying zone
 pub unsafe fn acquire_mem_region(zone_size: u32) -> *mut Region {

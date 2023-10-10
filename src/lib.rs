@@ -110,7 +110,7 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: SlHndl, sl_ctr: SlHndl,
     sail::insert_native_procs(sl_reg, sl_tbl.clone(), sl_env.clone(), mngr_fns);
 
     let prog_txt = &std::fs::read_to_string("scripts/main.sl").unwrap();
-    let prog_expr = sail::parser::parse(sl_reg, sl_tbl.clone(), prog_txt).unwrap();
+    let prog_expr = sail::parser::parse(sl_reg, sl_tbl.clone(), prog_txt, true).unwrap();
 
     let mut stack = sail::eval::EvalStack::new(10000);
 

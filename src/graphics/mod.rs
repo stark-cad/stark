@@ -99,10 +99,10 @@ pub fn render_loop(
             };
 
             assert_eq!(points.core_type(), Some(sail::CoreType::VecArr));
-            assert_eq!(sail::core_read_field::<u32>(points.clone(), 0), sail::T_F32.0);
+            assert_eq!(sail::read_field::<u32>(points.clone(), 0), sail::T_F32.0);
 
             assert_eq!(colors.core_type(), Some(sail::CoreType::VecArr));
-            assert_eq!(sail::core_read_field::<u32>(colors.clone(), 0), sail::T_F32.0);
+            assert_eq!(sail::read_field::<u32>(colors.clone(), 0), sail::T_F32.0);
 
             let (ln, cl) = unsafe {
                 (
@@ -162,7 +162,7 @@ pub fn render_loop(
     engine.set_clear([1.0, 1.0, 1.0, 1.0]);
 
     let prog_txt = &std::fs::read_to_string("scripts/rndr.sl").unwrap();
-    let prog_expr = sail::parser::parse(sl_reg, sl_tbl.clone(), prog_txt).unwrap();
+    let prog_expr = sail::parser::parse(sl_reg, sl_tbl.clone(), prog_txt, true).unwrap();
 
     let mut stack = sail::eval::EvalStack::new(10000);
 
@@ -694,6 +694,7 @@ impl Engine {
 
     /// Reconfigure objects linked to surface state
     fn surface_cfg(&mut self) {
+        // TODO: handle timeout here?
         unsafe {
             self.device
                 .wait_for_fences(&self.fences, true, 1_000_000_000)
