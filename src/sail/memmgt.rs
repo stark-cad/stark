@@ -184,6 +184,35 @@ pub const fn cap(cfg: super::Cfg) -> u32 {
     ((cfg as u32) >> 2) | 0x80000000
 }
 
+/// Returns a pointer to `sz` unused bytes somewhere in the region `reg`
+unsafe fn acquire_raw(reg: *mut Region, sz: u32) -> *mut u8 {
+    let region_ref = reg.as_mut().unwrap();
+    let mut zone_ref = region_ref.head.as_mut().unwrap();
+
+    let ptr = loop {
+        // advance if definitely no space
+        if zone_ref.used + sz >= region_ref.zone_size {
+            // zone_ref = zone_advance(region_ref, zone_ref)
+        }
+        // try the free tree
+        else if let Some(ptr) = free_tree_seek(zone_ref, sz) {
+            break ptr;
+        }
+        // try empty space
+        else if let Some(ptr) = void_seek(zone_ref, sz) {
+            break ptr;
+        }
+
+        // advance if all individual spaces too small
+        zone_ref = zone_advance(region_ref, zone_ref)
+    };
+
+    assert!(ptr >= zone_ref.bot);
+    assert!(ptr < zone_ref.end);
+
+    ptr
+}
+
 /// Allocates space in the given region for a Sail object, and preinitializes it
 pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead {
     //!
@@ -209,31 +238,7 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
     let obj_len =
         (HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN) + (size_fld_p as u32 * NUM_32_LEN)) + size;
 
-    let region_ref = region.as_mut().unwrap();
-    let mut zone_ref = region_ref.head.as_mut().unwrap();
-
-    let ptr = loop {
-        // advance if definitely no space
-        if zone_ref.used + obj_len >= region_ref.zone_size {
-            zone_ref = zone_advance(region_ref, zone_ref)
-        }
-
-        // try the free tree
-        if let Some(ptr) = free_tree_seek(zone_ref, obj_len) {
-            break ptr;
-        }
-
-        // try empty space
-        if let Some(ptr) = void_seek(zone_ref, obj_len) {
-            break ptr;
-        }
-
-        // advance if all individual spaces too small
-        zone_ref = zone_advance(region_ref, zone_ref)
-    };
-
-    assert!(ptr >= zone_ref.bot);
-    assert!(ptr < zone_ref.end);
+    let ptr = acquire_raw(region, obj_len);
 
     // zero the whole object
     ptr::write_bytes(ptr, 0, obj_len as _);
@@ -255,7 +260,7 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
     }
 
     if cfg!(feature = "memdbg") {
-        let obj_id = std::intrinsics::atomic_xadd_acqrel(&mut OBJECT_ID_CTR, 1);
+        let obj_id = std::intrinsics::atomic_xadd_acqrel(ptr::addr_of_mut!(OBJECT_ID_CTR), 1);
         ptr::write_unaligned((ptr as *mut u32).add(2), obj_id);
 
         let ty = if type_fld_p {
@@ -417,9 +422,94 @@ unsafe fn void_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
     Some(ptr)
 }
 
-// unsafe fn realloc(obj: *mut SlHead, size: usize) -> *mut SlHead {
-//     obj
-// }
+macro_rules! znlck {
+    ( $zone:expr => $($labl:lifetime :)? $body:block ENDLCK) => {{
+        let lock: *mut u8 = &mut ($zone).lock;
+        while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
+            std::hint::spin_loop();
+        }
+
+        let p = $($labl :)? {$body};
+
+        std::intrinsics::atomic_store_release(lock, false as u8);
+
+        p
+    }};
+}
+
+// TODO: replace *mut SlHead with nonnull, Option-wrappable SlPtr?
+
+/// Lengthen an object; may write to a new address, in which case a
+/// redirect is left if there is more than one reference
+pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
+    let cur_size = lblk_get_len(obj);
+    if size == cur_size {
+        return obj;
+    }
+
+    if size < cur_size {
+        panic!("cannot yet decrease object size")
+    }
+
+    let diff = size - cur_size;
+
+    let size_fld_p = super::raw_siz_fld_p(obj);
+    let type_fld_p = super::raw_typ_fld_p(obj);
+
+    let new_len =
+        (HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN) + (size_fld_p as u32 * NUM_32_LEN)) + size;
+
+    let (c_regn, c_zone) = which_mem_area(obj);
+
+    let mut ret_ptr = obj;
+
+    let qp = znlck!(*c_zone => {
+        // first, check whether we happen to be at the end of the used area; extend if so
+        if super::raw_val_ptr(obj).add(cur_size as _) == (*c_zone).top {
+            let ptr = (*c_zone).top;
+            (*c_zone).used += diff;
+            (*c_zone).top = ptr.add(diff as _);
+            ptr::write_bytes(ptr, 0, diff as _);
+            true
+        }
+        // second, (maybe) check whether we happen to precede a free block; ""
+        else if false {
+            true
+        } else {false}
+    } ENDLCK);
+
+    // last, find available space in the region, acquire it, and copy into it
+    if !qp {
+        let old_ptr = obj as *mut u8;
+        let new_ptr = acquire_raw(c_regn, new_len);
+
+        ptr::copy_nonoverlapping(old_ptr, new_ptr, cur_size as _);
+        ptr::write_bytes(new_ptr.add(cur_size as _), 0, diff as _);
+        // set refct of new loc to 2, for the redir and the return
+        ptr::write(new_ptr.add(1), 2);
+
+        ret_ptr = new_ptr as _;
+
+        // in the final case, proceed by replacing the original space with a redirect
+        let old_refc = ptr::read(old_ptr.add(1));
+        ptr::write(
+            old_ptr as *mut u64,
+            super::Cfg::B0Redir as u64 + ((old_refc as u64) << 8) + ((new_ptr as u64) << 16),
+        );
+
+        // TODO: free all space not required for redirect (> 8 bytes)
+        reclaim_raw(old_ptr.add(HEAD_LEN as _), cur_size - HEAD_LEN);
+    }
+
+    if size_fld_p {
+        ptr::write_unaligned(
+            (ret_ptr as *mut u8).add((HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN)) as _) as *mut _,
+            size,
+        );
+    }
+
+    ret_ptr
+}
 
 /// Get total length of live block
 fn lblk_get_len(blk: *mut SlHead) -> u32 {
@@ -429,93 +519,69 @@ fn lblk_get_len(blk: *mut SlHead) -> u32 {
         + super::raw_size(blk)
 }
 
-/// Adds memory that used to hold a Sail object to the freed memory
-/// structure in its zone
-pub unsafe fn dealloc(val: *mut SlHead) {
-    if cfg!(feature = "memdbg") {
-        let obj_id = ptr::read_unaligned((val as *mut u32).add(2));
-        println!("O {obj_id} RECLAIM")
-    }
+/// Begin accounting a span somewhere in a region as free space
+unsafe fn reclaim_raw(ptr: *mut u8, sz: u32) {
+    assert!(
+        sz < 1u32.reverse_bits(),
+        "attempt to reclaim too-large span"
+    );
 
-    let len = {
-        let length = lblk_get_len(val);
-
-        if length > !(1u32.reverse_bits()) {
-            panic!("attempt to deallocate too-large object")
-        }
-
-        length
-    };
-
-    // TODO: panic if object appears to exceed zone's max obj size
-
-    let zone = which_mem_area(val).1;
+    let zone = which_mem_area(ptr as _).1;
     let zone_ref = zone.as_mut().unwrap();
 
-    let newblk = val as *mut FreeBlock;
+    let newblk = ptr as *mut FreeBlock;
 
     // TODO: establish concurrency characteristics of alloc / dealloc
-    let lock: *mut u8 = &mut zone_ref.lock;
-    while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
-        std::hint::spin_loop();
-    }
+
+    znlck!(zone_ref => 'lb: {
 
     let trunk = {
-        let f_trunk = (*zone).free;
-        if f_trunk.is_null() {
-            if (newblk as *mut u8).add(len as _) == (*zone).top {
+        let c_trunk = (*zone).free;
+        if c_trunk.is_null() {
+            // if at end of used space, just release into free space
+            if (newblk as *mut u8).add(sz as _) == (*zone).top {
                 // TODO: change these operations (multiple) to atomic?
                 (*zone).top = newblk as _;
 
-                std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, len);
-                // std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, 0);
+                std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, sz);
 
                 if cfg!(feature = "memdbg") {
                     // __dbg_visualize_zone(zone)
                 }
 
-                std::intrinsics::atomic_store_release(lock, false as u8);
-                return;
+                break 'lb;
             }
 
-            fblk_set_len(newblk, len);
+            fblk_set_len(newblk, sz);
             fblk_set_prev_ofs(newblk, FBLK_NULL_OFFSET);
             fblk_set_next_ofs(newblk, FBLK_NULL_OFFSET);
 
-            // TODO: if this needs to be concurrency-safe, so does
-            // every write to any offset pointer in the free
-            // tree. probably better to keep a safe queue of objects
-            // that require deallocation, then guarantee that
-            // deallocation activity will only be undertaken by a
-            // single thread. could also use a free tree lock. when
-            // the lock is taken, reentrant deallocation runs are
-            // prevented, as well as any allocation not from the
-            // zone's empty area.
+            // TODO: keep a safe queue of objects that require
+            // deallocation, then guarantee that deallocation activity
+            // will only be undertaken by a single thread. could also
+            // use a free tree lock. when the lock is taken, reentrant
+            // deallocation runs are prevented, as well as any
+            // allocation not from the zone's empty area.
 
             // TODO: more clearly specify concurrency needs for zones
 
-            let (n_trunk, done) = std::intrinsics::atomic_cxchg_acqrel_acquire(
+            let (chkt, done) = std::intrinsics::atomic_cxchg_acqrel_acquire(
                 &mut (*zone).free,
                 ptr::null_mut(),
                 newblk,
             );
+            debug_assert!(done, "{:x}", chkt as u64);
 
-            if done {
-                std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, len);
-                // std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, len);
+            std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, sz);
 
-                if cfg!(feature = "memdbg") {
-                    // __dbg_visualize_zone(zone)
-                }
-
-                std::intrinsics::atomic_store_release(lock, false as u8);
-                return;
-            } else {
-                n_trunk
+            if cfg!(feature = "memdbg") {
+                // __dbg_visualize_zone(zone)
             }
-        } else {
-            f_trunk
+
+            break 'lb;
         }
+
+        c_trunk
     };
 
     let (mut lower_bound, mut upper_bound, mut lb_parent, mut ub_parent) = {
@@ -528,25 +594,17 @@ pub unsafe fn dealloc(val: *mut SlHead) {
         }
     };
 
-    let mut chg_p = true;
-
-    while chg_p {
-        chg_p = false;
-
+    loop {
         let (ub_last, lb_last) = (upper_bound, lower_bound);
 
         if !lower_bound.is_null() {
             let prospect = fblk_get_next_blk(zone, lower_bound);
             if prospect.is_null() {
             } else if prospect > lower_bound && prospect < newblk {
-                // if prospect != lb_last {
                 lb_parent = lower_bound;
-                // }
                 lower_bound = prospect;
             } else if prospect > lower_bound && prospect > newblk {
-                // if prospect != lb_last {
                 ub_parent = lower_bound;
-                // }
                 upper_bound = prospect;
             } else {
                 panic!()
@@ -557,22 +615,18 @@ pub unsafe fn dealloc(val: *mut SlHead) {
             let prospect = fblk_get_prev_blk(zone, upper_bound);
             if prospect.is_null() {
             } else if prospect < upper_bound && prospect < newblk {
-                // if prospect != ub_last {
                 lb_parent = upper_bound;
-                // }
                 lower_bound = prospect;
             } else if prospect < upper_bound && prospect > newblk {
-                // if prospect != ub_last {
                 ub_parent = upper_bound;
-                // }
                 upper_bound = prospect;
             } else {
                 panic!()
             }
         }
 
-        if lb_last != lower_bound || ub_last != upper_bound {
-            chg_p = true
+        if lb_last == lower_bound && ub_last == upper_bound {
+            break;
         }
     }
 
@@ -606,7 +660,7 @@ pub unsafe fn dealloc(val: *mut SlHead) {
 
         assert!(upper_bound > newblk);
 
-        let nw_end = newblk as usize + len as usize;
+        let nw_end = newblk as usize + sz as usize;
         let ub_start = upper_bound as usize;
         let diff = ub_start - nw_end;
 
@@ -619,7 +673,7 @@ pub unsafe fn dealloc(val: *mut SlHead) {
     };
 
     // All tree manipulation is restricted to this block
-    let final_len = match (prior_merge, follow_merge) {
+    let _final_sz = match (prior_merge, follow_merge) {
         (true, true) => {
             let (ubprev, ubnext) = (
                 fblk_get_prev_blk(zone, upper_bound),
@@ -678,26 +732,24 @@ pub unsafe fn dealloc(val: *mut SlHead) {
                 (*zone).free = lower_bound
             }
 
-            let full_len = len + fblk_get_len(lower_bound) + fblk_get_len(upper_bound);
-            fblk_set_len(lower_bound, full_len);
+            let full_sz = sz + fblk_get_len(lower_bound) + fblk_get_len(upper_bound);
+            fblk_set_len(lower_bound, full_sz);
 
-            full_len
+            full_sz
         }
         (true, false) => {
-            if newblk as usize + len as usize == (*zone).top as usize {
+            if newblk as usize + sz as usize == (*zone).top as usize {
                 let (lbprev, lbnext) = (
                     fblk_get_prev_blk(zone, lower_bound),
                     fblk_get_next_blk(zone, lower_bound),
                 );
 
-                assert_eq!(lbnext, ptr::null_mut());
+                assert!(lbnext.is_null());
 
-                if !lb_parent.is_null() && lower_bound < lb_parent {
-                    unreachable!()
-                } else if !lb_parent.is_null() && lower_bound > lb_parent {
-                    assert!(newblk > lb_parent);
+                if !lb_parent.is_null() {
+                    assert!(lower_bound > lb_parent);
+                    assert!(lbprev.is_null() || lbprev > lb_parent);
                     assert_eq!(lower_bound, fblk_get_next_blk(zone, lb_parent));
-
                     fblk_set_next_blk(zone, lb_parent, lbprev)
                 }
 
@@ -709,10 +761,10 @@ pub unsafe fn dealloc(val: *mut SlHead) {
 
                 0
             } else {
-                let full_len = len + fblk_get_len(lower_bound);
-                fblk_set_len(lower_bound, full_len);
+                let full_sz = sz + fblk_get_len(lower_bound);
+                fblk_set_len(lower_bound, full_sz);
 
-                full_len
+                full_sz
             }
         }
         (false, true) => {
@@ -735,13 +787,13 @@ pub unsafe fn dealloc(val: *mut SlHead) {
                 (*zone).free = newblk
             }
 
-            let full_len = len + fblk_get_len(upper_bound);
-            fblk_set_len(newblk, full_len);
+            let full_sz = sz + fblk_get_len(upper_bound);
+            fblk_set_len(newblk, full_sz);
 
-            full_len
+            full_sz
         }
         (false, false) => {
-            if newblk as usize + len as usize == (*zone).top as usize {
+            if (newblk as *mut u8).add(sz as _) == (*zone).top {
                 (*zone).top = newblk as _;
                 0
             } else {
@@ -752,27 +804,38 @@ pub unsafe fn dealloc(val: *mut SlHead) {
                 {
                     fblk_set_prev_blk(zone, upper_bound, newblk)
                 } else {
-                    // panic!("neither neighbor had an available field")
                     insert_fblk_at(zone, trunk, newblk)
                 }
 
                 fblk_set_prev_ofs(newblk, FBLK_NULL_OFFSET);
                 fblk_set_next_ofs(newblk, FBLK_NULL_OFFSET);
-                fblk_set_len(newblk, len);
+                fblk_set_len(newblk, sz);
 
-                len
+                sz
             }
         }
     };
 
-    std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, len);
-    // std::intrinsics::atomic_umax_acqrel(&mut (*zone).lblk, final_len);
+    std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, sz);
 
     if cfg!(feature = "memdbg") {
         // __dbg_visualize_zone(zone)
     }
 
-    std::intrinsics::atomic_store_release(lock, false as u8);
+    } ENDLCK);
+}
+
+/// Adds memory that used to hold a Sail object to the freed memory
+/// structure in its zone
+pub unsafe fn dealloc(val: *mut SlHead) {
+    if cfg!(feature = "memdbg") {
+        let obj_id = ptr::read_unaligned((val as *mut u32).add(2));
+        println!("O {obj_id} RECLAIM")
+    }
+
+    // TODO: panic if object appears to exceed zone's max obj size
+
+    reclaim_raw(val as _, lblk_get_len(val))
 }
 
 unsafe fn insert_fblk_at(zone: *const Zone, tgt: *mut FreeBlock, blk: *mut FreeBlock) {
