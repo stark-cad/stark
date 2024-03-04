@@ -11,7 +11,8 @@ memdbg = []
 stkdbg = []
 
 [dependencies]
-winit = { path = "../winit" }
+# winit = { path = "../winit", features = ["rwh_05"] }
+winit = { version = "0.29", features = ["rwh_05"] }
 
 ash = { version = "0.37", features = ["linked"] }
 ash-window = "0.12"
@@ -19,7 +20,7 @@ raw-window-handle = "0.5"
 shaderc = "0.8"
 
 png = "0.17"
-ttf-parser = "0.19"
+ttf-parser = "0.20"
 
 log = "0.4"
-simple_logger = "4.1"
+simple_logger = "4.3"
