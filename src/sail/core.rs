@@ -107,7 +107,7 @@ struct _SlListPtr {
     ptr: *mut SlHead,
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 #[repr(C)]
 pub struct SlHndl {
     raw: *mut SlHead,
@@ -322,6 +322,7 @@ enum_and_tryfrom! {
     pub enum Cfg {
         B0BoolF = 0b00000000,
         B0BoolT = 0b00000100,
+        B0Redir = 0b00001000,
         B0Other = 0b00011100,
         B1U8 = 0b00100000,
         B1I8 = 0b00100100,
@@ -1556,6 +1557,130 @@ pub fn stdvec_idx(loc: SlHndl, idx: u32) -> SlHndl {
     coretypck!(loc ; VecStd);
     // all slots up to length must be filled
     read_ptr(loc, 4 + 4 + (idx * 8)).unwrap()
+}
+
+// NOTE: interim position and name
+fn true_obj(mut loc: SlHndl) -> SlHndl {
+    while loc.cfg_byte() == Cfg::B0Redir as u8 {
+        loc = get_next_list_elt(loc).unwrap()
+    }
+    loc
+}
+
+// TODO: Insert check everywhere we attempt to read from a new object
+fn write_correct_pos_slot(slot: *mut *mut SlHead) {
+    unsafe {
+        let orig = ptr::read_unaligned(slot);
+        let mut loc = orig;
+
+        if nil_p(orig) {
+            return;
+        }
+
+        while raw_cfg_byte(loc) == Cfg::B0Redir as u8 {
+            loc = (ptr::read_unaligned(loc as *mut usize) >> 16) as *mut SlHead;
+        }
+
+        if loc != orig {
+            inc_refc(loc);
+            ptr::write_unaligned(slot, loc);
+
+            if dec_refc(orig) {
+                destroy_redir(orig);
+            }
+        }
+    }
+}
+
+fn write_correct_pos_next(loc: *mut SlHead) {
+    unsafe {
+        let orig = (ptr::read_unaligned(loc as *mut usize) >> 16) as *mut SlHead;
+        let mut tgt = orig;
+
+        if nil_p(orig) {
+            return;
+        }
+
+        while raw_cfg_byte(tgt) == Cfg::B0Redir as u8 {
+            tgt = (ptr::read_unaligned(tgt as *mut usize) >> 16) as *mut SlHead;
+        }
+
+        if tgt != orig {
+            inc_refc(tgt);
+            ptr::write_unaligned(
+                loc as *mut usize,
+                ((tgt as usize) << 16) + ptr::read_unaligned(loc as *mut u16) as usize,
+            );
+
+            if dec_refc(orig) {
+                destroy_redir(orig);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod redir_test {
+    use super::*;
+
+    fn redir_gen(reg: *mut memmgt::Region, tgt: SlHndl) -> SlHndl {
+        unsafe {
+            let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0Redir)));
+            inc_refc(tgt.get_raw());
+            set_next_list_elt_unsafe_unchecked(out.clone(), tgt);
+            out
+        }
+    }
+
+    #[test]
+    fn chain_follow() {
+        let region = unsafe { memmgt::acquire_mem_region(1000) };
+        let gt = bool_init(region, true);
+
+        let r1 = redir_gen(region, gt.clone());
+        let r2 = redir_gen(region, r1.clone());
+        let r3 = redir_gen(region, r2.clone());
+
+        assert_eq!(true_obj(gt.clone()).raw, gt.clone().raw);
+        assert_eq!(true_obj(r1).raw, gt.clone().raw);
+        assert_eq!(true_obj(r2).raw, gt.clone().raw);
+        assert_eq!(true_obj(r3).raw, gt.raw);
+    }
+
+    #[test]
+    fn ow_norm() {
+        let region = unsafe { memmgt::acquire_mem_region(1000) };
+        let gt = bool_init(region, true);
+
+        let re = redir_gen(region, gt.clone());
+
+        let mut slot: *mut SlHead = re.raw;
+        inc_refc(slot);
+
+        assert_ne!(slot, gt.raw);
+
+        write_correct_pos_slot(&mut slot);
+
+        assert_eq!(slot, gt.raw);
+    }
+
+    #[test]
+    fn ow_next() {
+        let region = unsafe { memmgt::acquire_mem_region(1000) };
+        let gt = bool_init(region, true);
+
+        let r1 = redir_gen(region, gt.clone());
+        let r2 = redir_gen(region, r1.clone());
+
+        let fr = bool_init(region, false);
+
+        inc_refc(r2.raw);
+        unsafe { set_next_list_elt_unsafe_unchecked(fr.clone(), r2) };
+
+        write_correct_pos_next(fr.raw);
+
+        assert_eq!(get_next_list_elt(fr).unwrap().raw, gt.raw);
+    }
 }
 
 #[inline(always)]
