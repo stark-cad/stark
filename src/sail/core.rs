@@ -18,7 +18,6 @@
 
 //! TODO: Gradual typing; more extensible type system; subtypes
 
-use std::convert::TryFrom;
 use std::mem;
 use std::ptr;
 

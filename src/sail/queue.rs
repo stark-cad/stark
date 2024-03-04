@@ -14,6 +14,7 @@
 
 // <>
 
+// TODO: implement inlet queues for each Sail execution thread
 use super::{core::*, memmgt};
 
 // TODO: global identifiers for queues?

@@ -21,7 +21,6 @@ use super::memmgt;
 use super::{SP_DEF, SP_DO, SP_EVAL, SP_FN, SP_IF, SP_QUOTE, SP_SET, SP_WHILE};
 
 use std::alloc;
-use std::convert::TryInto;
 use std::ptr;
 
 // TODO: make reference counting and garbage collection work with all
@@ -382,24 +381,27 @@ impl EvalStack {
         if expr.nnil_ref_p() {
             self.push_frame_head(ret, Opcode::Eval, env.clone());
             self.push(ref_get(expr).unwrap());
-        } else if ret.is_null() {
             return;
-        } else {
-            let out = if expr.basic_sym_p() {
-                match env_lookup(env.clone(), expr) {
-                    Some(obj) => unsafe { obj.get_raw() },
-                    None => panic!("symbol not bound in env"),
-                }
-            } else {
-                unsafe { expr.get_raw() }
-            };
-
-            if !nil_p(out) {
-                inc_refc(out);
-            }
-
-            unsafe { ptr::write(ret, out) };
         }
+
+        if ret.is_null() {
+            return;
+        }
+
+        let out = if expr.basic_sym_p() {
+            match env_lookup(env.clone(), expr) {
+                Some(obj) => unsafe { obj.get_raw() },
+                None => panic!("symbol not bound in env"),
+            }
+        } else {
+            unsafe { expr.get_raw() }
+        };
+
+        if !nil_p(out) {
+            inc_refc(out);
+        }
+
+        unsafe { ptr::write(ret, out) };
 
         // guarantee env stays alive until write-out is done
         drop(env);

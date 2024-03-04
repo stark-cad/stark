@@ -31,7 +31,6 @@
 //!
 //! A custom Lisp dialect for writing STARK
 
-use std::convert::TryFrom;
 use std::fmt;
 use std::mem;
 use std::ptr;
@@ -542,28 +541,23 @@ pub fn repl(stream_in: std::io::Stdin) {
 
 /// Runs a Sail file in its own context
 pub fn run_file(filename: &str) -> Result<String, SlErrCode> {
-    let file = {
-        let mut tmpfl = match std::fs::read_to_string(filename) {
-            Ok(s) => s,
-            Err(_) => return Err(SlErrCode::FileCouldNotRead),
-        };
-        tmpfl.insert_str(0, "(do ");
-        tmpfl.push(')');
-        tmpfl
+    let file = match std::fs::read_to_string(filename) {
+        Ok(s) => s,
+        Err(_) => return Err(SlErrCode::FileCouldNotRead),
     };
 
-    interpret(&file)
+    interpret(&file, true)
 }
 
 /// Interprets a Sail expression, returning the formatted result
-pub fn interpret(code: &str) -> Result<String, SlErrCode> {
+pub fn interpret(code: &str, dolist: bool) -> Result<String, SlErrCode> {
     let region = unsafe { memmgt::acquire_mem_region(1000000) };
 
     let (tbl, ctr, env) = prep_environment(region);
 
     environment_setup(region, tbl.clone(), ctr, env.clone());
 
-    let expr = parser::parse(region, tbl.clone(), code, false)?;
+    let expr = parser::parse(region, tbl.clone(), code, dolist)?;
     let result = eval::eval(region, tbl.clone(), env, expr);
 
     Ok(context(tbl, result).to_string())
@@ -611,19 +605,19 @@ mod tests {
     #[test]
     fn returns() {
         let exp = String::from("42");
-        assert_eq!(exp, interpret(&exp).unwrap());
+        assert_eq!(exp, interpret(&exp, false).unwrap());
     }
 
     #[test]
     fn adds() {
         let exp = String::from("(+ 2 2)");
-        assert_eq!("4", interpret(&exp).unwrap());
+        assert_eq!("4", interpret(&exp, false).unwrap());
     }
 
     #[test]
     fn lambda() {
         let exp = String::from("((fn [a b] (- a (- 0 b))) 3 3)");
-        assert_eq!("6", interpret(&exp).unwrap());
+        assert_eq!("6", interpret(&exp, false).unwrap());
     }
 
     #[test]
@@ -648,5 +642,11 @@ mod tests {
         let val = parser::parse(reg, tbl.clone(), &exp, false).unwrap();
         let out = context(tbl, val).to_string();
         assert_eq!(gnd, out);
+    }
+
+    #[test]
+    fn mult_while_direct() {
+        let input = include_str!("../../examples/mult-while.sl");
+        assert_eq!("233168", interpret(&input, true).unwrap());
     }
 }
