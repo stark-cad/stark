@@ -27,6 +27,7 @@
 // <>
 
 #![feature(core_intrinsics)]
+#![feature(const_heap)]
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 

@@ -27,7 +27,7 @@ static mut OBJECT_ID_CTR: u32 = 0;
 /// TODO: allow the programmer to handle atomic operations if needed?
 /// TODO: global memory, thread local memory
 
-static mut REGION_TABLE: RegionTable = RegionTable::new();
+static mut REGION_TABLE: RegionTable = RegionTable::new(64);
 
 /// Keeps track of memory zones and which regions they belong to using
 /// parallel arrays
@@ -44,34 +44,28 @@ struct RegionTable {
     len: usize,
     /// Capacity of all arrays above
     cap: usize,
+    /// High if the table has been resized during runtime
+    resized: bool,
     /// Modification lock for region table
     lock: u8,
 }
 
 impl RegionTable {
     /// Create a new region table
-    ///
-    /// TODO: switch to intrinsics::const_alloc
-    const fn new() -> Self {
-        Self {
-            low_array: ptr::null_mut(),
-            high_array: ptr::null_mut(),
-            zone_array: ptr::null_mut(),
-            region_array: ptr::null_mut(),
-            len: 0,
-            cap: 0,
-            lock: false as u8,
+    const fn new(cap: usize) -> Self {
+        // NOTE: could also set up in main
+        unsafe {
+            Self {
+                low_array: std::intrinsics::const_allocate(cap * 8, 8) as _,
+                high_array: std::intrinsics::const_allocate(cap * 8, 8) as _,
+                zone_array: std::intrinsics::const_allocate(cap * 8, 8) as _,
+                region_array: std::intrinsics::const_allocate(cap * 8, 8) as _,
+                len: 0,
+                cap,
+                resized: false,
+                lock: false as u8,
+            }
         }
-    }
-
-    /// Allocate memory and initialize the table
-    unsafe fn setup(&mut self, cap: usize) {
-        let layout = alloc::Layout::from_size_align_unchecked(cap * 8, 8);
-        self.low_array = alloc::alloc(layout) as *mut usize;
-        self.high_array = alloc::alloc(layout) as *mut usize;
-        self.zone_array = alloc::alloc(layout) as *mut *mut Zone;
-        self.region_array = alloc::alloc(layout) as *mut *mut Region;
-        self.cap = cap;
     }
 
     /// Resize the table, reallocating as necessary
@@ -81,15 +75,29 @@ impl RegionTable {
             std::hint::spin_loop();
         }
 
-        let current_layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
-        self.low_array =
-            alloc::realloc(self.low_array as *mut u8, current_layout, cap * 8) as *mut usize;
-        self.high_array =
-            alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8) as *mut usize;
-        self.zone_array =
-            alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8) as *mut *mut Zone;
-        self.region_array = alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8)
-            as *mut *mut Region;
+        if self.resized {
+            let current_layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
+
+            self.low_array =
+                alloc::realloc(self.low_array as *mut u8, current_layout, cap * 8) as *mut usize;
+            self.high_array =
+                alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8) as *mut usize;
+            self.zone_array = alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8)
+                as *mut *mut Zone;
+            self.region_array =
+                alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8)
+                    as *mut *mut Region;
+        } else {
+            let layout = alloc::Layout::from_size_align_unchecked(cap * 8, 8);
+
+            self.low_array = alloc::alloc(layout) as *mut usize;
+            self.high_array = alloc::alloc(layout) as *mut usize;
+            self.zone_array = alloc::alloc(layout) as *mut *mut Zone;
+            self.region_array = alloc::alloc(layout) as *mut *mut Region;
+
+            self.resized = true;
+        }
+
         self.cap = cap;
 
         std::intrinsics::atomic_store_release(lock, false as u8);
@@ -169,6 +177,30 @@ impl Drop for RegionTable {
     }
 }
 
+#[cfg(test)]
+mod table_tests {
+    use super::RegionTable;
+
+    // TODO: test table operations
+
+    #[test]
+    fn resize_post() {
+        static mut TABLE: RegionTable = RegionTable::new(8);
+
+        unsafe {
+            for i in 1..13 {
+                TABLE.append(i, i * 2, std::ptr::null_mut(), std::ptr::null_mut());
+            }
+
+            assert_eq!(TABLE.cap, 16);
+
+            match TABLE.index(10) {
+                (11, 22, _, _) => (),
+                _ => panic!(),
+            }
+        }
+    }
+}
 // TODO: separate zones for objects with static size and those with variable size?
 // TODO: implement object resizing / reallocation
 // TODO: current memory model only sort of works for multiple threads
@@ -1321,11 +1353,6 @@ const MEM_ZONE_HEAD_SIZE: usize = mem::size_of::<Zone>();
 pub unsafe fn acquire_mem_region(zone_size: u32) -> *mut Region {
     if cfg!(feature = "memdbg") {
         log::debug!("Creating mem region");
-    }
-
-    // TODO: use const_allocate to do this at compile time
-    if REGION_TABLE.cap == 0 {
-        REGION_TABLE.setup(64);
     }
 
     let out = Box::into_raw(Box::from(Region {
