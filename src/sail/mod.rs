@@ -163,13 +163,13 @@ fn errcode_init(reg: *mut memmgt::Region, err: SlErrCode) -> SlHndl {
 }
 
 #[inline(always)]
-fn errcode_set(loc: SlHndl, err: SlErrCode) {
+fn errcode_set(mut loc: SlHndl, err: SlErrCode) {
     coretypck!(loc ; ErrCode);
     write_field(loc, 0, err as u16);
 }
 
 #[inline(always)]
-fn errcode_get(loc: SlHndl) -> SlErrCode {
+fn errcode_get(mut loc: SlHndl) -> SlErrCode {
     coretypck!(loc ; ErrCode);
     SlErrCode::try_from(read_field::<u16>(loc, 0)).unwrap()
 }
@@ -220,12 +220,12 @@ pub fn arrvec_init<T: SizedBase + Copy>(
     }
 }
 
-fn arrvec_get_typ(loc: SlHndl) -> u32 {
+fn arrvec_get_typ(mut loc: SlHndl) -> u32 {
     coretypck!(loc ; VecArr);
     read_field(loc, 0)
 }
 
-fn arrvec_get_len(loc: SlHndl) -> u32 {
+fn arrvec_get_len(mut loc: SlHndl) -> u32 {
     coretypck!(loc ; VecArr);
     read_field(loc, 4)
 }
@@ -368,7 +368,7 @@ pub fn context(tbl: SlHndl, obj: SlHndl) -> SlContextVal {
 impl fmt::Display for SlContextVal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let table = self.tbl.clone();
-        let value = self.obj.clone();
+        let mut value = self.obj.clone();
 
         use CoreType::*;
         match value.core_type() {

@@ -56,7 +56,7 @@ pub fn queue_create(
 }
 
 /// Transmits a copy of the given Sail object along the queue
-pub fn queue_tx(env: SlHndl, loc: SlHndl, item: SlHndl) {
+pub fn queue_tx(env: SlHndl, mut loc: SlHndl, item: SlHndl) {
     assert_eq!(loc.type_id(), super::T_QUEUE_TX_ID.0);
     assert_eq!(loc.base_size(), BaseSize::B16);
 
@@ -110,7 +110,7 @@ pub fn queue_tx(env: SlHndl, loc: SlHndl, item: SlHndl) {
 }
 
 /// Receives and returns the object at the head of the queue
-pub fn queue_rx(env: SlHndl, loc: SlHndl) -> Option<SlHndl> {
+pub fn queue_rx(env: SlHndl, mut loc: SlHndl) -> Option<SlHndl> {
     assert_eq!(loc.type_id(), super::T_QUEUE_RX_ID.0);
     assert_eq!(loc.base_size(), BaseSize::B16);
 

@@ -309,7 +309,7 @@ impl EvalStack {
     /// - Takes over the stack until the expression is finished
     /// - An error in this expression destroys the entire stack
     /// - This function is temporary and using it is a bad idea
-    pub fn start_no_ret(&mut self, env: SlHndl, expr: SlHndl) {
+    pub fn start_no_ret(&mut self, env: SlHndl, mut expr: SlHndl) {
         if expr.nnil_ref_p() {
             self.push_frame_head(self.stack_max as *mut *mut SlHead, Opcode::Eval, env);
             self.push(ref_get(expr).unwrap());
@@ -377,7 +377,7 @@ impl EvalStack {
     /// Evaluates any Sail expression in object form, using the given
     /// environment and returning to the given location
     #[inline(always)]
-    fn eval_expr(&mut self, ret: *mut *mut SlHead, env: SlHndl, expr: SlHndl) {
+    fn eval_expr(&mut self, ret: *mut *mut SlHead, env: SlHndl, mut expr: SlHndl) {
         if expr.nnil_ref_p() {
             self.push_frame_head(ret, Opcode::Eval, env.clone());
             self.push(ref_get(expr).unwrap());
@@ -453,7 +453,7 @@ impl EvalStack {
                 let list = self.frame_obj(0);
                 self.pop_frame();
 
-                let raw_op = list;
+                let mut raw_op = list;
                 let raw_args = get_next_list_elt(raw_op.clone());
 
                 if raw_op.basic_sym_p() {
@@ -564,7 +564,7 @@ impl EvalStack {
                     self.push_frame_head(return_to, Opcode::Eval, env);
                     self.push(ref_get(raw_op).unwrap());
                 } else {
-                    let proc = if raw_op.basic_sym_p() {
+                    let mut proc = if raw_op.basic_sym_p() {
                         match env_lookup(env.clone(), raw_op.clone()) {
                             Some(obj) => obj,
                             None => panic!("symbol not bound in env"),
@@ -597,7 +597,7 @@ impl EvalStack {
                 }
             }
             Opcode::Bind => {
-                let symbol = self.frame_obj(0);
+                let mut symbol = self.frame_obj(0);
                 assert!(symbol.basic_sym_p());
                 let value = self.frame_obj(1);
 
@@ -607,7 +607,7 @@ impl EvalStack {
                 self.write_addr_to(ret, symbol);
             }
             Opcode::Mutate => {
-                let symbol = self.frame_obj(0);
+                let mut symbol = self.frame_obj(0);
                 assert!(symbol.basic_sym_p());
                 let value = self.frame_obj(1);
 
@@ -619,7 +619,7 @@ impl EvalStack {
                 self.write_addr_to(ret, symbol);
             }
             Opcode::DoSeq => {
-                let remainder = self.frame_obj(0);
+                let mut remainder = self.frame_obj(0);
                 let second = get_next_list_elt(remainder.clone());
 
                 if let Some(sob) = second {
@@ -636,7 +636,7 @@ impl EvalStack {
             }
             Opcode::While => {
                 let pred = self.frame_obj(0);
-                let result = self.frame_obj(1);
+                let mut result = self.frame_obj(1);
                 let body = self.frame_obj(2);
 
                 if result.truthy() {
@@ -658,7 +658,7 @@ impl EvalStack {
                 }
             }
             Opcode::Branch => {
-                let pred_res = self.frame_obj(0);
+                let mut pred_res = self.frame_obj(0);
                 let true_body = self.frame_obj(1);
                 let false_body = self.frame_obj(2);
                 self.pop_frame();
@@ -670,7 +670,7 @@ impl EvalStack {
                 }
             }
             Opcode::PreApp => {
-                let proc = self.frame_obj(0);
+                let mut proc = self.frame_obj(0);
                 assert!(proc.proc_p());
                 let raw_args = self.frame_obj(1);
                 self.pop_frame();
@@ -696,7 +696,7 @@ impl EvalStack {
                 }
             }
             Opcode::Apply => {
-                let proc = self.frame_obj(0);
+                let mut proc = self.frame_obj(0);
                 let typ = match proc.core_type() {
                     Some(t) if t == CoreType::ProcLambda => true,
                     Some(t) if t == CoreType::ProcNative => false,

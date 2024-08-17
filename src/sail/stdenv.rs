@@ -45,7 +45,7 @@ macro_rules! sail_fn {
 
                     let mut _ind = 0;
                     $(
-                        let $args = _args[_ind].clone();
+                        let mut $args = _args[_ind].clone();
                         _ind += 1;
                     )*
 
@@ -70,7 +70,7 @@ macro_rules! sail_fn {
 
                     let mut _ind = 0;
                     $(
-                        let $args = _args[_ind].clone();
+                        let mut $args = _args[_ind].clone();
                         _ind += 1;
                     )*
 
@@ -256,7 +256,7 @@ sail_fn! {
 
         unsafe {
             let size = vec_size(8, temp_get_size(typ), len);
-            let out = SlHndl::from_raw_unchecked(memmgt::alloc(_reg, size, memmgt::cap(Cfg::VecArr)));
+            let mut out = SlHndl::from_raw_unchecked(memmgt::alloc(_reg, size, memmgt::cap(Cfg::VecArr)));
 
             write_field_unchecked::<u32>(out.clone(), 0, typ);
             write_field_unchecked::<u32>(out.clone(), 4, len);
