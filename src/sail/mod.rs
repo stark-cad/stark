@@ -44,6 +44,10 @@ pub mod memmgt;
 pub mod parser;
 pub mod queue;
 pub mod stdenv;
+pub mod symtab;
+
+pub use symtab::SymbolTable as Stab;
+
 
 // the below, to make a type manifest for a sized value, takes the
 // region, the type ID counter, and information on all the fields;
