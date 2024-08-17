@@ -341,4 +341,12 @@ sail_fn! {
 
         out
     }
+
+    "vec_push" 2 [target, item] {
+        coretypck!(target ; VecStd);
+
+        super::stdvec_push(target.clone(), item);
+
+        return target;
+    }
 }

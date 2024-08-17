@@ -53,10 +53,10 @@ pub fn render_loop(
     let mut test_glyph = text::load();
 
     for _ in 0..test_glyph.len() {
-        engine.colors.push([0.0, 0.0, 0.0]);
+        engine.colors[0].push([0.0, 0.0, 0.0]);
     }
 
-    engine.lines.append(&mut test_glyph);
+    engine.lines[0].append(&mut test_glyph);
 
     let eng_hdl =
         unsafe { SlHndl::from_raw_unchecked(sail::memmgt::alloc(sl_reg, 8, sail::T_ENG_HDL_ID.0)) };
@@ -92,17 +92,21 @@ pub fn render_loop(
             eng_ptr
         }
 
-        "add-line" 3 [eng_ptr, points, colors] {
+        "add-line" 4 [eng_ptr, window, points, colors] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
+
+            assert_eq!(window.core_type(), Some(sail::CoreType::I64));
 
             assert_eq!(points.core_type(), Some(sail::CoreType::VecArr));
             assert_eq!(sail::read_field::<u32>(points.clone(), 0), sail::T_F32.0);
 
             assert_eq!(colors.core_type(), Some(sail::CoreType::VecArr));
             assert_eq!(sail::read_field::<u32>(colors.clone(), 0), sail::T_F32.0);
+
+            let wd = sail::i64_get(window);
 
             let (ln, cl) = unsafe {
                 (
@@ -111,19 +115,104 @@ pub fn render_loop(
                 )
             };
 
-            engine.add_line(ln, cl);
+            engine.add_line(wd as u8, ln, cl);
 
             eng_ptr
         }
 
-        "pop-line" 1 [eng_ptr] {
+        "pop-line" 2 [eng_ptr, window] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
 
-            engine.lines.pop();
-            engine.colors.pop();
+            assert_eq!(window.core_type(), Some(sail::CoreType::I64));
+            let wd = sail::i64_get(window) as usize;
+
+            engine.lines[wd].pop();
+            engine.colors[wd].pop();
+
+            eng_ptr
+        }
+
+        "hit-test" 3 [eng_ptr, x, y] {
+            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
+            let engine = unsafe {
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
+            };
+
+            crate::coretypck!(x ; F32);
+            crate::coretypck!(y ; F32);
+
+            let (x, y) = (sail::f32_get(x), sail::f32_get(y));
+
+            let win = match engine.hittest(x, y) {
+                Some(w) => w as i64,
+                None => 0,
+            };
+
+            let out = sail::i64_init(_reg, win);
+
+            out
+        }
+
+        "create-window" 1 [eng_ptr] {
+            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
+            let engine = unsafe {
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
+            };
+
+            engine.create_window();
+
+            eng_ptr
+        }
+
+        "modify-window" 6 [eng_ptr, window, tlx, tly, brx, bry] {
+            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
+            let engine = unsafe {
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
+            };
+
+            // TODO: this should take normalized frame coords (-1.0 to
+            // 1.0), not pixel coords
+
+            // (prospective policy: no pixel information exposed to
+            // Sail; convert from pixels to normalized form in input
+            // handler and convert back in renderer)
+
+            crate::coretypck!(window ; I64);
+            crate::coretypck!(tlx ; F32);
+            crate::coretypck!(tly ; F32);
+            crate::coretypck!(brx ; F32);
+            crate::coretypck!(bry ; F32);
+
+            let wd = sail::i64_get(window) as usize;
+            let (tlx, tly, brx, bry) =
+                (sail::f32_get(tlx),
+                 sail::f32_get(tly),
+                 sail::f32_get(brx),
+                 sail::f32_get(bry));
+
+            let vpmod = &mut engine.viewports[wd];
+
+            vpmod.x = tlx;
+            vpmod.y = tly;
+            vpmod.width = brx - tlx;
+            vpmod.height = bry - tly;
+
+            eng_ptr
+        }
+
+        "delete-window" 2 [eng_ptr, window] {
+            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
+            let engine = unsafe {
+                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
+            };
+
+            assert_eq!(window.core_type(), Some(sail::CoreType::I64));
+            let wd = sail::i64_get(window);
+
+            engine.delete_window(wd as u8);
 
             eng_ptr
         }
@@ -144,16 +233,16 @@ pub fn render_loop(
             eng_ptr
         }
 
-        "clear" 1 [eng_ptr] {
-            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
-            let engine = unsafe {
-                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
-            };
+        // "clear" 1 [eng_ptr] {
+        //     assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
+        //     let engine = unsafe {
+        //         &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
+        //     };
 
-            engine.empty_lines();
+        //     engine.empty_lines();
 
-            eng_ptr
-        }
+        //     eng_ptr
+        // }
     }
 
     sail::insert_native_procs(sl_reg, sl_tbl.clone(), sl_env.clone(), rndr_fns);
@@ -173,7 +262,8 @@ pub fn render_loop(
 
     while stack.iter_once(sl_reg, sl_tbl.clone()) {}
 
-    let rndr = sail::env_lookup_by_id(sl_env.clone(), sail::S_RNDR.0).expect("rndr script not in env");
+    let rndr =
+        sail::env_lookup_by_id(sl_env.clone(), sail::S_RNDR.0).expect("rndr script not in env");
 
     stack.push_frame_head(ret_addr, sail::eval::Opcode::Apply, sl_env);
     stack.push(rndr);
@@ -198,9 +288,12 @@ pub fn render_loop(
 /// Sail-specific graphics engine state
 pub struct Engine {
     clear: [f32; 4],
-    lines: Vec<[f32; 4]>,
-    colors: Vec<[f32; 3]>,
-    buflen: u64,
+    lines: Vec<Vec<[f32; 4]>>,
+    colors: Vec<Vec<[f32; 3]>>,
+    buflen: Vec<u64>,
+
+    // window data
+    window_order: Vec<u8>,
 
     need_surface_cfg: bool,
 
@@ -225,8 +318,8 @@ pub struct Engine {
     present_queue: vk::Queue,
     present_images: Vec<vk::Image>,
 
-    viewport: vk::Viewport,
-    scissor: vk::Rect2D,
+    viewports: Vec<vk::Viewport>,
+    scissors: Vec<vk::Rect2D>,
 
     cmd_pool: vk::CommandPool,
     cmd_buffers: Vec<vk::CommandBuffer>,
@@ -464,9 +557,11 @@ impl Engine {
 
         Self {
             clear: [0.0, 0.0, 0.0, 1.0],
-            lines: vec![],
-            colors: vec![],
-            buflen: 256,
+            lines: vec![vec![]],
+            colors: vec![vec![]],
+            buflen: vec![256],
+
+            window_order: vec![0],
 
             need_surface_cfg: false,
 
@@ -491,8 +586,8 @@ impl Engine {
             framebuffer,
             present_images,
 
-            viewport,
-            scissor,
+            viewports: vec![viewport],
+            scissors: vec![scissor],
 
             cmd_pool: pool,
             cmd_buffers: command_buffers,
@@ -712,8 +807,8 @@ impl Engine {
             self.surface_res,
             self.swapchain,
             self.framebuffer,
-            self.viewport,
-            self.scissor,
+            self.viewports[0],
+            self.scissors[0],
             self.present_images,
         ) = Self::surface_gen(
             &self.device,
@@ -742,16 +837,18 @@ impl Engine {
             }
         }
 
-        let (memory, buffer) = unsafe {
-            self.mk_buffer(
-                self.buflen,
-                vk::BufferUsageFlags::VERTEX_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE,
-            )
-        };
+        for span in self.buflen.iter() {
+            let (memory, buffer) = unsafe {
+                self.mk_buffer(
+                    *span,
+                    vk::BufferUsageFlags::VERTEX_BUFFER,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE,
+                )
+            };
 
-        self.vtx_memory.push(memory);
-        self.vtx_buffers.push(buffer);
+            self.vtx_memory.push(memory);
+            self.vtx_buffers.push(buffer);
+        }
     }
 
     /// Set up an appropriate graphics pipeline for the engine
@@ -962,26 +1059,127 @@ impl Engine {
         self.clear = clear;
     }
 
+    fn create_window(&mut self) {
+        self.lines.push(vec![]);
+        self.colors.push(vec![]);
+        self.buflen.push(256);
+
+        self.window_order.push(self.window_order.len() as u8);
+
+        self.viewports.push(self.viewports[0].clone());
+        self.scissors.push(self.scissors[0].clone());
+
+        self.state_buffer_setup();
+    }
+
+    fn delete_window(&mut self, window: u8) {
+        let idx = window as usize;
+
+        self.lines.swap_remove(idx);
+        self.colors.swap_remove(idx);
+        self.buflen.swap_remove(idx);
+
+        self.viewports.swap_remove(idx);
+        self.scissors.swap_remove(idx);
+
+        let plast = self.window_order.len() as u8 - 1;
+
+        let new_seq: Vec<u8> = self
+            .window_order
+            .drain(..)
+            .filter_map(|i| {
+                if i == window {
+                    None
+                } else if i == plast {
+                    Some(window)
+                } else if i > window {
+                    Some(i - 1)
+                } else {
+                    Some(i)
+                }
+            })
+            .collect();
+
+        self.window_order = new_seq;
+
+        self.state_buffer_setup();
+    }
+
     /// Add a line, with two endpoints and a color
-    fn add_line(&mut self, points: [f32; 4], color: [f32; 3]) {
-        self.lines.push(points);
-        self.colors.push(color);
+    fn add_line(&mut self, window: u8, points: [f32; 4], color: [f32; 3]) {
+        self.lines[window as usize].push(points);
+        self.colors[window as usize].push(color);
         self.buffer_size_check();
     }
 
-    /// Empty the engine of all lines
-    fn empty_lines(&mut self) {
-        self.lines.clear();
-        self.colors.clear();
+    /// Return top window at position given in normalized frame coords
+    fn hittest(&mut self, x: f32, y: f32) -> Option<u8> {
+        let root_xtnt = self.surface_res;
+
+        // TODO: potentially simplify by tracking window positions and
+        // sizes in normalized frame coordinates at the engine level
+
+        // NOTE: in that case hit test would not require a conversion
+        // step; viewports would be generated after any frame or
+        // window configuration change by transforming into frame
+        // pixel coordinates
+
+        if x >= -1.0 && y >= -1.0 && x <= 1.0 && y <= 1.0 {
+            let (cur_px_x, cur_px_y) = (
+                (x + 1.0) * (root_xtnt.width / 2) as f32,
+                (y + 1.0) * (root_xtnt.height / 2) as f32,
+            );
+
+            let mut hit = 0;
+
+            for idx_u8 in &self.window_order[1..] {
+                let w_idx = *idx_u8 as usize;
+
+                let vk::Viewport {
+                    x: cx,
+                    y: cy,
+                    width: cw,
+                    height: ch,
+                    ..
+                } = self.viewports[w_idx];
+
+                let (min_vp_x, min_vp_y) = (cx, cy);
+                let (max_vp_x, max_vp_y) = (cx + cw, cy + ch);
+
+                if cur_px_x >= min_vp_x
+                    && cur_px_y >= min_vp_y
+                    && cur_px_x < max_vp_x
+                    && cur_px_y < max_vp_y
+                {
+                    hit = *idx_u8
+                }
+            }
+            Some(hit)
+        } else {
+            None
+        }
     }
+
+    // /// Empty the engine of all lines
+    // fn empty_lines(&mut self) {
+    //     self.lines.clear();
+    //     self.colors.clear();
+    // }
 
     /// Check whether the buffer has enough space for all vertices
     fn buffer_size_check(&mut self) {
-        let line_vec_size = size_of::<[f32; 4]>() * self.lines.len();
+        let mut regen = false;
+        for i in 0..self.lines.len() {
+            let line_vec_size = size_of::<[f32; 4]>() * self.lines[i].len();
 
-        if line_vec_size as u64 >= self.buflen {
-            self.buflen *= 2;
-            self.state_buffer_setup();
+            if line_vec_size as u64 >= self.buflen[i] {
+                self.buflen[i] *= 2;
+                regen = true;
+            }
+        }
+
+        if regen {
+            self.state_buffer_setup()
         }
     }
 
@@ -1021,38 +1219,6 @@ impl Engine {
             }
         };
 
-        let line_vec_size = size_of::<[f32; 4]>() * self.lines.len();
-
-        if line_vec_size > 0 {
-            unsafe {
-                let mapped_mem = self
-                    .device
-                    .map_memory(
-                        self.vtx_memory[0],
-                        0,
-                        vk::WHOLE_SIZE,
-                        vk::MemoryMapFlags::empty(),
-                    )
-                    .unwrap() as *mut u8;
-
-                std::ptr::copy_nonoverlapping(
-                    self.lines.as_ptr() as *const u8,
-                    mapped_mem,
-                    line_vec_size,
-                );
-
-                self.device
-                    .flush_mapped_memory_ranges(&[vk::MappedMemoryRange::builder()
-                        .memory(self.vtx_memory[0])
-                        .offset(0)
-                        .size(vk::WHOLE_SIZE)
-                        .build()])
-                    .unwrap();
-
-                self.device.unmap_memory(self.vtx_memory[0]);
-            }
-        }
-
         let image_view = unsafe {
             let image_view_create_info = vk::ImageViewCreateInfo::builder()
                 .image(self.present_images[present_index as usize])
@@ -1076,6 +1242,42 @@ impl Engine {
                 .create_image_view(&image_view_create_info, None)
                 .unwrap()
         };
+
+        for idx_u8 in &self.window_order {
+            let w_idx = *idx_u8 as usize;
+
+            let line_vec_size = size_of::<[f32; 4]>() * self.lines[w_idx].len();
+
+            if line_vec_size > 0 {
+                unsafe {
+                    let mapped_mem = self
+                        .device
+                        .map_memory(
+                            self.vtx_memory[w_idx],
+                            0,
+                            vk::WHOLE_SIZE,
+                            vk::MemoryMapFlags::empty(),
+                        )
+                        .unwrap() as *mut u8;
+
+                    std::ptr::copy_nonoverlapping(
+                        self.lines[w_idx].as_ptr() as *const u8,
+                        mapped_mem,
+                        line_vec_size,
+                    );
+
+                    self.device
+                        .flush_mapped_memory_ranges(&[vk::MappedMemoryRange::builder()
+                            .memory(self.vtx_memory[w_idx])
+                            .offset(0)
+                            .size(vk::WHOLE_SIZE)
+                            .build()])
+                        .unwrap();
+
+                    self.device.unmap_memory(self.vtx_memory[w_idx]);
+                }
+            }
+        }
 
         unsafe {
             let clear_value = vk::ClearValue {
@@ -1116,28 +1318,35 @@ impl Engine {
                 self.pipelines[0],
             );
 
-            self.device
-                .cmd_set_viewport(self.cmd_buffers[1], 0, &[self.viewport]);
-            self.device
-                .cmd_set_scissor(self.cmd_buffers[1], 0, &[self.scissor]);
+            for idx_u8 in &self.window_order {
+                let w_idx = *idx_u8 as usize;
 
-            self.device.cmd_bind_vertex_buffers(
-                self.cmd_buffers[1],
-                0,
-                &[self.vtx_buffers[0]],
-                &[0],
-            );
+                self.device
+                    .cmd_set_viewport(self.cmd_buffers[1], 0, &[self.viewports[w_idx]]);
+                self.device
+                    .cmd_set_scissor(self.cmd_buffers[1], 0, &[self.scissors[w_idx]]);
 
-            for l in 0..self.lines.len() {
-                self.device.cmd_push_constants(
+                self.device.cmd_bind_vertex_buffers(
                     self.cmd_buffers[1],
-                    self.pipeline_layouts[0],
-                    vk::ShaderStageFlags::FRAGMENT,
                     0,
-                    std::slice::from_raw_parts((&self.colors[l]).as_ptr() as *const u8, 12),
+                    &[self.vtx_buffers[w_idx]],
+                    &[0],
                 );
-                let ind = (2 * l) as u32;
-                self.device.cmd_draw(self.cmd_buffers[1], 2, 1, ind, 0);
+
+                for l in 0..self.lines[w_idx].len() {
+                    self.device.cmd_push_constants(
+                        self.cmd_buffers[1],
+                        self.pipeline_layouts[0],
+                        vk::ShaderStageFlags::FRAGMENT,
+                        0,
+                        std::slice::from_raw_parts(
+                            (&self.colors[w_idx][l]).as_ptr() as *const u8,
+                            12,
+                        ),
+                    );
+                    let ind = (2 * l) as u32;
+                    self.device.cmd_draw(self.cmd_buffers[1], 2, 1, ind, 0);
+                }
             }
 
             self.device.cmd_end_render_pass(self.cmd_buffers[1]);

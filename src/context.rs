@@ -167,6 +167,10 @@ pub fn run_loop<Ij: 'static>(
                             },
                         ..
                     } if focus && state == ElementState::Pressed => match logical_key {
+                        // TODO: adjust / simplify the info sent for keypresses
+
+                        // TODO: runtime function rebinding to any key
+                        // in any mode should be viable
                         Key::Character(s) => match s.bytes().nth(0).unwrap() {
                             b'u' => {
                                 // move up

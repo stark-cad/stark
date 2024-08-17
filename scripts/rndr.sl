@@ -38,28 +38,28 @@
 (while alive
        ; TODO: avoid hardcoding this for lines here
        (if drawing (do (if track
-                           (pop-line engine)
+                           (pop-line engine 0)
                            (set track #T))
                    (arr-vec-set line 0 (arr-vec-get point 0))
                    (arr-vec-set line 1 (arr-vec-get point 1))
                    (arr-vec-set line 2 (arr-vec-get cur-pos 0))
                    (arr-vec-set line 3 (arr-vec-get cur-pos 1))
-                   (add-line engine line line-col))
+                   (add-line engine 0 line line-col))
 
-                   (if track (do (pop-line engine) (set track #F)) ()))
+                   (if track (do (pop-line engine 0) (set track #F)) ()))
 
        (set m-input (qrx mr-recv))
        (if (eq m-input :line-add)
-           (do (if track (do (pop-line engine) (set track #F)) ())
+           (do (if track (do (pop-line engine 0) (set track #F)) ())
                (arr-vec-set line 0 (get-q-next mr-recv))
                (arr-vec-set line 1 (get-q-next mr-recv))
                (arr-vec-set line 2 (get-q-next mr-recv))
                (arr-vec-set line 3 (get-q-next mr-recv))
-               (add-line engine line line-col)
+               (add-line engine 0 line line-col)
                (redraw engine))
 
        (if (eq m-input :line-pop)
-           (do (pop-line engine) (redraw engine))
+           (do (pop-line engine 0) (redraw engine))
 
        (if (eq m-input :line-col)
            (do (arr-vec-set line-col 0 (get-q-next mr-recv))
