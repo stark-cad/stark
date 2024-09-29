@@ -17,8 +17,22 @@
 
 // <>
 
+// TODO: how does the module / path system work? (@mod/proc @mod/sym
+// 10) we need to resolve path symbol constructions
+
+// TODO: switch the system to lexical binding, to prevent "spooky
+// action from within", or procedures changing variables in the
+// calling scope; procedures should always either be pure (no
+// environment besides arguments), or closures (carrying their
+// creation environment with them)
+
 use std::{alloc, mem, ptr, slice};
 
+/// A symbol table, to map symbol strings to symbol IDs and vice versa
+///
+/// This is a bimap, a 1 to 1 association between strings and IDs.
+/// Two maps, one for each direction, pointing to the same set of
+/// cells: (id string).
 pub struct SymbolTable {
     // pointers to SymEntry
     id_to_nm: *mut *mut u8,
@@ -38,6 +52,9 @@ pub struct SymbolTable {
     ins_lock: u8,
     rsz_lock: u8,
 }
+
+unsafe impl Send for SymbolTable {}
+unsafe impl Sync for SymbolTable {}
 
 struct _SymEntry {
     id: u32,
@@ -65,7 +82,8 @@ impl SymbolTable {
     const U32S: usize = mem::size_of::<u32>();
     const U16S: usize = mem::size_of::<u16>();
 
-    fn new(approx_cap: usize) -> Self {
+    pub fn new(approx_cap: usize) -> Self {
+        // TODO: aim for a prime table size
         let byte_size = {
             let min = approx_cap * 11;
             min + (min % 8)
@@ -97,6 +115,8 @@ impl SymbolTable {
         }
     }
 
+    // TODO: resize according to a progression of known primes!
+    // NOTE: hashing is FAR slower with sizes not known at compile
     fn resize(&mut self, factor: usize) {
         // acquire insertion lock
         unsafe {
@@ -176,12 +196,14 @@ impl SymbolTable {
         unsafe { std::intrinsics::atomic_store_release(&mut self.ins_lock, false as u8) };
     }
 
-    fn get_id(&mut self, name: &[u8]) -> u32 {
+    pub fn get_id(&mut self, name: &[u8]) -> u32 {
         // look up name, then insert with next available ID if not found
 
         if let Some(id) = self.lookup_by_name(name) {
             return id;
         }
+
+        // TODO: give up after some iteration count (deadlock)
 
         // acquire lock
         unsafe {
@@ -215,11 +237,13 @@ impl SymbolTable {
         out_id
     }
 
-    fn lookup_by_name(&self, name: &[u8]) -> Option<u32> {
+    // TODO: check that tables are the same size after lookup as before
+
+    pub fn lookup_by_name(&self, name: &[u8]) -> Option<u32> {
         // hash input, then search appropriate table until either
         // entry or zero found
 
-        // TODO: should I actually lock these? test I suppose
+        // NOTE: watch for issues caused by resize during lookup
         while unsafe { std::intrinsics::atomic_load_acquire(&self.rsz_lock) } != 0 {}
 
         let tgt = Self::hash_name(name) % self.map_len;
@@ -230,7 +254,7 @@ impl SymbolTable {
         .map(|slot| unsafe { ptr::read(slot as *const u32) })
     }
 
-    fn lookup_by_id(&self, id: u32) -> Option<&[u8]> {
+    pub fn lookup_by_id(&self, id: u32) -> Option<&[u8]> {
         // hash input, then search appropriate table until either
         // entry or zero found
 

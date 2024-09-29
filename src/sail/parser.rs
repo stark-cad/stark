@@ -18,7 +18,9 @@
 
 // <>
 
-use super::{core::*, memmgt, SlErrCode};
+// TODO: move to using &mut for the Region instead of *mut
+
+use super::{core::*, memmgt, SlErrCode, Stab};
 
 use std::iter;
 use std::str;
@@ -31,7 +33,7 @@ use std::str;
 /// Parses a textual Sail expression into a structure of Sail objects
 pub fn parse(
     reg: *mut memmgt::Region,
-    tbl: SlHndl,
+    tbl: &mut Stab,
     code: &str,
     file: bool,
 ) -> Result<SlHndl, SlErrCode> {
@@ -67,7 +69,7 @@ fn read_value(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: SlHndl,
+    tbl: &mut Stab,
 ) -> Result<SlHndl, SlErrCode> {
     let value;
 
@@ -162,7 +164,7 @@ fn read_quote(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: SlHndl,
+    tbl: &mut Stab,
 ) -> Result<SlHndl, SlErrCode> {
     let start = sym_init(reg, super::SP_QUOTE.0);
     let head = ref_init(reg, start.clone());
@@ -182,7 +184,7 @@ fn read_list(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: SlHndl,
+    tbl: &mut Stab,
 ) -> Result<SlHndl, SlErrCode> {
     let head = ref_make(reg);
 
@@ -204,7 +206,7 @@ fn read_list(
             _ => {
                 // append to the list tail
                 tail = {
-                    let next = read_value(chars, acc, reg, tbl.clone())?;
+                    let next = read_value(chars, acc, reg, tbl)?;
                     unsafe {
                         inc_refc(next.get_raw());
                         if count < 1 {
@@ -236,7 +238,7 @@ fn read_vec(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: SlHndl,
+    tbl: &mut Stab,
 ) -> Result<SlHndl, SlErrCode> {
     let mut tvc = vec![];
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
@@ -246,7 +248,7 @@ fn read_vec(
             _ if c.is_ascii_whitespace() => {
                 chars.next();
             }
-            _ => tvc.push(read_value(chars, acc, reg, tbl.clone())?),
+            _ => tvc.push(read_value(chars, acc, reg, tbl)?),
         }
         c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
@@ -261,7 +263,7 @@ fn read_map(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: SlHndl,
+    tbl: &mut Stab,
 ) -> Result<SlHndl, SlErrCode> {
     let map = hashvec_make(reg, 16);
     let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
@@ -274,8 +276,8 @@ fn read_map(
             _ => hash_map_insert(
                 reg,
                 map.clone(),
-                read_value(chars, acc, reg, tbl.clone())?,
-                read_value(chars, acc, reg, tbl.clone())?,
+                read_value(chars, acc, reg, tbl)?,
+                read_value(chars, acc, reg, tbl)?,
             ),
         }
         c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
@@ -290,7 +292,7 @@ fn read_symbol(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: SlHndl,
+    tbl: &mut Stab,
 ) -> Result<SlHndl, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
@@ -310,12 +312,7 @@ fn read_symbol(
         }
     }
 
-    let sym = sym_init(
-        reg,
-        super::sym_tab_get_id(reg, tbl, unsafe {
-            str::from_utf8_unchecked(acc.as_slice())
-        }),
-    );
+    let sym = sym_init(reg, tbl.get_id(acc.as_slice()));
 
     Ok(sym)
 }
@@ -326,7 +323,7 @@ fn read_spec_sym(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: SlHndl,
+    tbl: &mut Stab,
     mode: SymbolMode,
 ) -> Result<SlHndl, SlErrCode> {
     while {
@@ -351,15 +348,7 @@ fn read_spec_sym(
         return Err(SlErrCode::ParseUnexpectedEnd);
     }
 
-    let sym = unsafe {
-        sym_init(
-            reg,
-            super::modeize_sym(
-                sym_tab_get_id(reg, tbl, str::from_utf8_unchecked(acc.as_slice())),
-                mode,
-            ),
-        )
-    };
+    let sym = sym_init(reg, super::modeize_sym(tbl.get_id(acc.as_slice()), mode));
 
     Ok(sym)
 }
@@ -369,7 +358,7 @@ fn read_string(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    _tbl: SlHndl,
+    _tbl: &mut Stab,
 ) -> Result<SlHndl, SlErrCode> {
     let mut next = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     while next != b'"' {
@@ -395,7 +384,7 @@ fn read_number(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    _tbl: SlHndl,
+    _tbl: &mut Stab,
 ) -> Result<SlHndl, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');
@@ -423,7 +412,7 @@ fn read_special(
     chars: &mut iter::Peekable<str::Bytes>,
     acc: &mut Vec<u8>,
     reg: *mut memmgt::Region,
-    _tbl: SlHndl,
+    _tbl: &mut Stab,
 ) -> Result<SlHndl, SlErrCode> {
     while {
         let peek = chars.peek().unwrap_or(&b' ');

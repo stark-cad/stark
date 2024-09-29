@@ -50,6 +50,24 @@ pub mod symtab;
 
 pub use symtab::SymbolTable as Stab;
 
+// monotonic counter for type layout identifiers
+pub struct Styc {
+    inner: u32,
+}
+
+impl Styc {
+    pub fn new() -> Self {
+        Self { inner: 0 }
+    }
+
+    fn get_id(&mut self) -> u32 {
+        unsafe { std::intrinsics::atomic_xadd_acqrel(&mut self.inner, 1) }
+    }
+
+    unsafe fn set_next_id(&mut self, id: u32) {
+        std::intrinsics::atomic_store_release(&mut self.inner, id)
+    }
+}
 
 // the below, to make a type manifest for a sized value, takes the
 // region, the type ID counter, and information on all the fields;
@@ -58,7 +76,7 @@ pub use symtab::SymbolTable as Stab;
 // TODO: check whether type symbols are valid?
 fn make_val_type_mfst(
     reg: *mut memmgt::Region,
-    ctr: SlHndl,
+    ctr: &mut Styc,
     fields: Vec<(u32, u32, u32)>,
 ) -> SlHndl {
     // TODO: define and impose proper object size maximums
@@ -73,7 +91,7 @@ fn make_val_type_mfst(
         ))
     };
 
-    write_field(mfst.clone(), 0, typ_ctr_get_id(ctr));
+    write_field(mfst.clone(), 0, ctr.get_id());
     write_field(mfst.clone(), 4, fieldct);
 
     let mut val_ofst_acc: u32 = 0;
@@ -359,21 +377,20 @@ incl_types! {
 }
 
 /// Bundles together an object and associated symbol table for display
-pub struct SlContextVal {
-    tbl: SlHndl,
+pub struct SlContextVal<'a> {
+    tbl: &'a Stab,
     obj: SlHndl,
 }
 
 /// Create a SlContextVal for display
-pub fn context(tbl: SlHndl, obj: SlHndl) -> SlContextVal {
+pub fn context(tbl: &Stab, obj: SlHndl) -> SlContextVal {
     SlContextVal { tbl, obj }
 }
 
 // TODO: this is a mess; write Sail native display functions
 // TODO: just push characters into a byte vector (string) for display
-impl fmt::Display for SlContextVal {
+impl fmt::Display for SlContextVal<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let table = self.tbl.clone();
         let mut value = self.obj.clone();
 
         use CoreType::*;
@@ -393,8 +410,8 @@ impl fmt::Display for SlContextVal {
                             write!(
                                 f,
                                 "{}",
-                                match sym_tab_lookup_id_num(table, full_id) {
-                                    Some(n) => string_get(n),
+                                match self.tbl.lookup_by_id(full_id) {
+                                    Some(n) => unsafe { std::str::from_utf8_unchecked(n) },
                                     None => "<none>",
                                 }
                             )
@@ -403,8 +420,8 @@ impl fmt::Display for SlContextVal {
                             write!(
                                 f,
                                 ":{}",
-                                match sym_tab_lookup_id_num(table, demodes_sym(full_id)) {
-                                    Some(n) => string_get(n),
+                                match self.tbl.lookup_by_id(demodes_sym(full_id)) {
+                                    Some(n) => unsafe { std::str::from_utf8_unchecked(n) },
                                     None => "<none>",
                                 }
                             )
@@ -413,8 +430,8 @@ impl fmt::Display for SlContextVal {
                             write!(
                                 f,
                                 "@{}",
-                                match sym_tab_lookup_id_num(table, demodes_sym(full_id)) {
-                                    Some(n) => string_get(n),
+                                match self.tbl.lookup_by_id(demodes_sym(full_id)) {
+                                    Some(n) => unsafe { std::str::from_utf8_unchecked(n) },
                                     None => "<none>",
                                 }
                             )
@@ -423,8 +440,8 @@ impl fmt::Display for SlContextVal {
                             write!(
                                 f,
                                 "${}",
-                                match sym_tab_lookup_id_num(table, demodes_sym(full_id)) {
-                                    Some(n) => string_get(n),
+                                match self.tbl.lookup_by_id(demodes_sym(full_id)) {
+                                    Some(n) => unsafe { std::str::from_utf8_unchecked(n) },
                                     None => "<none>",
                                 }
                             )
@@ -435,7 +452,7 @@ impl fmt::Display for SlContextVal {
                     write!(f, "(").unwrap();
                     let mut elt = ref_get(value);
                     while let Some(next) = elt {
-                        write!(f, "{}", context(table.clone(), next.clone()).to_string()).unwrap();
+                        write!(f, "{}", context(self.tbl, next.clone()).to_string()).unwrap();
                         elt = get_next_list_elt(next);
                         if elt.is_some() {
                             write!(f, " ").unwrap();
@@ -450,7 +467,7 @@ impl fmt::Display for SlContextVal {
                         write!(
                             f,
                             "{}",
-                            context(table.clone(), stdvec_idx(value.clone(), idx)).to_string()
+                            context(self.tbl, stdvec_idx(value.clone(), idx)).to_string()
                         )
                         .unwrap();
                         if idx < len - 1 {
@@ -477,14 +494,14 @@ impl fmt::Display for SlContextVal {
                             write!(
                                 f,
                                 "{} ",
-                                context(table.clone(), ref_get(next.clone()).unwrap()).to_string()
+                                context(self.tbl, ref_get(next.clone()).unwrap()).to_string()
                             )
                             .unwrap();
                             write!(
                                 f,
                                 "{}",
                                 context(
-                                    table.clone(),
+                                    self.tbl,
                                     get_next_list_elt(ref_get(next.clone()).unwrap()).unwrap()
                                 )
                                 .to_string()
@@ -591,12 +608,12 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: SlHndl, ctr: SlHndl, env
 /// Insert a slice of native procedures into the symbol table and environment
 pub fn insert_native_procs(
     reg: *mut memmgt::Region,
-    tbl: SlHndl,
+    tbl: &mut Stab,
     env: SlHndl,
     fns: &[(&str, NativeFn, u16)],
 ) {
     for entry in fns {
-        let proc_id = sym_tab_get_id(reg, tbl.clone(), entry.0);
+        let proc_id = tbl.get_id(entry.0.as_bytes());
 
         let proc_fn = proc_native_init(reg, entry.2, entry.1);
 
@@ -628,25 +645,22 @@ mod tests {
 
     #[test]
     fn parses() {
-        let (reg, tbl) = unsafe {
-            let reg = memmgt::acquire_mem_region(10000);
-            (reg, prep_environment(reg).0)
-        };
+        let (reg, mut tbl) = (memmgt::acquire_mem_region(10000), Stab::new(51));
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
-        let val = parser::parse(reg, tbl.clone(), &exp, false).unwrap();
-        let out = context(tbl.clone(), val).to_string();
+        let val = parser::parse(reg, &mut tbl, &exp, false).unwrap();
+        let out = context(&tbl, val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("(() (()) ((((() ())))))");
-        let val = parser::parse(reg, tbl.clone(), &exp, false).unwrap();
-        let out = context(tbl.clone(), val).to_string();
+        let val = parser::parse(reg, &mut tbl, &exp, false).unwrap();
+        let out = context(&tbl, val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("((1 2 3 4) ;Comment\n5)");
         let gnd = String::from("((1 2 3 4) 5)");
-        let val = parser::parse(reg, tbl.clone(), &exp, false).unwrap();
-        let out = context(tbl, val).to_string();
+        let val = parser::parse(reg, &mut tbl, &exp, false).unwrap();
+        let out = context(&tbl, val).to_string();
         assert_eq!(gnd, out);
     }
 
