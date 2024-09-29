@@ -27,6 +27,8 @@ use std::ptr;
 
 static mut OBJECT_ID_CTR: u32 = 0;
 
+static mut ZONE_ID_CTR: u32 = 0;
+
 /// TODO: allow the programmer to handle atomic operations if needed?
 /// TODO: global memory, thread local memory
 
@@ -53,6 +55,9 @@ struct RegionTable {
     lock: u8,
 }
 
+// TODO: define region table concurrency characteristics
+// NOTE: possibly excessive locking currently
+
 impl RegionTable {
     /// Create a new region table
     const fn new(cap: usize) -> Self {
@@ -71,57 +76,96 @@ impl RegionTable {
         }
     }
 
-    /// Resize the table, reallocating as necessary
-    unsafe fn resize(&mut self, cap: usize) {
+    unsafe fn len(&mut self) -> usize {
         let lock: *mut u8 = &mut self.lock;
-        while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
+        while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
             std::hint::spin_loop();
         }
 
-        if self.resized {
-            let current_layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
+        std::intrinsics::atomic_fence_acqrel();
 
-            self.low_array =
-                alloc::realloc(self.low_array as *mut u8, current_layout, cap * 8) as *mut usize;
-            self.high_array =
-                alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8) as *mut usize;
-            self.zone_array = alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8)
-                as *mut *mut Zone;
-            self.region_array =
-                alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8)
-                    as *mut *mut Region;
-        } else {
-            let layout = alloc::Layout::from_size_align_unchecked(cap * 8, 8);
-
-            self.low_array = alloc::alloc(layout) as *mut usize;
-            self.high_array = alloc::alloc(layout) as *mut usize;
-            self.zone_array = alloc::alloc(layout) as *mut *mut Zone;
-            self.region_array = alloc::alloc(layout) as *mut *mut Region;
-
-            self.resized = true;
-        }
-
-        self.cap = cap;
+        let out = self.len;
 
         std::intrinsics::atomic_store_release(lock, false as u8);
+
+        out
+    }
+
+    /// Resize the table, reallocating as necessary
+    unsafe fn resize(&mut self, cap: usize) {
+        // let lock: *mut u8 = &mut self.lock;
+        // while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+        //     std::hint::spin_loop();
+        // }
+
+        if self.cap != cap {
+            if self.resized {
+                let current_layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
+
+                self.low_array = alloc::realloc(self.low_array as *mut u8, current_layout, cap * 8)
+                    as *mut usize;
+                self.high_array =
+                    alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8)
+                        as *mut usize;
+                self.zone_array =
+                    alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8)
+                        as *mut *mut Zone;
+                self.region_array =
+                    alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8)
+                        as *mut *mut Region;
+            } else {
+                let layout = alloc::Layout::from_size_align_unchecked(cap * 8, 8);
+
+                let old_low = self.low_array;
+                let old_high = self.high_array;
+                let old_zone = self.zone_array;
+                let old_reg = self.region_array;
+
+                self.low_array = alloc::alloc(layout) as *mut usize;
+                self.high_array = alloc::alloc(layout) as *mut usize;
+                self.zone_array = alloc::alloc(layout) as *mut *mut Zone;
+                self.region_array = alloc::alloc(layout) as *mut *mut Region;
+
+                ptr::copy_nonoverlapping(old_low, self.low_array, self.cap);
+                ptr::copy_nonoverlapping(old_high, self.high_array, self.cap);
+                ptr::copy_nonoverlapping(old_zone, self.zone_array, self.cap);
+                ptr::copy_nonoverlapping(old_reg, self.region_array, self.cap);
+
+                self.resized = true;
+            }
+
+            self.cap = cap;
+        }
+
+        // std::intrinsics::atomic_store_release(lock, false as u8);
     }
 
     /// Add a new entry to the table
     unsafe fn append(&mut self, start: usize, end: usize, zone: *mut Zone, region: *mut Region) {
-        while self.lock == true as u8 {
+        // while self.lock == true as u8 {
+        //     std::hint::spin_loop();
+        // }
+        // std::intrinsics::atomic_fence_acqrel();
+
+        let lock: *mut u8 = &mut self.lock;
+        while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
             std::hint::spin_loop();
         }
+
         std::intrinsics::atomic_fence_acqrel();
 
         if self.len >= self.cap {
             self.resize(self.cap * 2);
         }
 
-        let len_ptr: *mut usize = &mut self.len;
-        let mut old_len = *len_ptr;
-        while !std::intrinsics::atomic_cxchg_acqrel_acquire(len_ptr, old_len, old_len + 1).1 {
-            old_len = *len_ptr;
-        }
+        // let len_ptr: *mut usize = &mut self.len;
+        // let mut old_len = *len_ptr;
+        // while !std::intrinsics::atomic_cxchg_acqrel_acquire(len_ptr, old_len, old_len + 1).1 {
+        //     old_len = *len_ptr;
+        // }
+
+        let old_len = self.len;
+        self.len += 1;
 
         // TODO: use atomic_store_rel if needed?
         ptr::write(self.low_array.add(old_len), start);
@@ -129,30 +173,55 @@ impl RegionTable {
         ptr::write(self.zone_array.add(old_len), zone);
         ptr::write(self.region_array.add(old_len), region);
 
-        if cfg!(feature = "memdbg") {
-            println!("- Zone added -");
-            for i in 0..self.len {
-                let entry = self.index(i);
-                println!("Zone {}: {:x} to {:x}", i, entry.0, entry.1)
-            }
-            println!()
-        }
+        std::intrinsics::atomic_fence_acqrel();
+
+        std::intrinsics::atomic_store_release(lock, false as u8);
+
+        println!("registered {:x} to {:x}", start, end);
+
+        // if cfg!(feature = "memdbg") {
+
+        // println!("- Zone added -");
+        // for i in 0..self.len {
+        //     let entry = self.index(i);
+        //     if !entry.2.is_null() {
+        //         println!(
+        //             "Zone {}, idx {}: {:x} to {:x}",
+        //             (*entry.2).id,
+        //             i,
+        //             entry.0,
+        //             entry.1
+        //         )
+        //     }
+        // }
+        // println!()
+
+        // }
     }
 
     /// Gets a table entry by index
     unsafe fn index(&mut self, idx: usize) -> (usize, usize, *mut Zone, *mut Region) {
-        assert!(idx < self.len);
+        // while self.lock == true as u8 {
+        //     std::hint::spin_loop();
+        // }
+        // std::intrinsics::atomic_fence_acqrel();
 
-        while self.lock == true as u8 {
+        let lock: *mut u8 = &mut self.lock;
+        while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
             std::hint::spin_loop();
         }
+
         std::intrinsics::atomic_fence_acqrel();
+
+        assert!(idx < self.len);
 
         // TODO: use atomic_load_acq if needed?
         let start = ptr::read(self.low_array.add(idx));
         let end = ptr::read(self.high_array.add(idx));
         let zone = ptr::read(self.zone_array.add(idx));
         let region = ptr::read(self.region_array.add(idx));
+
+        std::intrinsics::atomic_store_release(lock, false as u8);
 
         (start, end, zone, region)
     }
@@ -197,6 +266,11 @@ mod table_tests {
 
             assert_eq!(TABLE.cap, 16);
 
+            match TABLE.index(2) {
+                (3, 6, _, _) => (),
+                _ => panic!(),
+            }
+
             match TABLE.index(10) {
                 (11, 22, _, _) => (),
                 _ => panic!(),
@@ -204,8 +278,8 @@ mod table_tests {
         }
     }
 }
+
 // TODO: separate zones for objects with static size and those with variable size?
-// TODO: implement object resizing / reallocation
 // TODO: current memory model only sort of works for multiple threads
 // TODO: Probably make this private in the future
 
@@ -295,7 +369,7 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
     }
 
     if cfg!(feature = "memdbg") {
-        let obj_id = std::intrinsics::atomic_xadd_acqrel(ptr::addr_of_mut!(OBJECT_ID_CTR), 1);
+        let obj_id = std::intrinsics::atomic_xadd_acqrel(&raw mut OBJECT_ID_CTR, 1);
         ptr::write_unaligned((ptr as *mut u32).add(2), obj_id);
 
         let ty = if type_fld_p {
@@ -308,6 +382,30 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
     }
 
     ptr
+}
+
+macro_rules! znlck {
+    ( $zone:expr => $($labl:lifetime :)? $body:block ENDLCK) => {{
+        let _zn_id = ($zone).id;
+
+        let lock: *mut u8 = &mut ($zone).lock;
+        while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+            std::hint::spin_loop();
+        }
+
+        // TODO: add if cfg("lckdbg") debug messages using unique IDs
+        // for each zone, so we can see which locks are in contention
+
+        // println!("Z {zn_id} LOCK (l {})", line!());
+
+        let p = $($labl :)? {$body};
+
+        std::intrinsics::atomic_store_release(lock, false as u8);
+
+        // println!("Z {zn_id} OPEN (l {})", line!());
+
+        p
+    }};
 }
 
 /// Return the next zone in a region, creating one if none exists
@@ -329,6 +427,9 @@ unsafe fn fblk_try_acq(
     precedes_parent: bool,
     obj_len: u32,
 ) -> Option<*mut u8> {
+    // NOTE: functions beginning in `fblk` must ONLY be used on a
+    // locked zone
+
     let fb_len_cur = fblk_get_len(cursor);
 
     let replace = if fb_len_cur == obj_len {
@@ -339,19 +440,11 @@ unsafe fn fblk_try_acq(
         return None;
     };
 
-    // TODO: is it necessary to acquire locks? where?
-    let lock: *mut u8 = &mut zone_ref.lock;
-    while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
-        std::hint::spin_loop();
-    }
-
     if !replace {
         let fb_len_new = fb_len_cur - obj_len;
-        fblk_set_len(cursor, fb_len_new as u32);
+        fblk_set_len(cursor, fb_len_new);
 
-        zone_ref.used += obj_len as u32;
-
-        std::intrinsics::atomic_store_release(lock, false as u8);
+        zone_ref.used += obj_len;
 
         return Some((cursor as *mut u8).add(fb_len_new as _));
     }
@@ -388,9 +481,7 @@ unsafe fn fblk_try_acq(
 
     zone_ref.used += obj_len;
 
-    std::intrinsics::atomic_store_release(lock, false as u8);
-
-    return Some(cursor as _);
+    Some(cursor as _)
 }
 
 /// Seek a zone's free tree and return the first available space
@@ -405,10 +496,17 @@ unsafe fn free_tree_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
         return None;
     }
 
+    znlck!(zone_ref => 'cs: {
+
+    cursor = zone_ref.free;
+    if cursor.is_null() {
+        break 'cs None;
+    }
+
     loop {
         let result_here = fblk_try_acq(zone_ref, cursor, parent, precedes_parent, obj_len);
         if result_here.is_some() {
-            return result_here;
+            break result_here;
         }
 
         let prev = fblk_get_prev_blk(zone_ref, cursor);
@@ -429,10 +527,10 @@ unsafe fn free_tree_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
             continue;
         }
 
-        break;
+        break None;
     }
 
-    None
+    } ENDLCK)
 }
 
 /// Return space for a live block of the given length from the empty
@@ -442,34 +540,20 @@ unsafe fn void_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
         return None;
     }
 
-    let lock: *mut u8 = &mut zone_ref.lock;
-    while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
-        std::hint::spin_loop();
-    }
+    znlck!(zone_ref => 'cs: {
 
     let ptr = zone_ref.top;
+
+    if ptr.add(obj_len as _) > zone_ref.end {
+        break 'cs None;
+    }
 
     zone_ref.used += obj_len;
     zone_ref.top = ptr.add(obj_len as _);
 
-    std::intrinsics::atomic_store_release(lock, false as u8);
-
     Some(ptr)
-}
 
-macro_rules! znlck {
-    ( $zone:expr => $($labl:lifetime :)? $body:block ENDLCK) => {{
-        let lock: *mut u8 = &mut ($zone).lock;
-        while !std::intrinsics::atomic_cxchg_acquire_acquire(lock, false as u8, true as u8).1 {
-            std::hint::spin_loop();
-        }
-
-        let p = $($labl :)? {$body};
-
-        std::intrinsics::atomic_store_release(lock, false as u8);
-
-        p
-    }};
+    } ENDLCK)
 }
 
 // TODO: replace *mut SlHead with nonnull, Option-wrappable SlPtr?
@@ -510,7 +594,7 @@ pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
         // second, (maybe) check whether we happen to precede a free block; ""
         else if false {
             true
-        } else {false}
+        } else { false }
     } ENDLCK);
 
     // last, find available space in the region, acquire it, and copy into it
@@ -520,6 +604,7 @@ pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
 
         ptr::copy_nonoverlapping(old_ptr, new_ptr, cur_size as _);
         ptr::write_bytes(new_ptr.add(cur_size as _), 0, diff as _);
+
         // set refct of new loc to 2, for the redir and the return
         ptr::write(new_ptr.add(1), 2);
 
@@ -532,7 +617,7 @@ pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
             super::Cfg::B0Redir as u64 + ((old_refc as u64) << 8) + ((new_ptr as u64) << 16),
         );
 
-        // TODO: free all space not required for redirect (> 8 bytes)
+        // free all space not required for redirect (> 8 bytes)
         reclaim_raw(old_ptr.add(HEAD_LEN as _), cur_size - HEAD_LEN);
     }
 
@@ -570,23 +655,18 @@ unsafe fn reclaim_raw(ptr: *mut u8, sz: u32) {
 
     znlck!(zone_ref => 'lb: {
 
-    let trunk = {
-        let c_trunk = (*zone).free;
-        if c_trunk.is_null() {
-            // if at end of used space, just release into free space
-            if (newblk as *mut u8).add(sz as _) == (*zone).top {
-                // TODO: change these operations (multiple) to atomic?
-                (*zone).top = newblk as _;
+    let trunk = zone_ref.free;
 
-                std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, sz);
+    if trunk.is_null() {
+        // if at end of used space, just release into free space
+        if (newblk as *mut u8).add(sz as _) == (*zone).top {
+            // TODO: change these operations (multiple) to atomic?
+            (*zone).top = newblk as _;
 
-                if cfg!(feature = "memdbg") {
-                    // __dbg_visualize_zone(zone)
-                }
+            // std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, sz);
 
-                break 'lb;
-            }
-
+            zone_ref.used -= sz;
+        } else {
             fblk_set_len(newblk, sz);
             fblk_set_prev_ofs(newblk, FBLK_NULL_OFFSET);
             fblk_set_next_ofs(newblk, FBLK_NULL_OFFSET);
@@ -607,17 +687,12 @@ unsafe fn reclaim_raw(ptr: *mut u8, sz: u32) {
             );
             debug_assert!(done, "{:x}", chkt as u64);
 
-            std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, sz);
+            // std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, sz);
 
-            if cfg!(feature = "memdbg") {
-                // __dbg_visualize_zone(zone)
-            }
-
-            break 'lb;
+            zone_ref.used -= sz;
         }
-
-        c_trunk
-    };
+        break 'lb
+    }
 
     let (mut lower_bound, mut upper_bound, mut lb_parent, mut ub_parent) = {
         if newblk < trunk {
@@ -629,7 +704,7 @@ unsafe fn reclaim_raw(ptr: *mut u8, sz: u32) {
         }
     };
 
-    loop {
+    'sk: loop {
         let (ub_last, lb_last) = (upper_bound, lower_bound);
 
         if !lower_bound.is_null() {
@@ -661,7 +736,7 @@ unsafe fn reclaim_raw(ptr: *mut u8, sz: u32) {
         }
 
         if lb_last == lower_bound && ub_last == upper_bound {
-            break;
+            break 'sk;
         }
     }
 
@@ -1323,6 +1398,8 @@ pub struct Zone {
     pub used: u32,
     // /// Size of largest free block
     // lblk: u32,
+    /// Unique zone identifier
+    id: u32,
     /// Pointer to start of working memory
     bot: *mut u8,
     /// Pointer to last of used portion
@@ -1353,7 +1430,7 @@ const MEM_ZONE_HEAD_SIZE: usize = mem::size_of::<Zone>();
 // TODO: does this really need to start out as just a pointer?
 
 /// Creates a new memory region and accompanying zone
-pub unsafe fn acquire_mem_region(zone_size: u32) -> *mut Region {
+pub fn acquire_mem_region(zone_size: u32) -> *mut Region {
     if cfg!(feature = "memdbg") {
         log::debug!("Creating mem region");
     }
@@ -1363,7 +1440,7 @@ pub unsafe fn acquire_mem_region(zone_size: u32) -> *mut Region {
         head: ptr::null_mut(),
     }));
 
-    new_mem_zone(out);
+    unsafe { new_mem_zone(out) };
 
     out
 }
@@ -1390,31 +1467,33 @@ unsafe fn which_mem_area(ptr: *mut SlHead) -> (*mut Region, *mut Zone) {
     assert_ne!(ptr, ptr::null_mut());
 
     let pos = ptr as usize;
-    for idx in 0..REGION_TABLE.len {
+
+    let mut idx = 0;
+    loop {
+        if idx >= REGION_TABLE.len() {
+            break;
+        }
+
         let entry = REGION_TABLE.index(idx);
-        if pos >= entry.0 && pos <= entry.1 {
+        if pos >= entry.0 && pos < entry.1 {
             return (entry.3, entry.2);
         }
+
+        idx += 1;
     }
+
+    // for idx in 0..REGION_TABLE.len {
+    //     let entry = REGION_TABLE.index(idx);
+    //     if pos >= entry.0 && pos < entry.1 {
+    //         return (entry.3, entry.2);
+    //     }
+    // }
 
     panic!("INVALID memory area for {:x}", ptr as usize)
 }
 
-// unsafe fn which_mem_zone(ptr: *mut SlHead) -> *mut Zone {
-//     assert_ne!(ptr, ptr::null_mut());
-
-//     let pos = ptr as usize;
-//     for idx in 0..REGION_TABLE.len {
-//         let entry = REGION_TABLE.index(idx);
-//         if pos >= entry.0 && pos <= entry.1 {
-//             return entry.2;
-//         }
-//     }
-
-//     panic!("invalid memory zone")
-// }
-
 /// Creates and links in a new memory zone within the given region
+/// TODO: this function may need to be reentrant
 unsafe fn new_mem_zone(region: *mut Region) {
     assert_ne!(region, ptr::null_mut());
 
@@ -1435,10 +1514,14 @@ unsafe fn new_mem_zone(region: *mut Region) {
     let start = (ptr as *mut u8).add(MEM_ZONE_HEAD_SIZE);
     let end = start.add(size as _);
 
+    REGION_TABLE.append(start as usize, end as usize, ptr, region);
+
+    let zn_id = std::intrinsics::atomic_xadd_acqrel(&raw mut ZONE_ID_CTR, 1);
+
     let new_head = Zone {
         used: 0,
+        id: zn_id,
         free: ptr::null_mut(),
-        // lblk: 0,
         next: cur_head,
         top: start,
         end,
@@ -1448,9 +1531,5 @@ unsafe fn new_mem_zone(region: *mut Region) {
 
     ptr::write_unaligned(ptr, new_head);
 
-    REGION_TABLE.append(start as usize, end as usize, ptr, region);
-
     ptr::write_unaligned(&mut (*region).head, ptr);
-
-    // std::intrinsics::atomic_store_rel((region as *mut usize).offset(1) as *mut *mut Zone, ptr);
 }
