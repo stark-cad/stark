@@ -322,6 +322,20 @@ unsafe fn acquire_raw(reg: *mut Region, sz: u32) -> *mut u8 {
     ptr
 }
 
+pub fn copy_direct(src: *mut SlHead, into: *mut Region, rc: u8) -> *mut SlHead {
+    assert!(rc > 0);
+
+    let sz = lblk_get_len(src);
+
+    unsafe {
+        let new = acquire_raw(into, sz);
+        ptr::copy(src as *mut u8, new, sz as usize);
+        ptr::write(new.add(1), rc);
+
+        new as *mut SlHead
+    }
+}
+
 /// Allocates space in the given region for a Sail object, and preinitializes it
 pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead {
     //!

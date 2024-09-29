@@ -374,6 +374,156 @@ incl_types! {
     4  T_FRM_HDL_ID  T_FRM_HDL;
     5  T_ENG_HDL_ID  T_ENG_HDL
     6
+pub fn structure_copy(tgt: *mut memmgt::Region, root: SlHndl) -> *mut SlHead {
+    use std::ptr;
+
+    // collect handles to all objects referenced by msg, with
+    // appropriate reference counts (1 for msg, 1+ for all others
+    // according to the structure) (panic if too many layers)
+
+    fn index_of(vec: &Vec<*mut SlHead>, qry: *mut SlHead) -> Option<usize> {
+        vec.iter()
+            .enumerate()
+            .find_map(|(i, x)| if *x == qry { Some(i) } else { None })
+    }
+
+    let mut src_ptrs: Vec<*mut SlHead> = vec![unsafe { root.get_raw() }];
+    let mut last_cycle_ptr_count = 0;
+    let mut total_ptr_count = 1;
+
+    let mut src_nxt_elts: Vec<Option<u32>> = vec![];
+    let mut src_int_refs: Vec<Vec<(u32, u32)>> = vec![];
+
+    let mut new_rcs: Vec<u8> = vec![1];
+
+    let mut ptrs_to_push: Vec<*mut SlHead> = Vec::new();
+
+    loop {
+        for this_src_ptr in &src_ptrs[last_cycle_ptr_count..] {
+            let nxt_elt =
+                (unsafe { ptr::read_unaligned(*this_src_ptr as *mut usize) } >> 16) as *mut SlHead;
+
+            src_nxt_elts.push(if nil_p(nxt_elt) {
+                None
+            } else {
+                // condition: pointer found in existing list or in
+                // current (to push) list
+
+                // increment appropriate reference count slot
+                // (index for src_ptrs, index + last_end for ptp)
+
+                if let Some(cycle_idx) = index_of(&ptrs_to_push, nxt_elt) {
+                    new_rcs[cycle_idx + last_cycle_ptr_count] += 1;
+                    Some((cycle_idx + last_cycle_ptr_count) as u32)
+                } else if let Some(existing_id) = index_of(&src_ptrs, nxt_elt) {
+                    new_rcs[existing_id] += 1;
+                    Some(existing_id as u32)
+                } else {
+                    ptrs_to_push.push(nxt_elt);
+                    new_rcs.push(1);
+                    total_ptr_count += 1;
+                    Some(total_ptr_count - 1)
+                }
+            });
+
+            // we must also track the offsets of every reference within
+            // every object, and identify which object each reference
+            // pointed to, so that we can reconstitute the structure
+
+            let mut ofs_tgt = Vec::new();
+            // TODO: permit arbitrary objects, beyond core objects
+            for ofs in discern_ref_offsets_core(*this_src_ptr) {
+                let this_int_ptr = unsafe {
+                    ptr::read_unaligned(
+                        raw_val_ptr(*this_src_ptr).add(ofs as usize) as *mut *mut SlHead
+                    )
+                };
+                if !nil_p(this_int_ptr) {
+                    let tgt_id = if let Some(cycle_idx) = index_of(&ptrs_to_push, this_int_ptr) {
+                        new_rcs[cycle_idx + last_cycle_ptr_count] += 1;
+                        (cycle_idx + last_cycle_ptr_count) as u32
+                    } else if let Some(existing_id) = index_of(&src_ptrs, this_int_ptr) {
+                        new_rcs[existing_id] += 1;
+                        existing_id as u32
+                    } else {
+                        ptrs_to_push.push(this_int_ptr);
+                        new_rcs.push(1);
+                        total_ptr_count += 1;
+                        total_ptr_count - 1
+                    };
+
+                    ofs_tgt.push((ofs, tgt_id));
+                }
+            }
+
+            src_int_refs.push(ofs_tgt);
+        }
+
+        assert_eq!(src_ptrs.len(), src_nxt_elts.len());
+        assert_eq!(src_ptrs.len(), src_int_refs.len());
+
+        if total_ptr_count as usize == last_cycle_ptr_count {
+            // TODO: check for excess passes
+            assert!(ptrs_to_push.is_empty());
+            break;
+        }
+
+        last_cycle_ptr_count = src_ptrs.len();
+
+        src_ptrs.append(&mut ptrs_to_push);
+
+        assert_eq!(src_ptrs.len(), total_ptr_count as usize);
+        assert_eq!(src_ptrs.len(), new_rcs.len());
+    }
+
+    // copy all objects to the new region, in reverse reference
+    // dependency order, tracking the new pointers and populating
+    // them into the correct reference slots as we go
+
+    // we can insert them in reverse order of the source pointer
+    // vector, because it was constructed by probing stepwise from
+    // the root object
+
+    let mut new_ptrs: Vec<*mut SlHead> = vec![ptr::null_mut(); src_ptrs.len()];
+
+    // for p in &src_ptrs {
+    //     println!("{:?}", raw_core_type(*p).unwrap());
+    // }
+
+    // println!("{src_ptrs:?}");
+    // println!("{new_rcs:?}");
+    // println!("{src_nxt_elts:?}");
+    // println!("{src_int_refs:?}");
+
+    for (i, p) in src_ptrs.into_iter().enumerate().rev() {
+        let this_new_obj = memmgt::copy_direct(p, tgt, new_rcs[i]);
+        new_ptrs[i] = this_new_obj;
+
+        // insert correct new addresses in next element slot and
+        // at reference offset points (the first item processed
+        // here is guaranteed not to have any references out)
+
+        unsafe {
+            if let Some(nxt_id) = src_nxt_elts[i] {
+                // set next list element raw
+                ptr::write_unaligned(
+                    this_new_obj as *mut u64,
+                    ((new_ptrs[nxt_id as usize] as u64) << 16)
+                        + ptr::read_unaligned(this_new_obj as *mut u16) as u64,
+                );
+            }
+
+            for (ofs, id) in &src_int_refs[i] {
+                // write internal pointer raw
+                ptr::write_unaligned(
+                    raw_val_ptr(this_new_obj).add(*ofs as usize) as *mut _,
+                    new_ptrs[*id as usize],
+                );
+            }
+        }
+    }
+
+    new_ptrs[0]
 }
 
 /// Bundles together an object and associated symbol table for display
