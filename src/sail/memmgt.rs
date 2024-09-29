@@ -1399,8 +1399,41 @@ pub struct Region {
     pub zone_size: u32,
 }
 
-// Maximum zone size: 2GiB
-// Maximum object size: 1/32 of zone size
+impl Region {
+    pub fn new(zone_size: u32) -> Self {
+        let mut out = Self {
+            zone_size,
+            head: ptr::null_mut(),
+        };
+
+        unsafe { new_mem_zone(&mut out) };
+
+        out
+    }
+}
+
+impl Drop for Region {
+    fn drop(&mut self) {
+        unsafe {
+            let layout = alloc::Layout::from_size_align_unchecked(
+                self.zone_size as usize + MEM_ZONE_HEAD_SIZE,
+                1,
+            );
+            let mut next = self.head;
+            loop {
+                let cur = next;
+                next = (*cur).next;
+                if next == ptr::null_mut() {
+                    break;
+                }
+                alloc::dealloc(cur as *mut u8, layout);
+            }
+        }
+    }
+}
+
+// NOTE: Maximum zone size: 2GiB
+// NOTE: Maximum object size: 1/32 of zone size
 // TODO: special allocation scheme for larger objects
 
 /// A zone is a contiguous chunk of memory in which Sail objects may

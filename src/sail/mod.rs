@@ -47,6 +47,7 @@ pub mod parser;
 pub mod queue;
 pub mod stdenv;
 pub mod symtab;
+pub mod thread;
 
 pub use symtab::SymbolTable as Stab;
 

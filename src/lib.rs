@@ -28,8 +28,11 @@
 
 // <>
 
+#![allow(internal_features)]
 #![feature(core_intrinsics)]
+#![feature(box_as_ptr)]
 #![feature(const_heap)]
+#![feature(ptr_as_ref_unchecked)]
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
