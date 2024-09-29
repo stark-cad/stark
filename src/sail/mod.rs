@@ -130,12 +130,36 @@ fn make_val_type_mfst(
 // TyDsc
 // ErrCode
 // ProcNative
-// QueueTx
-// QueueRx
+// WarpHdl
+
+// <frame handle object>
 // <graphics engine object>
 
 // These should have global type IDs, type symbol bindings in the
 // environment tree, and manifests.
+
+// TODO: probably track how many have handles to a queue
+pub fn warp_hdl_init(reg: *mut memmgt::Region, tgt: *mut queue::Inlet) -> SlHndl {
+    assert!(!tgt.is_null());
+    unsafe {
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 8, memmgt::cap(Cfg::B8WarpHdl)));
+        write_field_unchecked(out.clone(), 0, tgt as u64);
+        out
+    }
+}
+
+fn warp_hdl_send(mut loc: SlHndl, msg: SlHndl, from: usize) {
+    coretypck!(loc ; WarpHdl);
+
+    let addrs: u64 = read_field(loc, 0);
+
+    unsafe {
+        (addrs as *mut queue::Inlet)
+            .as_mut()
+            .expect("null warp handle")
+    }
+    .transmit(from, msg)
+}
 
 /// Basic error codes for Sail faults
 #[derive(Debug)]
@@ -737,14 +761,19 @@ pub fn interpret(code: &str, dolist: bool) -> Result<String, SlErrCode> {
     Ok(context(tbl, result).to_string())
 }
 
-/// Set up the symbol table and environment before interpreting Sail code
-pub fn environment_setup(reg: *mut memmgt::Region, tbl: SlHndl, ctr: SlHndl, env: SlHndl) {
+pub fn global_ctx_setup(tact: &mut thread::Tact) {
     for (n, s) in SYM_ARRAY.into_iter().enumerate() {
-        sym_tab_add_with_id(reg, tbl.clone(), s, n as u32);
+        assert_eq!(tact.symtab().get_id(s.as_bytes()) as usize, n);
     }
 
-    sym_tab_set_next_id(tbl.clone(), SYM_ARRAY.len() as u32);
-    typ_ctr_set_next_id(ctr.clone(), TID_COUNT as u32);
+    unsafe { tact.typctr().set_next_id(TID_COUNT as u32) };
+}
+
+pub fn thread_env_setup(thr: *mut thread::ThreadHull) {
+    let thr_ref = unsafe { thr.as_mut().unwrap() };
+
+    let reg = thr_ref.region();
+    let env = thr_ref.top_env();
 
     // TODO: interning is temporary, will crash in lists
 
@@ -753,7 +782,8 @@ pub fn environment_setup(reg: *mut memmgt::Region, tbl: SlHndl, ctr: SlHndl, env
 
     let false_intern = bool_init(reg, false);
     env_scope_ins_by_id(reg, env.clone(), S_F_INTERN.0, false_intern);
-    insert_native_procs(reg, tbl, env, stdenv::ENVFNS);
+
+    insert_native_procs(reg, thr_ref.context().symtab(), env, stdenv::ENVFNS);
 }
 
 /// Insert a slice of native procedures into the symbol table and environment

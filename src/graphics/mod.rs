@@ -67,7 +67,7 @@ pub fn render_loop(
 
     crate::sail_fn! {
         let rndr_fns;
-        _reg _tbl _env;
+        _thr _env;
 
         "redraw" 1 [eng_ptr] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
@@ -153,7 +153,8 @@ pub fn render_loop(
                 None => 0,
             };
 
-            let out = sail::i64_init(_reg, win);
+            let reg = unsafe { (*_thr).region() };
+            let out = sail::i64_init(reg, win);
 
             out
         }

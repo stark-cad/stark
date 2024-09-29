@@ -24,6 +24,8 @@
 use std::mem;
 use std::ptr;
 
+use super::thread::ThreadHull;
+
 use super::memmgt::{self, Region};
 
 /// Core type assertion
@@ -405,6 +407,9 @@ enum_and_tryfrom! {
         B8I64 = 0b10000100,
         B8F64 = 0b10001000,
         B8Ptr = 0b10001100,
+        B8WarpHdl = 0b10010000,
+        // B8FileHdl = 0b10010100,
+        // B8SockHdl = 0b10011000,
         B8Other = 0b10011100,
         B16U128 = 0b10100000,
         B16I128 = 0b10100100,
@@ -481,6 +486,7 @@ pub enum CoreType {
     F64,
     Symbol,
     Ref,
+    WarpHdl,
     TyDsc,
     TyMfst,
     ErrCode,
@@ -515,6 +521,7 @@ impl TryFrom<Cfg> for CoreType {
             Cfg::B8I64 => Ok(Self::I64),
             Cfg::B8F64 => Ok(Self::F64),
             Cfg::B8Ptr => Ok(Self::Ref),
+            Cfg::B8WarpHdl => Ok(Self::WarpHdl),
             Cfg::B16U128 => Ok(Self::U128),
             Cfg::B16I128 => Ok(Self::I128),
             Cfg::B16TyDsc => Ok(Self::TyDsc),
@@ -536,11 +543,12 @@ impl TryFrom<Cfg> for CoreType {
 /// Signature for Sail functions implemented in Rust
 ///
 /// Arguments:
-/// - Memory region in which to place return value
-/// - Symbol table
+/// - Structure for local thread
 /// - Current environment
 /// - Slice containing all Sail arguments
-pub type NativeFn = fn(*mut Region, SlHndl, SlHndl, &[SlHndl]) -> SlHndl;
+pub type NativeFn = fn(*mut ThreadHull, SlHndl, &[SlHndl]) -> SlHndl;
+
+// TODO: should the env be provided as part of the argument slice?
 
 /// Creates a nil Sail object
 #[inline(always)]
@@ -579,14 +587,12 @@ pub const fn mode_of_sym(sym: u32) -> SymbolMode {
 
 /// Checks whether a valid Sail object contains the 4-byte type ID
 /// field
-#[deprecated]
 pub fn raw_typ_fld_p(loc: *mut SlHead) -> bool {
     let head = raw_cfg_byte(loc);
     (head & 0b00011100) >> 2 == 7
 }
 
 /// Checks whether a valid Sail object contains the 4-byte size field
-#[deprecated]
 pub fn raw_siz_fld_p(loc: *mut SlHead) -> bool {
     let head = raw_cfg_byte(loc);
     head >> 5 > 5
@@ -600,7 +606,6 @@ pub fn raw_type_id(loc: *mut SlHead) -> u32 {
 
 /// Return the size in bytes of any Sail object's payload (the space
 /// for a value following the head)
-#[deprecated]
 pub fn raw_size(loc: *mut SlHead) -> u32 {
     let code = raw_cfg_byte(loc) >> 5;
     if code <= 5 {
@@ -627,19 +632,16 @@ fn __dbg_head_info(loc: *mut SlHead) {
 }
 
 /// Gets the full configuration byte from a Sail object
-#[deprecated]
 fn raw_cfg_byte(loc: *mut SlHead) -> u8 {
     unsafe { ptr::read_unaligned(loc as *const u8) }
 }
 
 /// Gets the reference count byte from a Sail object
-#[deprecated]
 fn raw_refc_byte(loc: *mut SlHead) -> u8 {
     unsafe { ptr::read_unaligned((loc as *const u8).add(1)) }
 }
 
 /// Gets the size / type configuration from a Sail object
-#[deprecated]
 pub fn raw_cfg_spec(loc: *mut SlHead) -> Cfg {
     let top_byte = raw_cfg_byte(loc);
     match Cfg::try_from(top_byte & 0b11111100) {
@@ -651,7 +653,6 @@ pub fn raw_cfg_spec(loc: *mut SlHead) -> Cfg {
 /// From a valid Sail object, returns a pointer to the start of the value proper
 ///
 /// (After the header and type specifiers, if they exist)
-#[deprecated]
 pub fn raw_val_ptr(loc: *mut SlHead) -> *mut u8 {
     let offset = (HEAD_LEN
         + (raw_typ_fld_p(loc) as u32 * NUM_32_LEN)
@@ -660,7 +661,6 @@ pub fn raw_val_ptr(loc: *mut SlHead) -> *mut u8 {
 }
 
 /// Returns None if the object is not of a core type, or its type if it is
-#[deprecated]
 pub fn raw_core_type(loc: *mut SlHead) -> Option<CoreType> {
     if nil_p(loc) {
         Some(CoreType::Nil)
@@ -790,6 +790,14 @@ fn proc_native_size() -> u32 {
 // handlers by requiring that all objects are known to only one
 // evaluation unit; queue objects would be the main concern
 
+// TODO: to handle objects from a parent thread, check the address of
+// each object to find whether it sits in the appropriate region? all
+// objects addressable from a child thread are guaranteed to outlive
+// it because the child will take a reference
+
+// NOTE: it seems that this would require a concept of which region /
+// thread we are "working from" for each reference count operation
+
 /// Increment the reference count stored in a Sail object, up to a
 /// maximum of 255; if the count is at 255, return true
 pub fn inc_refc(loc: *mut SlHead) -> bool {
@@ -874,73 +882,59 @@ pub fn dec_refc(loc: *mut SlHead) -> bool {
     out
 }
 
+pub fn discern_ref_offsets_core(loc: *mut SlHead) -> Vec<u32> {
+    let mut acc = Vec::new();
+
+    unsafe {
+        match raw_core_type(loc) {
+            Some(CoreType::Ref) => acc.push(0),
+            Some(CoreType::ProcLambda) => acc.push(2),
+            Some(CoreType::TyDsc) => acc.push(8),
+            Some(CoreType::EnvScope) => {
+                for l in 0..3 {
+                    acc.push(l * PTR_LEN)
+                }
+            }
+            Some(CoreType::EnvLayer) => {
+                for ety in 0..ENV_LAYER_SLOTS {
+                    acc.push(ety * (PTR_LEN + SYMBOL_LEN) + SYMBOL_LEN)
+                }
+            }
+            Some(CoreType::VecStd) => {
+                for i in 1..=ptr::read_unaligned(raw_val_ptr(loc).add(4) as *mut u32) {
+                    acc.push(PTR_LEN * i)
+                }
+            }
+            Some(CoreType::VecHash) => {
+                for i in 1..=ptr::read_unaligned(raw_val_ptr(loc) as *mut u32) {
+                    acc.push(PTR_LEN * i)
+                }
+            }
+            // TODO: Handle VecArr?
+            _ => (),
+        }
+    }
+
+    acc
+}
+
 /// Return pointers to every object referenced by a given object,
 /// such as can be known from core type information
 fn discern_refs_core(loc: *mut SlHead) -> Vec<*mut SlHead> {
     let mut acc = Vec::new();
 
-    unsafe {
-        let next = (ptr::read_unaligned(loc as *mut usize) >> 16) as _;
-        if !nil_p(next) {
-            acc.push(next)
-        }
+    let next = (unsafe { ptr::read_unaligned(loc as *mut usize) } >> 16) as _;
+    if !nil_p(next) {
+        acc.push(next)
+    }
 
-        match raw_core_type(loc) {
-            Some(CoreType::Ref) => {
-                let nest = ptr::read_unaligned(raw_val_ptr(loc) as _);
-                if !nil_p(nest) {
-                    acc.push(nest)
-                }
-            }
-            Some(CoreType::ProcLambda) => {
-                let nest = ptr::read_unaligned(raw_val_ptr(loc).add(2) as _);
-                if !nil_p(nest) {
-                    acc.push(nest)
-                }
-            }
-            Some(CoreType::TyDsc) => {
-                let nest = ptr::read_unaligned(raw_val_ptr(loc).add(8) as _);
-                if !nil_p(nest) {
-                    acc.push(nest)
-                }
-            }
-            Some(CoreType::EnvScope) => {
-                for l in 0..3 {
-                    let nest = ptr::read_unaligned(raw_val_ptr(loc).add(l * PTR_LEN as usize) as _);
-                    if !nil_p(nest) {
-                        acc.push(nest)
-                    }
-                }
-            }
-            Some(CoreType::EnvLayer) => {
-                for ety in 0..ENV_LAYER_SLOTS {
-                    let nest = ptr::read_unaligned(
-                        raw_val_ptr(loc).add((ety * (PTR_LEN + SYMBOL_LEN) + SYMBOL_LEN) as usize)
-                            as _,
-                    );
-                    if !nil_p(nest) {
-                        acc.push(nest)
-                    }
-                }
-            }
-            Some(CoreType::VecStd) => {
-                for i in 1..=ptr::read_unaligned(raw_val_ptr(loc).add(4) as *mut u32) {
-                    let nest = ptr::read_unaligned(raw_val_ptr(loc).add(8 * i as usize) as _);
-                    if !nil_p(nest) {
-                        acc.push(nest)
-                    }
-                }
-            }
-            Some(CoreType::VecHash) => {
-                for i in 1..=ptr::read_unaligned(raw_val_ptr(loc) as *mut u32) {
-                    let nest = ptr::read_unaligned(raw_val_ptr(loc).add(8 * i as usize) as _);
-                    if !nil_p(nest) {
-                        acc.push(nest)
-                    }
-                }
-            }
-            // TODO: Handle VecArr?
-            _ => (),
+    for ofs in discern_ref_offsets_core(loc) {
+        // combine argument object address with offsets to read
+        // pointers to each referenced object
+
+        let nest = unsafe { ptr::read_unaligned(raw_val_ptr(loc).add(ofs as usize) as _) };
+        if !nil_p(nest) {
+            acc.push(nest)
         }
     }
 
@@ -981,11 +975,15 @@ fn destroy_redir(loc: *mut SlHead) {
     assert!(!nil_p(loc));
     assert_eq!(raw_cfg_byte(loc), Cfg::B0Redir as u8);
 
+    // TODO: eliminate recursion
+
     unsafe {
         let next = (ptr::read_unaligned(loc as *mut usize) >> 16) as *mut SlHead;
 
         if raw_cfg_byte(next) == Cfg::B0Redir as u8 {
-            destroy_redir(next)
+            if dec_refc(next) {
+                destroy_redir(next)
+            }
         } else {
             // Invariant: this will NEVER drop a true object's
             // reference count to zero itself
@@ -1749,7 +1747,7 @@ mod redir_test {
 
     #[test]
     fn chain_follow() {
-        let region = unsafe { memmgt::acquire_mem_region(1000) };
+        let region = memmgt::acquire_mem_region(1000);
         let gt = bool_init(region, true);
 
         let r1 = redir_gen(region, gt.clone());
@@ -1764,7 +1762,7 @@ mod redir_test {
 
     #[test]
     fn ow_norm() {
-        let region = unsafe { memmgt::acquire_mem_region(1000) };
+        let region = memmgt::acquire_mem_region(1000);
         let gt = bool_init(region, true);
 
         let re = redir_gen(region, gt.clone());
@@ -1781,7 +1779,7 @@ mod redir_test {
 
     #[test]
     fn ow_next() {
-        let region = unsafe { memmgt::acquire_mem_region(1000) };
+        let region = memmgt::acquire_mem_region(1000);
         let gt = bool_init(region, true);
 
         let r1 = redir_gen(region, gt.clone());

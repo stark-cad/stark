@@ -20,7 +20,7 @@
 // <>
 
 use super::core::*;
-use super::memmgt;
+use super::thread;
 use super::{SP_DEF, SP_DO, SP_EVAL, SP_FN, SP_IF, SP_QUOTE, SP_SET, SP_WHILE};
 
 use std::alloc;
@@ -128,9 +128,6 @@ impl EvalStack {
             let wordr = word.get_raw();
             inc_refc(wordr);
             ptr::write(self.stack_top as *mut _, wordr);
-
-            // let new_top = self.stack_top.add(1);
-            // self.stack_top = new_top;
 
             self.stack_top = self.stack_top.add(1);
         }
@@ -321,7 +318,7 @@ impl EvalStack {
 
     /// Determines whether the stack is currently empty
     #[inline(always)]
-    pub fn is_empty(&mut self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.stack_start == self.stack_top
     }
 
@@ -430,8 +427,8 @@ impl EvalStack {
     /// This is the core of Sail evaluation logic. In the limit,
     /// executing this function repeatedly will evaluate any Sail
     /// expression. It handles all defined opcodes and adds more
-    /// frames to the stack as necessary, but never uses recursion.
-    pub fn iter_once(&mut self, reg: *mut memmgt::Region, tbl: SlHndl) -> bool {
+    /// frames to the stack as necessary, and never uses recursion.
+    pub fn iter_once(&mut self, thread_ref: *mut thread::ThreadHull) -> bool {
         // ***********************************
         // * Sail stack-based evaluation logic
         // ***********************************
@@ -439,6 +436,8 @@ impl EvalStack {
         if self.is_empty() {
             return false;
         }
+
+        let reg = unsafe { (*thread_ref).region() };
 
         let (ret, env, opc) = self.frame_top();
 
@@ -729,7 +728,7 @@ impl EvalStack {
                         std::slice::from_raw_parts(self.frame_addr(1) as _, argct as usize)
                     };
 
-                    let fn_rslt = proc_native_get_body(proc)(reg, tbl, env, args);
+                    let fn_rslt = proc_native_get_body(proc)(thread_ref, env, args);
 
                     self.write_addr_to(ret, fn_rslt);
 
@@ -752,20 +751,6 @@ impl Drop for EvalStack {
             alloc::dealloc(self.stack_start as *mut u8, layout);
         }
     }
-}
-
-/// Evaluates a Sail expression in a freshly created stack
-pub fn eval(reg: *mut memmgt::Region, tbl: SlHndl, env: SlHndl, expr: SlHndl) -> SlHndl {
-    let mut result: *mut SlHead = ptr::null_mut();
-    let ret_addr = &mut result as *mut *mut SlHead;
-
-    let mut stack = EvalStack::new(10000);
-
-    stack.start(ret_addr, env, expr);
-
-    while stack.iter_once(reg, tbl.clone()) {}
-
-    unsafe { SlHndl::from_raw_unchecked(result) }
 }
 
 #[cfg(test)]

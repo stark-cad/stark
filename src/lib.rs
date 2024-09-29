@@ -73,7 +73,7 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: SlHndl, sl_ctr: SlHndl,
 
     sail_fn! {
         let mngr_fns;
-        _reg _tbl _env;
+        _thr _env;
 
         "cursor-vis" 2 [frm_ptr, vis] {
             assert_eq!(frm_ptr.cfg_spec(), sail::Cfg::B8Other);
