@@ -32,6 +32,7 @@
 #![feature(core_intrinsics)]
 #![feature(box_as_ptr)]
 #![feature(const_heap)]
+#![feature(macro_metavar_expr)]
 #![feature(ptr_as_ref_unchecked)]
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
@@ -75,7 +76,7 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: SlHndl, sl_ctr: SlHndl,
         let mngr_fns;
         _thr _env;
 
-        "cursor-vis" 2 [frm_ptr, vis] {
+        "cursor-vis" [frm_ptr, vis] {
             assert_eq!(frm_ptr.cfg_spec(), sail::Cfg::B8Other);
             let frame = unsafe { &*(sail::read_field_unchecked::<u64>(frm_ptr.clone(), 0) as *const Frame) };
 
@@ -84,7 +85,7 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: SlHndl, sl_ctr: SlHndl,
             frm_ptr
         }
 
-        "cursor-pos" 5 [frm_ptr, w, h, x, y] {
+        "cursor-pos" [frm_ptr, w, h, x, y] {
             assert_eq!(frm_ptr.cfg_spec(), sail::Cfg::B8Other);
             let frame = unsafe { &*(sail::read_field_unchecked::<u64>(frm_ptr.clone(), 0) as *const Frame) };
 

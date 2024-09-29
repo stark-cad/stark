@@ -32,32 +32,29 @@ use super::{core::*, memmgt};
 /// a valid Sail object.
 #[macro_export]
 macro_rules! sail_fn {
-      $( $name:literal $argct:literal [ $($args:ident),* ] $body:block )+
     ( const $array:ident; $thr:ident $env:ident;
+      $( $name:literal [ $($args:ident),* ] $body:block )+
     ) => {
         pub const $array: &[(&str, crate::sail::core::NativeFn, u16)] =
             &[$(($name, |
-                _reg: *mut crate::sail::memmgt::Region,
-                _tbl: crate::sail::SlHndl,
+                _thr: *mut crate::sail::thread::ThreadHull,
                 _env: crate::sail::SlHndl,
                 _args: &[crate::sail::SlHndl],
               | {
                     let $thr = _thr;
                     let $env = _env;
 
-                    let mut _ind = 0;
                     $(
-                        let mut $args = _args[_ind].clone();
-                        _ind += 1;
+                        let mut $args = _args[${index()}].clone();
                     )*
 
                         $body
-                },
-                $argct)),+];
+              },
+              ${count($args)})),+];
     };
 
-      $( $name:literal $argct:literal [ $($args:ident),* ] $body:block )+
     ( let $array:ident; $thr:ident $env:ident;
+      $( $name:literal [ $($args:ident),* ] $body:block )+
     ) => {
         let $array: &[(&str, crate::sail::core::NativeFn, u16)] =
             &[$(($name, |
@@ -68,15 +65,13 @@ macro_rules! sail_fn {
                     let $thr = _thr;
                     let $env = _env;
 
-                    let mut _ind = 0;
                     $(
-                        let mut $args = _args[_ind].clone();
-                        _ind += 1;
+                        let mut $args = _args[${index()}].clone();
                     )*
 
                         $body
                 },
-                $argct)),+];
+                ${count($args)})),+];
     };
 }
 
@@ -88,7 +83,7 @@ sail_fn! {
 
     // TODO: use fixed point at times to avoid floating point errors?
 
-    "+" 2 [fst, snd] {
+    "+" [fst, snd] {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
@@ -111,7 +106,7 @@ sail_fn! {
         }
     }
 
-    "-" 2 [fst, snd] {
+    "-" [fst, snd] {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
@@ -134,7 +129,7 @@ sail_fn! {
         }
     }
 
-    "*" 2 [fst, snd] {
+    "*" [fst, snd] {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
@@ -157,7 +152,7 @@ sail_fn! {
         }
     }
 
-    "/" 2 [fst, snd] {
+    "/" [fst, snd] {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
@@ -180,8 +175,7 @@ sail_fn! {
         }
     }
 
-    "mod" 2 [fst, snd] {
-        let out = i64_make(_reg);
+    "mod" [fst, snd] {
         let reg = unsafe { (*_thr).region() };
 
         let out = i64_make(reg);
@@ -190,7 +184,7 @@ sail_fn! {
         return out;
     }
 
-    "neg" 1 [val] {
+    "neg" [val] {
         let reg = unsafe { (*_thr).region() };
         match val.core_type().expect("type invalid") {
             CoreType::I64 => {
@@ -203,7 +197,7 @@ sail_fn! {
         }
     }
 
-    "=" 2 [fst, snd] {
+    "=" [fst, snd] {
         let result = i64_get(fst) == i64_get(snd);
         if result {
             env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
@@ -213,7 +207,7 @@ sail_fn! {
         // return bool_init(_reg, result);
     }
 
-    "eq" 2 [fst, snd] {
+    "eq" [fst, snd] {
         let result = core_eq(fst, snd);
         if result {
             env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
@@ -223,7 +217,7 @@ sail_fn! {
         // return bool_init(_reg, result);
     }
 
-    "not" 1 [val] {
+    "not" [val] {
         // let out = bool_make(_reg);
         if val.truthy() {
             // bool_set(out.clone(), false)
@@ -235,7 +229,7 @@ sail_fn! {
         // return out;
     }
 
-    "qtx" 2 [sender, item] {
+    "qtx" [sender, item] {
         let id = unsafe { (*_thr).id };
 
         super::warp_hdl_send(sender, item, id);
@@ -243,6 +237,7 @@ sail_fn! {
         env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
     }
 
+    "qrx" [] {
         let reg = unsafe { (*_thr).region() };
         let inlet = unsafe { (*_thr).queue_inlet() };
 
@@ -258,15 +253,14 @@ sail_fn! {
         }
     }
 
-    "qrx" 1 [receiver] {
     }
 
-    "as-f32" 1 [val] {
+    "as-f32" [val] {
         let reg = unsafe { (*_thr).region() };
         return f32_init(reg, f64_get(val) as f32);
     }
 
-    "arr-vec-make" 3 [typ, len, init] {
+    "arr-vec-make" [typ, len, init] {
         coretypck!(typ ; Symbol);
         coretypck!(len ; I64);
 
@@ -298,7 +292,7 @@ sail_fn! {
 
     }
 
-    "arr-vec-get" 2 [target, idx] {
+    "arr-vec-get" [target, idx] {
         coretypck!(target ; VecArr);
         coretypck!(idx ; I64);
         let typ = super::arrvec_get_typ(target.clone());
@@ -314,7 +308,7 @@ sail_fn! {
         });
     }
 
-    "arr-vec-set" 3 [target, idx, val] {
+    "arr-vec-set" [target, idx, val] {
         coretypck!(target ; VecArr);
         coretypck!(idx ; I64);
         let typ = super::arrvec_get_typ(target.clone());
@@ -335,14 +329,14 @@ sail_fn! {
         return target;
     }
 
-    "print" 1 [arg] {
+    "print" [arg] {
         let tbl = unsafe { ((*_thr).context()).symtab() };
 
         println!("{}", super::context(tbl, arg.clone()).to_string());
         return arg;
     }
 
-    "dbg" 1 [arg] {
+    "dbg" [arg] {
         let tbl = unsafe { ((*_thr).context()).symtab() };
 
         println!("{}", super::context(tbl, arg.clone()).to_string());
@@ -354,7 +348,7 @@ sail_fn! {
     //     return bool_init(_reg, false);
     // }
 
-    "parse" 1 [strin] {
+    "parse" [strin] {
         coretypck!(strin ; VecStr);
         let strsl = string_get(strin);
 
@@ -367,7 +361,7 @@ sail_fn! {
         };
     }
 
-    "_itsp_mdbg_id" 1 [obj] {
+    "_itsp_mdbg_id" [obj] {
         let id = obj.memdbg_obj_id();
 
         let reg = unsafe { (*_thr).region() };
@@ -377,7 +371,7 @@ sail_fn! {
         out
     }
 
-    "vec_push" 2 [target, item] {
+    "vec_push" [target, item] {
         coretypck!(target ; VecStd);
 
         super::stdvec_push(target.clone(), item);

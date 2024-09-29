@@ -296,112 +296,103 @@ pub fn arrvec_rplc<T: SizedBase + Copy>(loc: SlHndl, val: &[T]) {
 /// TODO: remember to have a bitvec type
 /// TODO: use a script to automatically generate a Rust "env" file
 macro_rules! incl_symbols {
-    ( $array:ident : $( $id:literal $name:ident $strng:literal $mode:ident );+ $size:literal ) => {
+    ( $array:ident : $( $name:ident $strng:literal $mode:ident );+ ) => {
         $(
-            pub const $name: (u32, &str) = (modeize_sym($id, SymbolMode::$mode), $strng);
+            pub const $name: (u32, &str) = (modeize_sym(${index()}, SymbolMode::$mode), $strng);
         )+
-            const $array: [&str; $size] = [$($strng),+];
+            const $array: [&str; ${count($name)}] = [$($strng),+];
     };
 }
 
 incl_symbols! {
     SYM_ARRAY:
-    0  T_T           "t"       Type;
-    1  T_NIL         "nil"     Type;
-    2  T_BOOL        "bool"    Type;
-    3  T_U8          "u8"      Type;
-    4  T_I8          "i8"      Type;
-    5  T_U16         "u16"     Type;
-    6  T_I16         "i16"     Type;
-    7  T_U32         "u32"     Type;
-    8  T_I32         "i32"     Type;
-    9  T_U64         "u64"     Type;
-    10 T_I64         "i64"     Type;
-    11 T_U128        "u128"    Type;
-    12 T_I128        "i128"    Type;
-    13 T_F32         "f32"     Type;
-    14 T_F64         "f64"     Type;
-    15 T_SYMBOL      "symbol"  Type;
-    16 T_REF         "ref"     Type;
-    17 T_VECTOR      "vector"  Type;
-    18 T_STDVEC      "stdvec"  Type;
-    19 T_STRING      "string"  Type;
-    20 T_HASHVEC     "hashvec" Type;
-    21 T_ANYVEC      "anyvec"  Type;
-    22 T_MAP         "map"     Type;
-    23 T_ALISMAP     "alismap" Type;
-    24 T_HASHMAP     "hashmap" Type;
-    25 T_PROC        "proc"    Type;
-    26 T_PROC_LAMBDA "sail-fn" Type;
-    27 T_PROC_NATIVE "rust-fn" Type;
-    28 T_ERR         "err"     Type;
-    29 T_QUEUE_TX    "q-tx"    Type;
-    30 T_QUEUE_RX    "q-rx"    Type;
-    31 T_FRM_HDL     "frm-hdl" Type;
-    32 T_ENG_HDL     "eng-hdl" Type;
-    33 T_ENV         "env"     Type;
-    34 T_ENV_LYR     "env-lyr" Type;
-    35 SP_DEF        "def"     Basic;
-    36 SP_DO         "do"      Basic;
-    37 SP_EVAL       "eval"    Basic;
-    38 SP_FN         "fn"      Basic;
-    39 SP_IF         "if"      Basic;
-    40 SP_QUOTE      "quote"   Basic;
-    41 SP_SET        "set"     Basic;
-    42 SP_WHILE      "while"   Basic;
-    43 S_MR_SEND     "mr-send" Basic;
-    44 S_MR_RECV     "mr-recv" Basic;
-    45 S_CM_SEND     "cm-send" Basic;
-    46 S_CM_RECV     "cm-recv" Basic;
-    47 S_CR_SEND     "cr-send" Basic;
-    48 S_CR_RECV     "cr-recv" Basic;
-    49 S_MAIN        "main"    Basic;
-    50 S_FRAME       "frame"   Basic;
-    51 S_RNDR        "rndr"    Basic;
-    52 S_ENGINE      "engine"  Basic;
-    53 S_T_INTERN    "%true"   Basic;
-    54 S_F_INTERN    "%false"  Basic;
-    55 S_FR_DIMS     "fr-dims" Basic;
-    56 S_CUR_POS     "cur-pos" Basic;
-    57 K_CX_DESTR    "cx-dstr" Keyword;
-    58 K_CX_RESIZ    "cx-resz" Keyword;
-    59 K_CX_RECRD    "cx-rcrd" Keyword;
-    60 K_CX_REDRW    "cx-rdrw" Keyword;
-    61 K_CX_CURMV    "cx-crmv" Keyword;
-    62 K_CX_SHELL    "cx-shel" Keyword;
-    63 K_CX_KEY_U    "cx-kb-u" Keyword;
-    64 K_CX_KEY_D    "cx-kb-d" Keyword;
-    65 K_CX_KEY_F    "cx-kb-f" Keyword;
-    66 K_CX_KEY_B    "cx-kb-b" Keyword;
-    67 K_CX_KEY_L    "cx-kb-l" Keyword;
-    68 K_CX_KEY_S    "cx-kb-s" Keyword;
-    69 K_CX_KEY_E    "cx-kb-e" Keyword;
-    70 K_CX_KEY_K    "cx-kb-k" Keyword;
-    71 K_CX_KEY_M    "cx-kb-m" Keyword
-    72
+    T_T           "t"       Type;
+    T_NIL         "nil"     Type;
+    T_BOOL        "bool"    Type;
+    T_U8          "u8"      Type;
+    T_I8          "i8"      Type;
+    T_U16         "u16"     Type;
+    T_I16         "i16"     Type;
+    T_U32         "u32"     Type;
+    T_I32         "i32"     Type;
+    T_U64         "u64"     Type;
+    T_I64         "i64"     Type;
+    T_U128        "u128"    Type;
+    T_I128        "i128"    Type;
+    T_F32         "f32"     Type;
+    T_F64         "f64"     Type;
+    T_SYMBOL      "symbol"  Type;
+    T_REF         "ref"     Type;
+    T_VECTOR      "vector"  Type;
+    T_STDVEC      "stdvec"  Type;
+    T_STRING      "string"  Type;
+    T_HASHVEC     "hashvec" Type;
+    T_ANYVEC      "anyvec"  Type;
+    T_MAP         "map"     Type;
+    T_ALISMAP     "alismap" Type;
+    T_HASHMAP     "hashmap" Type;
+    T_PROC        "proc"    Type;
+    T_PROC_LAMBDA "sail-fn" Type;
+    T_PROC_NATIVE "rust-fn" Type;
+    T_ERR         "err"     Type;
+    T_FRM_HDL     "frm-hdl" Type;
+    T_ENG_HDL     "eng-hdl" Type;
+    T_ENV         "env"     Type;
+    T_ENV_LYR     "env-lyr" Type;
+    SP_DEF        "def"     Basic;
+    SP_DO         "do"      Basic;
+    SP_EVAL       "eval"    Basic;
+    SP_FN         "fn"      Basic;
+    SP_IF         "if"      Basic;
+    SP_QUOTE      "quote"   Basic;
+    SP_SET        "set"     Basic;
+    SP_WHILE      "while"   Basic;
+    S_MAIN        "main"    Basic;
+    S_FRAME       "frame"   Basic;
+    S_RNDR        "rndr"    Basic;
+    S_RDR_TGT     "rdr-tgt" Basic;
+    S_ENGINE      "engine"  Basic;
+    S_T_INTERN    "%true"   Basic;
+    S_F_INTERN    "%false"  Basic;
+    S_FR_DIMS     "fr-dims" Basic;
+    S_CUR_POS     "cur-pos" Basic;
+    K_CX_DESTR    "cx-dstr" Keyword;
+    K_CX_RESIZ    "cx-resz" Keyword;
+    K_CX_RECRD    "cx-rcrd" Keyword;
+    K_CX_REDRW    "cx-rdrw" Keyword;
+    K_CX_CURMV    "cx-crmv" Keyword;
+    K_CX_SHELL    "cx-shel" Keyword;
+    K_CX_KEY_U    "cx-kb-u" Keyword;
+    K_CX_KEY_D    "cx-kb-d" Keyword;
+    K_CX_KEY_F    "cx-kb-f" Keyword;
+    K_CX_KEY_B    "cx-kb-b" Keyword;
+    K_CX_KEY_L    "cx-kb-l" Keyword;
+    K_CX_KEY_S    "cx-kb-s" Keyword;
+    K_CX_KEY_E    "cx-kb-e" Keyword;
+    K_CX_KEY_K    "cx-kb-k" Keyword;
+    K_CX_KEY_M    "cx-kb-m" Keyword;
+    K_FD_GNMAP    "gensyms" Keyword;
+    K_FD_TYMAP    "types"   Keyword;
+    K_FD_MDMAP    "modules" Keyword;
+    K_FD_PTR      "target"  Keyword
 }
 
 macro_rules! incl_types {
-    ( $ctvar:ident : $( $id:literal $name:ident $sym:ident );+ $ctval:literal ) => {
+    ( $ctvar:ident : $( $name:ident $sym:ident );+ ) => {
         $(
-            pub const $name: (u32, u32) = ($id, $sym.0);
+            pub const $name: (u32, u32) = (${index()}, $sym.0);
         )+
-            const $ctvar: usize = $ctval;
+            const $ctvar: usize = ${count($name)};
     }
 }
 
 incl_types! {
     TID_COUNT:
-    0  T_ENV_ID      T_ENV;
-    1  T_ENV_LYR_ID  T_ENV_LYR;
-    2  T_QUEUE_TX_ID T_QUEUE_TX;
-    3  T_QUEUE_RX_ID T_QUEUE_RX;
-    4  T_FRM_HDL_ID  T_FRM_HDL;
-    5  T_ENG_HDL_ID  T_ENG_HDL
-    6
-pub fn structure_copy(tgt: *mut memmgt::Region, root: SlHndl) -> *mut SlHead {
-    use std::ptr;
+    T_FRM_HDL_ID  T_FRM_HDL;
+    T_ENG_HDL_ID  T_ENG_HDL
+}
 
+pub fn structure_copy(tgt: *mut memmgt::Region, root: SlHndl) -> *mut SlHead {
     // collect handles to all objects referenced by msg, with
     // appropriate reference counts (1 for msg, 1+ for all others
     // according to the structure) (panic if too many layers)

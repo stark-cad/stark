@@ -69,7 +69,7 @@ pub fn render_loop(
         let rndr_fns;
         _thr _env;
 
-        "redraw" 1 [eng_ptr] {
+        "redraw" [eng_ptr] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
@@ -80,7 +80,7 @@ pub fn render_loop(
             eng_ptr
         }
 
-        "frame-size" 3 [eng_ptr, w, h] {
+        "frame-size" [eng_ptr, w, h] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
@@ -94,7 +94,7 @@ pub fn render_loop(
             eng_ptr
         }
 
-        "add-line" 4 [eng_ptr, window, points, colors] {
+        "add-line" [eng_ptr, window, points, colors] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
@@ -122,7 +122,7 @@ pub fn render_loop(
             eng_ptr
         }
 
-        "pop-line" 2 [eng_ptr, window] {
+        "pop-line" [eng_ptr, window] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
@@ -137,7 +137,7 @@ pub fn render_loop(
             eng_ptr
         }
 
-        "hit-test" 3 [eng_ptr, x, y] {
+        "hit-test" [eng_ptr, x, y] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
@@ -159,7 +159,7 @@ pub fn render_loop(
             out
         }
 
-        "create-window" 1 [eng_ptr] {
+        "create-window" [eng_ptr] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
@@ -170,7 +170,7 @@ pub fn render_loop(
             eng_ptr
         }
 
-        "modify-window" 6 [eng_ptr, window, tlx, tly, brx, bry] {
+        "modify-window" [eng_ptr, window, tlx, tly, brx, bry] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
@@ -206,7 +206,7 @@ pub fn render_loop(
             eng_ptr
         }
 
-        "delete-window" 2 [eng_ptr, window] {
+        "delete-window" [eng_ptr, window] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
@@ -220,7 +220,7 @@ pub fn render_loop(
             eng_ptr
         }
 
-        "bg-col" 4 [eng_ptr, r, g, b] {
+        "bg-col" [eng_ptr, r, g, b] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
@@ -236,7 +236,7 @@ pub fn render_loop(
             eng_ptr
         }
 
-        // "clear" 1 [eng_ptr] {
+        // "clear" [eng_ptr] {
         //     assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
         //     let engine = unsafe {
         //         &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
