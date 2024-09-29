@@ -17,202 +17,309 @@
 
 // <>
 
-// TODO: implement inlet queues for each Sail execution thread
+// Each execution thread gets a blessed queue receiver. Any thread
+// (for which the target is in scope?) can send messages / object
+// copies down that channel.
+
+use std::ptr;
+
 use super::{core::*, memmgt};
 
-// TODO: global identifiers for queues?
-// TODO: take action to avoid the "ABA problem"
+#[derive(Clone, Copy, PartialEq)]
+#[repr(transparent)]
+struct Qptr(usize);
 
-// TODO: repurpose refcount as ABA problem avoidance count while in
-// queue?
-
-// fn qptr_make(ptr: *mut SlHead, ct: u16) -> u64 {
-//    ptr as u64 + ((ct as u64) << 48)
-// }
-
-// fn qptr_get(qptr: u64) -> (*mut SlHead, u16) {
-//     ((qptr & 0x0000FFFFFFFFFFFF) as *mut SlHead, (qptr >> 48) as u16)
-// }
-
-/// Creates a queue sender and receiver as a linked pair
-pub fn queue_create(
-    tx_region: *mut memmgt::Region,
-    rx_region: *mut memmgt::Region,
-) -> (SlHndl, SlHndl) {
-    unsafe {
-        let sender =
-            SlHndl::from_raw_unchecked(memmgt::alloc(tx_region, 16, super::T_QUEUE_TX_ID.0));
-        let receiver =
-            SlHndl::from_raw_unchecked(memmgt::alloc(rx_region, 16, super::T_QUEUE_RX_ID.0));
-
-        inc_refc(receiver.get_raw());
-        inc_refc(sender.get_raw());
-
-        write_ptr_unsafe_unchecked(sender.clone(), 0, receiver.clone());
-        write_field_unchecked(sender.clone(), PTR_LEN, rx_region as u64);
-
-        // write_field_unchecked(receiver, 0, 0u64);
-        write_ptr_unsafe_unchecked(receiver.clone(), PTR_LEN, sender.clone());
-
-        (sender, receiver)
+impl Qptr {
+    fn make(p: *mut QueueNode, c: u16) -> Self {
+        Self(((p as usize) << 16) + c as usize)
+    }
+    fn get(self) -> (*mut QueueNode, u16) {
+        (
+            (self.0 >> 16) as *mut QueueNode,
+            (self.0 & u16::MAX as usize) as u16,
+        )
     }
 }
 
-/// Transmits a copy of the given Sail object along the queue
-pub fn queue_tx(env: SlHndl, mut loc: SlHndl, item: SlHndl) {
-    assert_eq!(loc.type_id(), super::T_QUEUE_TX_ID.0);
-    assert_eq!(loc.base_size(), BaseSize::B16);
+// TODO: queue handle that only permits sends
+pub struct SendTgt {
+    tgt: *mut Inlet,
+}
 
-    // TODO: change to permit copying arbitrary values, could use
-    // similar machinery to destroy_obj
+pub struct Inlet {
+    region: *mut memmgt::Region,
+    // could be a linked list with nodes pointing to Sail objects
+    // - same layout as current
+    // - no resize handling
+    head: Qptr,
+    tail: Qptr,
+    // TODO: maintain a stack of existing nodes for reuse
+    // TODO: keep atomic reference count of senders
 
-    unsafe {
-        // create new list element containing the item
-        let elt = core_copy_val(
-            read_field_unchecked::<u64>(loc.clone(), PTR_LEN) as *mut memmgt::Region,
-            item,
-        );
+    // or could be a ring buffer with cells pointing to the same
+    // - certainly faster in most cases
+    // - will need to deal with resize
+    // buffer: *mut SlHndl,
+    // head: usize,
+    // tail: usize,
+}
 
-        let mut tail;
-        loop {
-            // get the current list tail (sender's perspective)
-            tail = read_ptr_atomic(loc.clone(), 0).unwrap();
+impl Drop for Inlet {
+    fn drop(&mut self) {
+        while self.receive().1.is_some() {}
 
-            // TODO: assign type IDs to all types with object representations
+        unsafe {
+            let _dummy_node = Box::from_raw(self.head.get().0);
+        }
+    }
+}
 
-            // get pointer to the tail's next element
-            let (is_head, next) = if tail.type_fld_p() && tail.type_id() == super::T_QUEUE_RX_ID.0 {
-                (true, read_ptr_atomic(tail.clone(), 0))
-            } else {
-                (false, get_next_list_elt(tail.clone()))
-            };
+struct QueueNode {
+    source: usize,
+    payload: Option<SlHndl>,
+    next: Qptr,
+}
 
-            if tail == read_ptr_atomic(loc.clone(), 0).unwrap() {
-                match next {
-                    None => {
-                        // if the next element is nil, add the new element at the tail
-                        if if is_head {
-                            write_ptr_cmpxcg(env.clone(), tail.clone(), 0, None, elt.clone())
-                        } else {
-                            set_next_list_elt_cmpxcg(env.clone(), tail.clone(), None, elt.clone())
-                        } {
-                            // end loop if successful
+impl Inlet {
+    pub fn new(target_region: *mut memmgt::Region) -> Self {
+        let dummy_node = Box::into_raw(Box::new(QueueNode {
+            source: 0,
+            payload: None,
+            next: Qptr::make(ptr::null_mut(), 0),
+        }));
+
+        Self {
+            region: target_region,
+
+            head: Qptr::make(dummy_node, 0),
+            tail: Qptr::make(dummy_node, 0),
+        }
+    }
+
+    pub fn transmit(&mut self, from: usize, msg: SlHndl) {
+        let new_loc = super::structure_copy(self.region, msg.clone());
+
+        // create a queue node which points at msg in the new region
+        let fresh_node = Box::into_raw(Box::new(QueueNode {
+            source: from,
+            payload: Some(unsafe { SlHndl::from_raw_unchecked(new_loc) }),
+            next: Qptr::make(ptr::null_mut(), 0),
+        }));
+
+        // proceed to add the freshly instantiated node to the queue
+        unsafe {
+            let mut tail;
+            loop {
+                tail = atom_ops::load(&self.tail);
+                let next = atom_ops::load(&((*tail.get().0).next));
+
+                if tail == atom_ops::load(&self.tail) {
+                    if next.get().0.is_null() {
+                        if atom_ops::cxcg(
+                            &mut (*tail.get().0).next,
+                            next,
+                            Qptr::make(fresh_node, u16::wrapping_add(next.get().1, 1)),
+                        )
+                        .1
+                        {
+                            break;
+                        }
+                    } else {
+                        atom_ops::cxcg(
+                            &mut self.tail,
+                            tail,
+                            Qptr::make(next.get().0, u16::wrapping_add(tail.get().1, 1)),
+                        );
+                    }
+                }
+            }
+
+            atom_ops::cxcg(
+                &mut self.tail,
+                tail,
+                Qptr::make(fresh_node, u16::wrapping_add(tail.get().1, 1)),
+            );
+        }
+
+        // Core queue algorithm from (Michael & Scott, 1998)
+    }
+
+    pub fn receive(&mut self) -> (usize, Option<SlHndl>) {
+        let mut out;
+        unsafe {
+            let mut head;
+            loop {
+                head = atom_ops::load(&self.head);
+                let tail = atom_ops::load(&self.tail);
+                let next = atom_ops::load(&(*head.get().0).next);
+
+                if head == atom_ops::load(&self.head) {
+                    if head.get().0 == tail.get().0 {
+                        if next.get().0 == ptr::null_mut() {
+                            return (0, None);
+                        }
+                        atom_ops::cxcg(
+                            &mut self.tail,
+                            tail,
+                            Qptr::make(next.get().0, u16::wrapping_add(tail.get().1, 1)),
+                        );
+                    } else {
+                        out = ((*next.get().0).source, (*next.get().0).payload.take());
+                        if atom_ops::cxcg(
+                            &mut self.head,
+                            head,
+                            Qptr::make(next.get().0, u16::wrapping_add(head.get().1, 1)),
+                        )
+                        .1
+                        {
                             break;
                         }
                     }
-                    Some(nx) => {
-                        // if next element not nil, advance tail pointer towards the tail
-                        write_ptr_cmpxcg(env.clone(), loc.clone(), 0, Some(tail), nx);
-                    }
                 }
             }
+            let _node_to_drop = Box::from_raw(head.get().0);
         }
-        // attempt to change the tail pointer to the new node
-        write_ptr_cmpxcg(env, loc, 0, Some(tail), elt);
+
+        debug_assert!(out.1.is_some());
+        out
+
+        // Core queue algorithm from (Michael & Scott, 1998)
     }
 }
 
-/// Receives and returns the object at the head of the queue
-pub fn queue_rx(env: SlHndl, mut loc: SlHndl) -> Option<SlHndl> {
-    assert_eq!(loc.type_id(), super::T_QUEUE_RX_ID.0);
-    assert_eq!(loc.base_size(), BaseSize::B16);
+mod atom_ops {
+    use super::Qptr;
 
-    loop {
-        // get the head of the queue list
-        let head = read_ptr_atomic(loc.clone(), 0);
-
-        // get the tail of the queue list
-        let sender = read_ptr(loc.clone(), PTR_LEN).unwrap();
-        let tail = read_ptr_atomic(sender.clone(), 0);
-
-        if head == read_ptr_atomic(loc.clone(), 0) {
-            if tail == Some(loc.clone()) {
-                // if this is the list tail and the head is nil, the queue is empty
-                if head.is_none() {
-                    return None;
-                }
-                // if the head isn't nil, shift the tail down the queue
-                write_ptr_cmpxcg(env.clone(), sender.clone(), 0, tail, head.unwrap());
-            } else {
-                // TODO: this handler needs to work on windows
-                if head.is_none() {
-                    log::debug!("a queue head was nil");
-                    write_ptr_cmpxcg_may_clr(
-                        env.clone(),
-                        loc.clone(),
-                        0,
-                        None,
-                        read_ptr_atomic(sender, 0),
-                    );
-                    continue;
-                }
-
-                let next = get_next_list_elt(head.clone().unwrap());
-
-                // if next element up is not nil, just attempt to advance to the next node
-                // otherwise, try to make the receiver the list tail, then attempt to advance
-                if (next.is_some() || write_ptr_cmpxcg(env.clone(), sender, 0, tail, loc.clone()))
-                    && write_ptr_cmpxcg_may_clr(env.clone(), loc.clone(), 0, head.clone(), next)
-                {
-                    clr_next_list_elt(env.clone(), head.clone().unwrap());
-                    return head;
-                }
-            }
-        }
+    #[inline(always)]
+    pub unsafe fn load(from: *const Qptr) -> Qptr {
+        Qptr(std::intrinsics::atomic_load_acquire(from as *const usize))
+    }
+    #[inline(always)]
+    pub unsafe fn cxcg(tgt: *mut Qptr, old: Qptr, new: Qptr) -> (Qptr, bool) {
+        let out = std::intrinsics::atomic_cxchg_acqrel_acquire(
+            tgt as *mut usize,
+            std::mem::transmute::<Qptr, usize>(old),
+            std::mem::transmute::<Qptr, usize>(new),
+        );
+        (Qptr(out.0), out.1)
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod inlet_tests {
     use super::*;
 
     #[test]
-    fn q_one_reg() {
-        unsafe {
-            let region = memmgt::acquire_mem_region(100);
-            let (send, recv) = queue_create(region, region);
+    fn basic() {
+        let tx_reg = memmgt::acquire_mem_region(100);
+        let rx_reg = memmgt::acquire_mem_region(100);
 
-            let item = bool_init(region, true);
+        let mut rx_inlet = Inlet::new(rx_reg);
 
-            let dm_env = env_create(region, None);
+        assert!(rx_inlet.receive().1.is_none());
 
-            queue_tx(dm_env.clone(), send, item);
+        rx_inlet.transmit(1, i64_init(tx_reg, 7));
+        rx_inlet.transmit(1, i64_init(tx_reg, 14));
 
-            let out = queue_rx(dm_env, recv).unwrap();
+        assert_eq!(i64_get(rx_inlet.receive().1.unwrap()), 7);
+        assert_eq!(i64_get(rx_inlet.receive().1.unwrap()), 14);
 
-            assert_eq!(bool_get(out), true)
-        }
+        rx_inlet.transmit(1, i64_init(tx_reg, 21));
+
+        assert_eq!(i64_get(rx_inlet.receive().1.unwrap()), 21);
+
+        assert!(rx_inlet.receive().1.is_none());
+        assert!(rx_inlet.receive().1.is_none());
+
+        rx_inlet.transmit(1, i64_init(tx_reg, 28));
+        rx_inlet.transmit(1, i64_init(tx_reg, 35));
+        rx_inlet.transmit(1, i64_init(tx_reg, 42));
+
+        assert_eq!(i64_get(rx_inlet.receive().1.unwrap()), 28);
+        assert_eq!(i64_get(rx_inlet.receive().1.unwrap()), 35);
+        assert_eq!(i64_get(rx_inlet.receive().1.unwrap()), 42);
+
+        assert!(rx_inlet.receive().1.is_none());
     }
 
     #[test]
-    fn q_two_reg() {
-        unsafe {
-            let tx_reg = memmgt::acquire_mem_region(100);
-            let rx_reg = memmgt::acquire_mem_region(100);
+    fn layers() {
+        let mut tbl = super::super::Stab::new(51);
 
-            let (send, recv) = queue_create(tx_reg, rx_reg);
+        let tx_reg = memmgt::acquire_mem_region(100);
+        let rx_reg = memmgt::acquire_mem_region(100);
 
-            let dm_env = env_create(tx_reg, None);
+        let mut rx_inlet = Inlet::new(rx_reg);
 
-            queue_tx(dm_env.clone(), send.clone(), i64_init(tx_reg, 7));
-            queue_tx(dm_env.clone(), send.clone(), i64_init(tx_reg, 14));
+        let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
 
-            assert_eq!(i64_get(queue_rx(dm_env.clone(), recv.clone()).unwrap()), 7);
-            assert_eq!(i64_get(queue_rx(dm_env.clone(), recv.clone()).unwrap()), 14);
+        let ogv = super::super::parser::parse(tx_reg, &mut tbl, &exp, false).unwrap();
 
-            queue_tx(dm_env.clone(), send.clone(), i64_init(tx_reg, 21));
+        rx_inlet.transmit(1, ogv);
 
-            assert_eq!(i64_get(queue_rx(dm_env.clone(), recv.clone()).unwrap()), 21);
+        let cpv = rx_inlet.receive().1.unwrap();
 
-            queue_tx(dm_env.clone(), send.clone(), i64_init(tx_reg, 28));
-            queue_tx(dm_env.clone(), send.clone(), i64_init(tx_reg, 35));
+        let res = super::super::context(&tbl, cpv).to_string();
 
-            assert_eq!(i64_get(queue_rx(dm_env.clone(), recv.clone()).unwrap()), 28);
-            assert_eq!(i64_get(queue_rx(dm_env.clone(), recv.clone()).unwrap()), 35);
+        assert_eq!(exp, res);
+    }
 
-            queue_tx(dm_env.clone(), send, i64_init(tx_reg, 42));
+    #[test]
+    fn multi() {
+        const THCT: u32 = 7;
+        const SPAN: u32 = 5000;
 
-            assert_eq!(i64_get(queue_rx(dm_env, recv).unwrap()), 42);
+        fn send(id: usize, start: i64, extent: i64, tx_reg: usize, tgt: usize) {
+            let target = unsafe { std::mem::transmute::<usize, &mut Inlet>(tgt) };
+
+            for i in start..start + extent {
+                target.transmit(id, i64_init(tx_reg as *mut memmgt::Region, i));
+            }
+        }
+
+        let rx_reg = memmgt::acquire_mem_region(SPAN * 10);
+        let mut inlet = Inlet::new(rx_reg);
+        let hdl = unsafe { std::mem::transmute::<&mut Inlet, usize>(&mut inlet) };
+
+        let mut th = vec![];
+        let mut acc = 0;
+        for tid in 0..THCT {
+            let tsr = memmgt::acquire_mem_region(SPAN) as usize;
+            th.push(std::thread::spawn(move || {
+                send(tid as _, acc, SPAN as _, tsr, hdl)
+            }));
+            acc += SPAN as i64;
+        }
+
+        let mut sheet = [false; (THCT * SPAN) as usize];
+        let mut recvd = 0;
+
+        while recvd < THCT * SPAN {
+            match inlet.receive().1 {
+                Some(h) => {
+                    recvd += 1;
+                    let val = i64_get(h);
+                    sheet[val as usize] |= true;
+
+                    // println!("received {val}; {recvd}/{}", THCT * SPAN);
+                }
+                None => (),
+            }
+        }
+
+        for j in th {
+            j.join().unwrap();
+        }
+
+        for i in 0..sheet.len() {
+            assert!(sheet[i]);
         }
     }
 }
+
+// With thanks, core queue algorithm based on:
+
+// Michael, M. M. & Scott, M. L. (1998). Non-Blocking Algorithms and
+//      Preemption-Safe Locking on Multiprogrammed Shared Memory
+//      Multiprocessors. Journal of Parallel and Distributed Computing,
+//      51, 1-26.
