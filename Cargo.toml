@@ -23,7 +23,7 @@ raw-window-handle = "0.5"
 shaderc = "0.8"
 
 png = "0.17"
-ttf-parser = "0.20"
+ttf-parser = "0.24"
 
 log = "0.4"
-simple_logger = "4.3"
+simple_logger = "5"

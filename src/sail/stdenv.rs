@@ -93,7 +93,7 @@ sail_fn! {
             CoreType::I64 => {
                 let out = i64_make(reg);
                 let result = i64_get(fst) + i64_get(snd);
-                i64_set(r!(out), result);
+                i64_set(out.clone(), result);
                 return out;
             }
             CoreType::F32 => {
@@ -253,6 +253,11 @@ sail_fn! {
         }
     }
 
+    "rest" [loc] {
+        match get_next_list_elt(loc) {
+            Some(h) => h,
+            None => env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap(),
+        }
     }
 
     "as-f32" [val] {

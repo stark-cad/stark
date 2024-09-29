@@ -55,15 +55,29 @@ pub struct FrameHandles {
 unsafe impl Send for FrameHandles {}
 
 /// Sail interpreter loop for the manager thread
-pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: SlHndl, sl_ctr: SlHndl, sl_env: SlHndl) {
-    let sl_reg = sl_reg as *mut sail::memmgt::Region;
+pub fn manager_loop(frame: Frame, sl_thr_ptr: usize) {
+    let sl_thr_ptr = sl_thr_ptr as *mut sail::thread::ThreadHull;
+
+    let thread_ref = unsafe { &mut *sl_thr_ptr };
 
     frame.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 
-    let frm_hdl =
-        unsafe { SlHndl::from_raw_unchecked(sail::memmgt::alloc(sl_reg, 8, sail::T_FRM_HDL_ID.0)) };
+    let frm_hdl = unsafe {
+        SlHndl::from_raw_unchecked(sail::memmgt::alloc(
+            thread_ref.region(),
+            8,
+            sail::T_FRM_HDL_ID.0,
+        ))
+    };
+
     unsafe { sail::write_field_unchecked(frm_hdl.clone(), 0, (&frame as *const _) as u64) };
-    sail::env_scope_ins_by_id(sl_reg, sl_env.clone(), sail::S_FRAME.0, frm_hdl);
+
+    sail::env_scope_ins_by_id(
+        thread_ref.region(),
+        thread_ref.top_env(),
+        sail::S_FRAME.0,
+        frm_hdl,
+    );
 
     // println!(
     //     "frm_hdl -\ntype id: {}\nsize: {}\nhas size field: {}",
@@ -114,28 +128,22 @@ pub fn manager_loop(frame: Frame, sl_reg: usize, sl_tbl: SlHndl, sl_ctr: SlHndl,
         }
     }
 
-    sail::insert_native_procs(sl_reg, sl_tbl.clone(), sl_env.clone(), mngr_fns);
+    sail::insert_native_procs(
+        thread_ref.region(),
+        thread_ref.context().symtab(),
+        thread_ref.top_env(),
+        mngr_fns,
+    );
 
     let prog_txt = &std::fs::read_to_string("scripts/main.sl").unwrap();
-    let prog_expr = sail::parser::parse(sl_reg, sl_tbl.clone(), prog_txt, true).unwrap();
+    thread_ref.load_from_text(prog_txt, true).unwrap();
 
-    let mut stack = sail::eval::EvalStack::new(10000);
+    while thread_ref.advance() {}
 
-    let mut _slot: usize = 0;
-    let ret_addr = (&mut _slot as *mut usize) as *mut *mut sail::SlHead;
-
-    stack.start(ret_addr, sl_env.clone(), prog_expr);
-
-    while stack.iter_once(sl_reg, sl_tbl.clone()) {}
-
-    let main =
-        sail::env_lookup_by_id(sl_env.clone(), sail::S_MAIN.0).expect("main script not in env");
-
-    stack.push_frame_head(ret_addr, sail::eval::Opcode::Apply, sl_env);
-    stack.push(main);
+    thread_ref.load_proc_by_sym(sail::S_MAIN.0);
 
     loop {
-        if !stack.iter_once(sl_reg, sl_tbl.clone()) {
+        if !thread_ref.advance() {
             println!("manager thread ended");
             break;
         }

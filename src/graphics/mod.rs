@@ -39,16 +39,9 @@ use std::mem::size_of;
 mod text;
 
 /// Sail interpreter loop for the render thread (holds graphics state)
-pub fn render_loop(
-    name: &'static str,
-    size: [u32; 2],
-    frame: FrameHandles,
-    sl_reg: usize,
-    sl_tbl: SlHndl,
-    sl_ctr: SlHndl,
-    sl_env: SlHndl,
-) {
-    let sl_reg = sl_reg as *mut sail::memmgt::Region;
+pub fn render_loop(name: &'static str, size: [u32; 2], frame: FrameHandles, sl_thr_ptr: usize) {
+    let sl_thr_ptr = sl_thr_ptr as *mut sail::thread::ThreadHull;
+    let thread_ref = unsafe { &mut *sl_thr_ptr };
 
     let mut engine = Engine::new(frame, name, size[0], size[1]);
 
@@ -60,10 +53,22 @@ pub fn render_loop(
 
     engine.lines[0].append(&mut test_glyph);
 
-    let eng_hdl =
-        unsafe { SlHndl::from_raw_unchecked(sail::memmgt::alloc(sl_reg, 8, sail::T_ENG_HDL_ID.0)) };
+    let eng_hdl = unsafe {
+        SlHndl::from_raw_unchecked(sail::memmgt::alloc(
+            thread_ref.region(),
+            8,
+            sail::T_ENG_HDL_ID.0,
+        ))
+    };
+
     unsafe { sail::write_field_unchecked(eng_hdl.clone(), 0, (&mut engine as *mut _) as u64) };
-    sail::env_scope_ins_by_id(sl_reg, sl_env.clone(), sail::S_ENGINE.0, eng_hdl);
+
+    sail::env_scope_ins_by_id(
+        thread_ref.region(),
+        thread_ref.top_env(),
+        sail::S_ENGINE.0,
+        eng_hdl,
+    );
 
     crate::sail_fn! {
         let rndr_fns;
@@ -248,28 +253,23 @@ pub fn render_loop(
         // }
     }
 
-    sail::insert_native_procs(sl_reg, sl_tbl.clone(), sl_env.clone(), rndr_fns);
+    sail::insert_native_procs(
+        thread_ref.region(),
+        thread_ref.context().symtab(),
+        thread_ref.top_env(),
+        rndr_fns,
+    );
 
     engine.setup();
     engine.set_clear([1.0, 1.0, 1.0, 1.0]);
 
     let prog_txt = &std::fs::read_to_string("scripts/rndr.sl").unwrap();
-    let prog_expr = sail::parser::parse(sl_reg, sl_tbl.clone(), prog_txt, true).unwrap();
 
-    let mut stack = sail::eval::EvalStack::new(10000);
+    thread_ref.load_from_text(prog_txt, true).unwrap();
 
-    let mut ret_slot: usize = 0;
-    let ret_addr: *mut *mut sail::SlHead = (&mut ret_slot as *mut usize) as _;
+    while thread_ref.advance() {}
 
-    stack.start(ret_addr, sl_env.clone(), prog_expr);
-
-    while stack.iter_once(sl_reg, sl_tbl.clone()) {}
-
-    let rndr =
-        sail::env_lookup_by_id(sl_env.clone(), sail::S_RNDR.0).expect("rndr script not in env");
-
-    stack.push_frame_head(ret_addr, sail::eval::Opcode::Apply, sl_env);
-    stack.push(rndr);
+    thread_ref.load_proc_by_sym(sail::S_RNDR.0);
 
     loop {
         if engine.need_surface_cfg {
@@ -278,7 +278,7 @@ pub fn render_loop(
             engine.need_surface_cfg = false;
         }
 
-        if !stack.iter_once(sl_reg, sl_tbl.clone()) {
+        if !thread_ref.advance() {
             println!("render thread ended");
             break;
         }
@@ -287,6 +287,9 @@ pub fn render_loop(
     // TODO: dispose of Sail stack, region, etc
     drop(engine);
 }
+
+// TODO: update to latest version of ash, ash-window,
+// and raw-window-handle
 
 /// Sail-specific graphics engine state
 pub struct Engine {

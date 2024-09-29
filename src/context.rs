@@ -21,12 +21,14 @@
 
 use crate::{sail, Frame};
 
+// TODO: update to latest version of winit
+
 // use png;
 use winit::{
     dpi,
-    event::{DeviceEvent, ElementState, Event, KeyEvent, RawKeyEvent, WindowEvent},
+    event::{ElementState, Event, KeyEvent, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    keyboard::{Key, KeyCode, NamedKey, PhysicalKey},
+    keyboard::{Key, NamedKey},
     window::{self, WindowBuilder},
 };
 
@@ -57,9 +59,10 @@ pub fn init_context(
 pub fn run_loop<Ij: 'static>(
     event_loop: EventLoop<()>,
     threads: Ij,
+    sl_weft: sail::thread::Weft,
     sl_reg: usize,
-    m_send: sail::SlHndl,
-    r_send: sail::SlHndl,
+    m_send: usize,
+    r_send: usize,
     fr_dims: sail::SlHndl,
     cur_pos: sail::SlHndl,
 ) where
@@ -70,14 +73,14 @@ pub fn run_loop<Ij: 'static>(
     let dummy_env = sail::env_create(sl_reg as _, None);
     let dm_env_ax = dummy_env.clone();
 
-    let main_tx = m_send.clone();
-
     let _stdin = thread::Builder::new()
         .name("stdin".to_string())
         .spawn(move || {
             let sl_reg = sl_reg as *mut sail::memmgt::Region;
 
             let mut buffer = String::new();
+
+            let mtx = unsafe { &mut *(m_send as *mut sail::queue::Inlet) };
 
             loop {
                 buffer.clear();
@@ -86,20 +89,28 @@ pub fn run_loop<Ij: 'static>(
                 let strin = sail::string_init(sl_reg, &buffer);
                 let shell = sail::sym_init(sl_reg, sail::K_CX_SHELL.0);
 
-                sail::queue::queue_tx(dm_env_ax.clone(), main_tx.clone(), shell);
-                sail::queue::queue_tx(dm_env_ax.clone(), main_tx.clone(), strin);
+                sail::set_next_list_elt(dm_env_ax.clone(), shell.clone(), strin);
+
+                mtx.transmit(1, shell);
             }
         })
         .unwrap();
 
     let sl_reg = sl_reg as *mut sail::memmgt::Region;
 
-    let main_tx = m_send;
-    let rndr_tx = r_send;
+    let (main_tx, rndr_tx) = (
+        m_send as *mut sail::queue::Inlet,
+        r_send as *mut sail::queue::Inlet,
+    );
+
+    let (main_tx, rndr_tx) = unsafe { (&mut *main_tx, &mut *rndr_tx) };
 
     let mut frame_dims: [u32; 2] = [0, 0];
 
     let mut focus = false;
+
+    // println!("fr_dims is at: {:x}", unsafe { fr_dims.get_raw() as usize });
+    // println!("cur_pos is at: {:x}", unsafe { cur_pos.get_raw() as usize });
 
     event_loop
         .run(move |event, elwt| {
@@ -111,15 +122,15 @@ pub fn run_loop<Ij: 'static>(
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::RedrawRequested => {
                         let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
-                        sail::queue::queue_tx(dummy_env.clone(), rndr_tx.clone(), redrw);
+                        rndr_tx.transmit(1, redrw);
                     }
                     WindowEvent::CloseRequested => {
                         elwt.exit();
 
                         let destr = sail::sym_init(sl_reg, sail::K_CX_DESTR.0);
 
-                        sail::queue::queue_tx(dummy_env.clone(), rndr_tx.clone(), destr.clone());
-                        sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), destr);
+                        rndr_tx.transmit(1, destr.clone());
+                        main_tx.transmit(1, destr);
                     }
                     WindowEvent::Focused(f) => {
                         focus = f;
@@ -129,14 +140,14 @@ pub fn run_loop<Ij: 'static>(
                         sail::arrvec_rplc(fr_dims.clone(), &[dims.width, dims.height]);
 
                         let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
-                        sail::queue::queue_tx(dummy_env.clone(), rndr_tx.clone(), resiz);
+                        rndr_tx.transmit(1, resiz);
                     }
                     WindowEvent::MouseInput {
                         state, button: _, ..
                     } => {
                         if state == ElementState::Pressed {
                             let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
-                            sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), recrd);
+                            main_tx.transmit(1, recrd);
                         }
                     }
                     WindowEvent::CursorMoved {
@@ -161,7 +172,7 @@ pub fn run_loop<Ij: 'static>(
                         // every time there is a message; the queue system
                         // copies symbols into the receiving environment
 
-                        sail::queue::queue_tx(dummy_env.clone(), rndr_tx.clone(), moved);
+                        rndr_tx.transmit(1, moved);
                     }
                     WindowEvent::KeyboardInput {
                         event:
@@ -174,59 +185,55 @@ pub fn run_loop<Ij: 'static>(
 
                         // TODO: runtime function rebinding to any key
                         // in any mode should be viable
-                        Key::Character(s) => match s.bytes().nth(0).unwrap() {
-                            b'u' => {
-                                // move up
-                                let key_u = sail::sym_init(sl_reg, sail::K_CX_KEY_U.0);
-                                sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), key_u);
+                        Key::Character(s) => {
+                            let key_sym = match s.bytes().nth(0).unwrap() {
+                                b'u' => {
+                                    // move up
+                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_U.0))
+                                }
+                                b'd' => {
+                                    // move down
+                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_D.0))
+                                }
+                                b'f' => {
+                                    // move forward (right)
+                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_F.0))
+                                }
+                                b'b' => {
+                                    // move backward (left)
+                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_B.0))
+                                }
+                                b'l' => {
+                                    // make step longer
+                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_L.0))
+                                }
+                                b's' => {
+                                    // make step shorter
+                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_S.0))
+                                }
+                                b'e' => {
+                                    // escape line in progress
+                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_E.0))
+                                }
+                                b'k' => {
+                                    // kill last line drawn
+                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_K.0))
+                                }
+                                b'm' => {
+                                    // switch drawing mode
+                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_M.0))
+                                }
+                                _ => None,
+                            };
+                            if let Some(ks) = key_sym {
+                                main_tx.transmit(1, ks)
                             }
-                            b'd' => {
-                                // move down
-                                let key_d = sail::sym_init(sl_reg, sail::K_CX_KEY_D.0);
-                                sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), key_d);
-                            }
-                            b'f' => {
-                                // move forward (right)
-                                let key_f = sail::sym_init(sl_reg, sail::K_CX_KEY_F.0);
-                                sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), key_f);
-                            }
-                            b'b' => {
-                                // move backward (left)
-                                let key_b = sail::sym_init(sl_reg, sail::K_CX_KEY_B.0);
-                                sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), key_b);
-                            }
-                            b'l' => {
-                                // make step longer
-                                let key_l = sail::sym_init(sl_reg, sail::K_CX_KEY_L.0);
-                                sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), key_l);
-                            }
-                            b's' => {
-                                // make step shorter
-                                let key_s = sail::sym_init(sl_reg, sail::K_CX_KEY_S.0);
-                                sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), key_s);
-                            }
-                            b'e' => {
-                                // escape line in progress
-                                let key_e = sail::sym_init(sl_reg, sail::K_CX_KEY_E.0);
-                                sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), key_e);
-                            }
-                            b'k' => {
-                                // kill last line drawn
-                                let key_k = sail::sym_init(sl_reg, sail::K_CX_KEY_K.0);
-                                sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), key_k);
-                            }
-                            b'm' => {
-                                // switch drawing mode
-                                let key_m = sail::sym_init(sl_reg, sail::K_CX_KEY_M.0);
-                                sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), key_m);
-                            }
-                            _ => {}
-                        },
+                        }
                         Key::Named(n) => match n {
                             NamedKey::Space => {
                                 // enter the point
                                 let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
-                                sail::queue::queue_tx(dummy_env.clone(), main_tx.clone(), recrd);
+                                main_tx.transmit(1, recrd);
                             }
                             _ => {}
                         },
@@ -235,107 +242,6 @@ pub fn run_loop<Ij: 'static>(
                     _ => {}
                 },
 
-                // Event::DeviceEvent { event, .. } => match event {
-                //     DeviceEvent::Key(RawKeyEvent {
-                //         physical_key: PhysicalKey::Code(kc),
-                //         state,
-                //     }) => {
-                //         if focus && state == ElementState::Pressed {
-                //             match kc {
-                //                 KeyCode::KeyU => {
-                //                     // move up
-                //                     let key_u = sail::sym_init(sl_reg, sail::K_CX_KEY_U.0);
-                //                     sail::queue::queue_tx(
-                //                         dummy_env.clone(),
-                //                         main_tx.clone(),
-                //                         key_u,
-                //                     );
-                //                 }
-                //                 KeyCode::KeyD => {
-                //                     // move down
-                //                     let key_d = sail::sym_init(sl_reg, sail::K_CX_KEY_D.0);
-                //                     sail::queue::queue_tx(
-                //                         dummy_env.clone(),
-                //                         main_tx.clone(),
-                //                         key_d,
-                //                     );
-                //                 }
-                //                 KeyCode::KeyF => {
-                //                     // move forward (right)
-                //                     let key_f = sail::sym_init(sl_reg, sail::K_CX_KEY_F.0);
-                //                     sail::queue::queue_tx(
-                //                         dummy_env.clone(),
-                //                         main_tx.clone(),
-                //                         key_f,
-                //                     );
-                //                 }
-                //                 KeyCode::KeyB => {
-                //                     // move backward (left)
-                //                     let key_b = sail::sym_init(sl_reg, sail::K_CX_KEY_B.0);
-                //                     sail::queue::queue_tx(
-                //                         dummy_env.clone(),
-                //                         main_tx.clone(),
-                //                         key_b,
-                //                     );
-                //                 }
-                //                 KeyCode::KeyL => {
-                //                     // make step longer
-                //                     let key_l = sail::sym_init(sl_reg, sail::K_CX_KEY_L.0);
-                //                     sail::queue::queue_tx(
-                //                         dummy_env.clone(),
-                //                         main_tx.clone(),
-                //                         key_l,
-                //                     );
-                //                 }
-                //                 KeyCode::KeyS => {
-                //                     // make step shorter
-                //                     let key_s = sail::sym_init(sl_reg, sail::K_CX_KEY_S.0);
-                //                     sail::queue::queue_tx(
-                //                         dummy_env.clone(),
-                //                         main_tx.clone(),
-                //                         key_s,
-                //                     );
-                //                 }
-                //                 KeyCode::KeyE => {
-                //                     // escape line in progress
-                //                     let key_e = sail::sym_init(sl_reg, sail::K_CX_KEY_E.0);
-                //                     sail::queue::queue_tx(
-                //                         dummy_env.clone(),
-                //                         main_tx.clone(),
-                //                         key_e,
-                //                     );
-                //                 }
-                //                 KeyCode::KeyK => {
-                //                     // kill last line drawn
-                //                     let key_k = sail::sym_init(sl_reg, sail::K_CX_KEY_K.0);
-                //                     sail::queue::queue_tx(
-                //                         dummy_env.clone(),
-                //                         main_tx.clone(),
-                //                         key_k,
-                //                     );
-                //                 }
-                //                 KeyCode::KeyM => {
-                //                     // switch drawing mode
-                //                     let key_m = sail::sym_init(sl_reg, sail::K_CX_KEY_M.0);
-                //                     sail::queue::queue_tx(
-                //                         dummy_env.clone(),
-                //                         main_tx.clone(),
-                //                         key_m,
-                //                     );
-                //                 }
-                //                 KeyCode::Space => {
-                //                     // enter the point
-                //                     let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
-                //                     sail::queue::queue_tx(
-                //                         dummy_env.clone(),
-                //                         main_tx.clone(),
-                //                         recrd,
-                //                     );
-                //                 }
-                //                 _ => {}
-                //             }
-                //         }
-                //     }
                 // DeviceEvent::MouseWheel {
                 //     delta: event::MouseScrollDelta::LineDelta(xdel, ydel),
                 // } => {}

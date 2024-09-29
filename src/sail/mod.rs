@@ -692,24 +692,25 @@ pub fn repl(stream_in: std::io::Stdin) {
     // TODO: consider stack-like environment per function
     // TODO: design module / namespace mechanisms
 
-    let region = unsafe { memmgt::acquire_mem_region(100000) };
+    let tact = thread::Tact::create(251);
+    let mut weft = thread::Weft::create(tact);
 
-    // Create persistent environment and symbol table
-    let (tbl, ctr, env) = prep_environment(region);
+    global_ctx_setup(weft.ctx_mut());
 
-    // Load standard / base definitions into environment and symbol table
-    environment_setup(region, tbl.clone(), ctr, env.clone());
+    let thr = thread::ThreadHull::summon(&weft, 10000, 100000, None);
 
-    let mut stack = eval::EvalStack::new(10000);
+    thread_env_setup(thr);
 
-    let mut ret_slot: *mut SlHead = ptr::null_mut();
-    let ret_addr: *mut *mut SlHead = &mut ret_slot;
+    // TODO: some kind of thread handle?
+    let thread_ref = unsafe { &mut *thr };
+
+    let region = thread_ref.region();
 
     loop {
         let mut input = String::new();
         stream_in.read_line(&mut input).expect("Failure");
 
-        let expr = match parser::parse(region, tbl.clone(), &input, false) {
+        let expr = match parser::parse(region, weft.ctx_mut().symtab(), &input, false) {
             Ok(out) => out,
             Err(err) => {
                 println!("{:?}\n", err);
@@ -717,13 +718,13 @@ pub fn repl(stream_in: std::io::Stdin) {
             }
         };
 
-        stack.start(ret_addr, env.clone(), expr);
+        thread_ref.load_direct(expr);
 
-        while stack.iter_once(region, tbl.clone()) {}
+        while thread_ref.advance() {}
 
         println!(
             "{}\n",
-            context(tbl.clone(), unsafe { SlHndl::from_raw(ret_slot).unwrap() }).to_string()
+            context(weft.ctx_mut().symtab(), thread_ref.result().unwrap())
         );
     }
 }
@@ -740,16 +741,22 @@ pub fn run_file(filename: &str) -> Result<String, SlErrCode> {
 
 /// Interprets a Sail expression, returning the formatted result
 pub fn interpret(code: &str, dolist: bool) -> Result<String, SlErrCode> {
-    let region = unsafe { memmgt::acquire_mem_region(1000000) };
+    let mut ctx = thread::Tact::create(251);
+    global_ctx_setup(&mut ctx);
 
-    let (tbl, ctr, env) = prep_environment(region);
+    let mut weft = thread::Weft::create(ctx);
+    let thr = thread::ThreadHull::summon(&weft, 10000, 100000, None);
+    thread_env_setup(thr);
 
-    environment_setup(region, tbl.clone(), ctr, env.clone());
+    let thread_ref = unsafe { &mut *thr };
 
-    let expr = parser::parse(region, tbl.clone(), code, dolist)?;
-    let result = eval::eval(region, tbl.clone(), env, expr);
+    thread_ref.load_from_text(code, dolist)?;
 
-    Ok(context(tbl, result).to_string())
+    while thread_ref.advance() {}
+
+    let result = thread_ref.result().unwrap();
+
+    Ok(context(weft.ctx_mut().symtab(), result).to_string())
 }
 
 pub fn global_ctx_setup(tact: &mut thread::Tact) {

@@ -4,12 +4,12 @@
 ; Project Euler Problem 1 Solution
 ; using tail recursion
 
-; run time, late March 2021: >70 seconds
-; run time, April 13 2021: ~4 seconds
-; run time, April 21 2021: ~3.3 seconds
-; run time, October 10 2022: ~0.02 seconds
-; run time, April 23 2023: ~0.09 seconds
-; run time, July 26 2023: ~1.7 seconds
+; run time, late Mar 2021: >70 s
+; run time, Apr 21 2021: ~3.3 s
+; run time, Oct 10 2022: ~0.02 s
+; run time, Apr 23 2023: ~0.09 s
+; run time, Jul 26 2023: ~1.7 s
+; run time, Sep 27 2024: ~0.23 s
 
 (def mult (fn [max acc cur]
               (if (= cur max)

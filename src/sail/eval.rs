@@ -755,46 +755,58 @@ impl Drop for EvalStack {
 
 #[cfg(test)]
 mod tests {
-    use crate::sail::{environment_setup, parser};
-
     use super::*;
 
     #[test]
     fn rec_check() {
-        let region = unsafe { memmgt::acquire_mem_region(20000) };
+        let t_tact = thread::Tact::create(251);
+        let mut t_weft = thread::Weft::create(t_tact);
 
-        let (tbl, ctr, env) = prep_environment(region);
+        super::super::global_ctx_setup(t_weft.ctx_mut());
 
-        environment_setup(region, tbl.clone(), ctr, env.clone());
+        let t_thr = thread::ThreadHull::summon(&t_weft, 10000, 20000, None);
 
-        let expr = parser::parse(region, tbl.clone(), &"(+ (- 8 6) 2)", false).unwrap();
+        super::super::thread_env_setup(t_thr);
 
-        let result = eval(region, tbl, env, expr);
+        let thread_ref = unsafe { &mut *t_thr };
+
+        thread_ref.load_from_text(&"(+ (- 8 6) 2)", false).unwrap();
+
+        while thread_ref.advance() {}
+
+        assert!(thread_ref.inert_p());
+
+        let result = thread_ref.result().unwrap();
 
         assert_eq!(i64_get(result), 4);
-
-        unsafe {
-            assert_eq!(0, (*((*region).head)).used);
-        }
     }
 
     #[test]
     fn do_check() {
-        let region = unsafe { memmgt::acquire_mem_region(20000) };
+        let t_tact = thread::Tact::create(251);
+        let mut t_weft = thread::Weft::create(t_tact);
 
-        let (tbl, ctr, env) = prep_environment(region);
+        super::super::global_ctx_setup(t_weft.ctx_mut());
 
-        environment_setup(region, tbl.clone(), ctr, env.clone());
+        let t_thr = thread::ThreadHull::summon(&t_weft, 10000, 20000, None);
 
-        let expr = parser::parse(region, tbl.clone(), &"(do (+ 1 2) (- 4 3))", false).unwrap();
+        super::super::thread_env_setup(t_thr);
 
-        let result = eval(region, tbl, env, expr);
+        let thread_ref = unsafe { &mut *t_thr };
+
+        thread_ref
+            .load_from_text(&"(do (+ 1 2) (- 4 3))", false)
+            .unwrap();
+
+        while thread_ref.advance() {}
+
+        assert!(thread_ref.inert_p());
+
+        let result = thread_ref.result().unwrap();
+
+        println!("{}", result.clone().refc_byte());
 
         assert_eq!(i64_get(result), 1);
-
-        unsafe {
-            assert_eq!(0, (*((*region).head)).used);
-        }
     }
 }
 

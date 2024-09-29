@@ -80,83 +80,78 @@ fn main() {
         display: frame.raw_display_handle(),
     };
 
-    let main_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
-    let rndr_region = unsafe { sail::memmgt::acquire_mem_region(1000000) };
-    let ctxt_region = unsafe { sail::memmgt::acquire_mem_region(1000) };
+    let mut global_interact = sail::thread::Tact::create(251);
+    sail::global_ctx_setup(&mut global_interact);
 
-    let (sl_tbl, ty_ctr, main_env, rndr_env) = {
-        let (tbl, ctr, m_env) = sail::prep_environment(main_region);
-        sail::environment_setup(main_region, tbl.clone(), ctr.clone(), m_env.clone());
+    // data structure that accounts for the global interaction
+    // state, as well as all threads, using an array of pointers
+    // to pinned thread hulls
+    let mut global_weft = sail::thread::Weft::create(global_interact);
 
-        let r_env = sail::env_create(rndr_region, Some(m_env.clone()));
+    let main_thr = sail::thread::ThreadHull::summon(&global_weft, 10000, 1 << 20, None);
+    sail::thread_env_setup(main_thr);
+    let main_thr_ref = unsafe { &mut *main_thr };
 
-        (tbl, ctr, m_env, r_env)
-    };
+    let main_qin = main_thr_ref.queue_inlet();
 
-    let (mr_send, mr_recv) = sail::queue::queue_create(main_region, rndr_region);
-    let (cm_send, cm_recv) = sail::queue::queue_create(ctxt_region, main_region);
-    let (cr_send, cr_recv) = sail::queue::queue_create(ctxt_region, rndr_region);
+    let rndr_thr = main_thr_ref.spawn(None, None);
+    let rndr_thr_ref = unsafe { &mut *rndr_thr };
 
-    sail::env_scope_ins_by_id(main_region, main_env.clone(), sail::S_MR_SEND.0, mr_send);
-    sail::env_scope_ins_by_id(main_region, main_env.clone(), sail::S_CM_RECV.0, cm_recv);
+    let rndr_qin = rndr_thr_ref.queue_inlet();
 
-    sail::env_scope_ins_by_id(rndr_region, rndr_env.clone(), sail::S_MR_RECV.0, mr_recv);
-    sail::env_scope_ins_by_id(rndr_region, rndr_env.clone(), sail::S_CR_RECV.0, cr_recv);
+    let rdr_tgt_obj = sail::warp_hdl_init(main_thr_ref.region(), rndr_qin);
+    sail::env_scope_ins_by_id(
+        main_thr_ref.region(),
+        main_thr_ref.top_env(),
+        sail::S_RDR_TGT.0,
+        rdr_tgt_obj,
+    );
 
-    let fr_dims = sail::arrvec_init::<u32>(main_region, sail::T_U32.0, 2, &[0, 0]);
-    let cur_pos = sail::arrvec_init::<f32>(main_region, sail::T_F32.0, 2, &[0.0, 0.0]);
+    let ctxt_region = sail::memmgt::acquire_mem_region(1000);
+
+    let fr_dims = sail::arrvec_init::<u32>(main_thr_ref.region(), sail::T_U32.0, 2, &[0, 0]);
+    let cur_pos = sail::arrvec_init::<f32>(main_thr_ref.region(), sail::T_F32.0, 2, &[0.0, 0.0]);
 
     sail::env_scope_ins_by_id(
-        main_region,
-        main_env.clone(),
+        main_thr_ref.region(),
+        main_thr_ref.top_env(),
         sail::S_FR_DIMS.0,
         fr_dims.clone(),
     );
     sail::env_scope_ins_by_id(
-        main_region,
-        main_env.clone(),
+        main_thr_ref.region(),
+        main_thr_ref.top_env(),
         sail::S_CUR_POS.0,
         cur_pos.clone(),
     );
 
-    let (main_region, rndr_region, ctxt_region) = (
-        main_region as usize,
-        rndr_region as usize,
-        ctxt_region as usize,
-    );
+    let ctxt_region = ctxt_region as usize;
 
-    let (sl_tb_rd, ty_ct_rd) = (sl_tbl.clone(), ty_ctr.clone());
+    let (sl_main_thr, sl_rndr_thr) = (main_thr as usize, rndr_thr as usize);
 
-    // This thread handles all rendering to the graphical frame: the output interface
+    // This thread renders to the graphical frame: the output interface
     let render = thread::Builder::new()
         .name("render".to_string())
-        .spawn(move || {
-            graphics::render_loop(
-                NAME,
-                SIZE,
-                handles,
-                rndr_region,
-                sl_tb_rd,
-                ty_ct_rd,
-                rndr_env,
-            )
-        })
+        .spawn(move || graphics::render_loop(NAME, SIZE, handles, sl_rndr_thr))
         .unwrap();
 
     // This thread manages the program, treating the actual main thread as a source of user input
     let manager = thread::Builder::new()
         .name("manager".to_string())
-        .spawn(move || manager_loop(frame, main_region, sl_tbl, ty_ctr, main_env))
+        .spawn(move || manager_loop(frame, sl_main_thr))
         .unwrap();
+
+    let (sl_main_qin, sl_rndr_qin) = (main_qin as usize, rndr_qin as usize);
 
     // This loop gets input from the user and detects changes to the context
     // Completely takes over the main thread; no code after this will run
     context::run_loop(
         event_loop,
         vec![manager, render].into_iter(),
+        global_weft,
         ctxt_region,
-        cm_send,
-        cr_send,
+        sl_main_qin,
+        sl_rndr_qin,
         fr_dims,
         cur_pos,
     );

@@ -19,8 +19,7 @@
 
 (def rndr (fn []
 
-(def c-input ())
-(def m-input ())
+(def input ())
 
 (def alive #T)
 
@@ -31,7 +30,7 @@
 
 (def line-col (arr-vec-make $f32 3 (as-f32 0.0)))
 
-(def get-q-next (fn [q] (def out ()) (while (eq out ()) (set out (qrx q))) out))
+(def get-q-next (fn [] (def out ()) (while (eq out ()) (set out (rest (qrx)))) out))
 
 ;(bg-col engine (as-f32 0.0) (as-f32 0.0) (as-f32 0.0))
 (redraw engine)
@@ -51,56 +50,53 @@
 
                    (if track (do (pop-line engine 0) (set track #F)) ()))
 
-       (set m-input (qrx mr-recv))
-       (if (eq m-input :line-add)
+       (set input (rest (qrx)))
+       (if (eq input :line-add)
            (do (if track (do (pop-line engine 0) (set track #F)) ())
-               (arr-vec-set line 0 (get-q-next mr-recv))
-               (arr-vec-set line 1 (get-q-next mr-recv))
-               (arr-vec-set line 2 (get-q-next mr-recv))
-               (arr-vec-set line 3 (get-q-next mr-recv))
+               (arr-vec-set line 0 (get-q-next))
+               (arr-vec-set line 1 (get-q-next))
+               (arr-vec-set line 2 (get-q-next))
+               (arr-vec-set line 3 (get-q-next))
                (add-line engine 0 line line-col)
                (redraw engine))
 
-       (if (eq m-input :line-pop)
+       (if (eq input :line-pop)
            (do (pop-line engine 0) (redraw engine))
 
-       (if (eq m-input :line-col)
-           (do (arr-vec-set line-col 0 (get-q-next mr-recv))
-               (arr-vec-set line-col 1 (get-q-next mr-recv))
-               (arr-vec-set line-col 2 (get-q-next mr-recv)))
+       (if (eq input :line-col)
+           (do (arr-vec-set line-col 0 (get-q-next))
+               (arr-vec-set line-col 1 (get-q-next))
+               (arr-vec-set line-col 2 (get-q-next)))
 
-       (if (eq m-input :back-col)
-           (do (def r (get-q-next mr-recv))
-               (def g (get-q-next mr-recv))
-               (def b (get-q-next mr-recv))
+       (if (eq input :back-col)
+           (do (def r (get-q-next))
+               (def g (get-q-next))
+               (def b (get-q-next))
                (bg-col engine r g b)
                (redraw engine))
 
-       (if (eq m-input :clear)
+       (if (eq input :clear)
            (do (clear engine)
                (redraw engine))
 
-       (if (eq m-input :redraw)
+       (if (eq input :redraw)
            (do (redraw engine))
 
-       ()))))))
-
-       (set c-input (qrx cr-recv))
-       (if (eq c-input :cx-dstr)
+       (if (eq input :cx-dstr)
        (do
            (print "destroying render")
            (set alive #F))
 
-       (if (eq c-input :cx-resz)
+       (if (eq input :cx-resz)
            (do (frame-size engine (arr-vec-get fr-dims 0) (arr-vec-get fr-dims 1)))
 
-       (if (eq c-input :cx-rdrw)
+       (if (eq input :cx-rdrw)
            (do (redraw engine))
 
-       (if (eq c-input :cx-crmv)
+       (if (eq input :cx-crmv)
            (do (if track (redraw engine) ()))
 
-       ()))))
+       ()))))))))))
        )
 
 (print "render end")

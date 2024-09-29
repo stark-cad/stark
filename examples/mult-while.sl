@@ -4,10 +4,11 @@
 ; Project Euler Problem 1 Solution
 ; using Sail's while form
 
-; run time, April 21 2021: ~0.07 seconds
-; run time, October 10 2022: negligible
-; run time, April 23 2023: ~0.01 seconds
-; run time, July 26 2023: ~0.05 seconds
+; run time, Apr 21 2021: ~0.07 s
+; run time, Oct 10 2022: negligible
+; run time, Apr 23 2023: ~0.01 s
+; run time, Jul 26 2023: ~0.05 s
+; run time, Sep 27 2024: ~0.01 s
 
 (def max 1000)
 (def acc 0)
