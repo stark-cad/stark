@@ -1,0 +1,18 @@
+STARK Repository Notice Information
+
+Copyright © 2024 Matthew Rothlisberger
+
+You are required to preserve these notices in full with any unmodified
+distribution of the STARK source code.
+
+You are permitted to redistribute these notices with distributions of
+the STARK source code. You are also permitted to propagate the
+copyright and license information in accordance with the GNU Affero
+General Public License, version 3.
+
+You may not change these notices or use their copyrightable portions
+for any other purpose.
+
+The STARK name and all trade names and marks associated with STARK are
+property of Matthew Rothlisberger. See the Trademark Permissions file
+for usage details.

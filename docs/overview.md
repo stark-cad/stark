@@ -1,32 +1,49 @@
 
 # Table of Contents
 
-1.  [STARK](#org1b40d5a)
-    1.  [Explanation](#orgc17e48c)
-    2.  [Files](#orgecfa552)
-        1.  [`Cargo.toml`](#org1a5f32e)
-        2.  [`Makefile`](#orga9f340f)
-        3.  [`examples`](#org3e49801)
-        4.  [`scripts`](#org0a8e64c)
-        5.  [`src`](#orgb5173ae)
-        6.  [`tools`](#orgdd47a46)
+1.  [STARK](#org3fe822d)
+    1.  [Explanation](#org0301cf9)
+    2.  [Files](#org47c032f)
+        1.  [`Cargo.toml`](#org124757d)
+        2.  [`Makefile`](#orgbff8dd4)
+        3.  [`examples`](#org6f6a81a)
+        4.  [`scripts`](#org97473f3)
+        5.  [`src`](#org986b8d9)
+        6.  [`tools`](#orgb131333)
+
+<!--
+STARK, a system for computer augmented design.
+
+SPDX-FileCopyrightText: © 2021 Matthew Rothlisberger
+SPDX-License-Identifier: CC-BY-SA-4.0
+
+STARK documentation is licensed under the terms of the Creative
+Commons Attribution-ShareAlike 4.0 International license. See the
+top-level LICENSES directory for the license text.
+
+The STARK name and all associated trademarks are property of Matthew
+Rothlisberger. Separate limitations apply to any use of these
+trademarks. See the Trademark Permissions file for usage details.
+
+Find code copyright information in the top-level COPYRIGHT file.
+-->
 
 
-<a id="org1b40d5a"></a>
+<a id="org3fe822d"></a>
 
 # STARK
 
 This overview applies to v0.1.0 of STARK.
 
 
-<a id="orgc17e48c"></a>
+<a id="org0301cf9"></a>
 
 ## Explanation
 
 A prototype of a malleable tool for computer augmented design.
 
 
-<a id="orgecfa552"></a>
+<a id="org47c032f"></a>
 
 ## Files
 
@@ -34,7 +51,7 @@ All the files I have written for STARK are in this repository; I may
 move some dependencies in as Git submodules in the future.
 
 
-<a id="org1a5f32e"></a>
+<a id="org124757d"></a>
 
 ### `Cargo.toml`
 
@@ -47,7 +64,7 @@ which may vary between compilation targets. This can be altered using
 a shell script included in the repository.
 
 
-<a id="orga9f340f"></a>
+<a id="orgbff8dd4"></a>
 
 ### `Makefile`
 
@@ -57,7 +74,7 @@ command. Currently it contains only a recipe to document STARK's Rust
 code and copy the documentation pages to the STARK website source.
 
 
-<a id="org3e49801"></a>
+<a id="org6f6a81a"></a>
 
 ### `examples`
 
@@ -82,7 +99,7 @@ supports.
     added to Sail shortly.
 
 
-<a id="org0a8e64c"></a>
+<a id="org97473f3"></a>
 
 ### `scripts`
 
@@ -132,7 +149,7 @@ respectively, and communicate through queues.
     interface to the rest of the program is in an early state.
 
 
-<a id="orgb5173ae"></a>
+<a id="org986b8d9"></a>
 
 ### `src`
 
@@ -977,7 +994,7 @@ Rust. Many low level Sail functions are also written in Rust.
     its constituent threads interact.
 
 
-<a id="orgdd47a46"></a>
+<a id="orgb131333"></a>
 
 ### `tools`
 

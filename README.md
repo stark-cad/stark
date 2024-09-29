@@ -1,7 +1,24 @@
+<!--
+STARK, a system for computer augmented design.
+
+SPDX-FileCopyrightText: © 2021 Matthew Rothlisberger
+SPDX-License-Identifier: CC-BY-SA-4.0
+
+STARK documentation is licensed under the terms of the Creative
+Commons Attribution-ShareAlike 4.0 International license. See the
+top-level LICENSES directory for the license text.
+
+The STARK name and all associated trademarks are property of Matthew
+Rothlisberger. Separate limitations apply to any use of these
+trademarks. See the Trademark Permissions file for usage details.
+
+Find code copyright information in the top-level COPYRIGHT file.
+-->
+
 ![img](icons/logo.png)
 
 
-<a id="org2f3e409"></a>
+<a id="org8b6205e"></a>
 
 # STARK
 
@@ -24,7 +41,7 @@ renderer). Diagrams may be drawn using Sail code, the mouse or
 keyboard alone, or both together.
 
 
-<a id="org9331628"></a>
+<a id="org01e53a1"></a>
 
 ## Caution
 
@@ -36,7 +53,7 @@ much appreciated. If you do choose to install STARK and try it out,
 thank you!
 
 
-<a id="orgeac3938"></a>
+<a id="org4b6641d"></a>
 
 ## Installation
 
@@ -47,7 +64,7 @@ will be distributed in the future, but for now you must compile the
 program yourself.
 
 
-<a id="orgb9c8b7d"></a>
+<a id="org910dc5d"></a>
 
 ### Linux
 
@@ -102,7 +119,7 @@ and run STARK.
     white background appear. Success!
 
 
-<a id="org28dc871"></a>
+<a id="orgb8f5318"></a>
 
 ### Windows
 
@@ -167,7 +184,7 @@ and run STARK.
     white background appear. Success!
 
 
-<a id="org5497488"></a>
+<a id="org8b5761f"></a>
 
 ### Other
 
@@ -176,7 +193,7 @@ a supported graphics API. If you have access to another type of system
 and want to try building STARK, try it and let me know how it goes.
 
 
-<a id="org3adff55"></a>
+<a id="org02ae1cd"></a>
 
 ## Usage
 
@@ -232,7 +249,7 @@ program):
     according to the current mode
 
 
-<a id="org286df97"></a>
+<a id="org1fa9bc4"></a>
 
 ### Issues
 
@@ -242,7 +259,7 @@ program):
     crash the program
 
 
-<a id="org69fe064"></a>
+<a id="orgd816b4f"></a>
 
 ## Sail
 
@@ -305,14 +322,14 @@ There are many improvements to be made throughout Sail, and it will
 change frequently.
 
 
-<a id="orge5f5faa"></a>
+<a id="org799d8d5"></a>
 
 ## Other
 
 [Full overview of all files comprising STARK.](docs/overview.md)
 
 
-<a id="org7f7c7a9"></a>
+<a id="org456da80"></a>
 
 ## Roadmap
 
@@ -326,12 +343,17 @@ STARK has a long way to go. Some upcoming improvements:
 -   3D chunk rendering
 
 
-<a id="orgb0be57e"></a>
+<a id="org944c3d5"></a>
 
 ## License
 
 STARK is licensed under the terms of the GNU Affero General Public
-License. See the LICENSE file for the license text.
+License, version 3 only.
+
+The STARK name and all associated trademarks are property of Matthew
+Rothlisberger.
+
+See the LICENSES directory for full license text.
 
 Find full copyright information in the COPYRIGHT file.
 

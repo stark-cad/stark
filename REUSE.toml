@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: © 2024 Matthew Rothlisberger
+# SPDX-License-Identifier: LicenseRef-STARK-Notices
+
+version = 1
+
+[[annotations]]
+path = "Cargo.lock"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "fonts/Free*.otf"
+SPDX-FileCopyrightText = "2002 GNU Freefont contributors"
+SPDX-License-Identifier = "GPL-3.0-only"
+
+[[annotations]]
+path = "icons/*"
+SPDX-FileCopyrightText = "2021 Matthew Rothlisberger"
+SPDX-License-Identifier = "LicenseRef-STARK-Trademarks"
+
+[[annotations]]
+path = "COPYRIGHT"
+SPDX-License-Identifier = "LicenseRef-STARK-Notices"
+
+[[annotations]]
+path = "AUTHORS"
+SPDX-License-Identifier = "LicenseRef-STARK-Notices"
+

@@ -1,3 +1,6 @@
+; SPDX-FileCopyrightText: © 2021 Matthew Rothlisberger
+; SPDX-License-Identifier: AGPL-3.0-only
+
 ; Project Euler Problem 1 Solution
 ; using tail recursion
 

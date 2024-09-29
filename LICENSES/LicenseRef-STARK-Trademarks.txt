@@ -1,0 +1,69 @@
+STARK Trademark Permissions
+
+Copyright © 2024 Matthew Rothlisberger
+
+Matthew Rothlisberger is the exclusive copyright owner and licensor of
+STARK and all associated trade names, trademarks, and service marks.
+
+These include the STARK name, the Sail name, the STARK logo composed
+of 17 quadrilaterals, and the triangle mark composed of 3
+parallelograms.
+
+
+You are granted permission to use STARK names to truthfully refer to
+STARK and Sail in speech or writing. You are also permitted to use
+STARK logos to truthfully refer to STARK and Sail in visual media.
+
+If you do, you must not suggest that you are affiliated with the STARK
+project. It is recommended to include a trademark attribution notice.
+
+Ensure that any STARK logo is visually distinct from the rest of your
+document, and is clearly a reference, not a mark of affiliation.
+
+
+You may also truthfully explain that your code is written in Sail,
+that your software is an extension for the STARK system, that your
+software is compatible with STARK, or that your product was designed
+using STARK.
+
+If you do, you must include a statement that you and your project are
+not officially associated with the STARK project.
+
+
+All other uses of STARK names and trademarks require the prior written
+permission of Matthew Rothlisberger.
+
+You must not modify the STARK names or marks, use them in your names,
+combine them with other symbols or words, incorporate them into a
+tagline or slogan, or use confusingly similar names or marks.
+
+You must not use STARK names or marks on any product for sale, use
+them commercially except when limited to a truthful and descriptive
+reference, or use them to promote any unrelated software or product.
+
+You must not display STARK trademarks more prominently than your own
+marks, or incorrectly imply affiliation with the STARK project.
+
+
+The STARK name should be written using all uppercase
+characters. All-lowercase (as in 'stark') is acceptable in some
+situations, such as when discussing modules of the STARK source code.
+
+The Sail name should be written with an uppercase 'S'. Again,
+all-lowercase is acceptable in some situations.
+
+Do not use these names in plural or possessive forms. Prefer to use
+them as adjectives.
+
+
+If you create a modified version of STARK or any associated software;
+you must not use any of the STARK names or trademarks in its code,
+documentation, or promotional material; except when limited to a
+truthful and descriptive reference, which must not include logos.
+
+If you include such a reference, you must include with equal
+prominence a statement that you and your modified version are not
+officially associated with the STARK project.
+
+Your version must be clearly marked as different, including by using
+dissimilar names and marks.

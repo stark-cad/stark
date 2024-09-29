@@ -1,10 +1,13 @@
 // STARK, a system for computer augmented design.
-// Copyright (C) 2021 Matthew Rothlisberger
+
+// SPDX-FileCopyrightText: © 2022 Matthew Rothlisberger
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // STARK is licensed under the terms of the GNU Affero General Public
-// License. See the top level LICENSE file for the license text.
+// License version 3. See the top-level LICENSES directory for the
+// license text.
 
-// Find full copyright information in the top level COPYRIGHT file.
+// Find full copyright information in the top-level COPYRIGHT file.
 
 // <>
 

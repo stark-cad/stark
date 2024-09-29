@@ -1,4 +1,5 @@
-# This makefile is intended to have more uses in the future
+# SPDX-FileCopyrightText: © 2021 Matthew Rothlisberger
+# SPDX-License-Identifier: AGPL-3.0-only
 
 .PHONY: doc
 

@@ -3,17 +3,19 @@ This notice applies to STARK, a system for computer augmented design.
 STARK (TM) is software composed of all source code files in the
 repository which contains this notice.
 
-Copyright (C) 2021 Matthew Rothlisberger
+Copyright © 2020 Matthew Rothlisberger
 
 Matthew Rothlisberger is the exclusive copyright owner and licensor of
-STARK and all associated trade names, trademarks, and service
-marks. For more information, see the AUTHORS file.
+STARK and all associated trade names, trademarks, and service marks.
+
+For author information, see the AUTHORS file. For trademark usage
+information, see the Trademark Permissions file in the LICENSES
+directory.
 
 
 STARK is free software: you can redistribute it and / or modify it
 under the terms of the GNU Affero General Public License as published
-by the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+by the Free Software Foundation, version 3 of the License only.
 
 STARK is distributed in the hope that it will be useful, but WITHOUT
 ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -21,7 +23,7 @@ FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
 License for more details.
 
 You should have received a copy of the GNU Affero General Public
-License along with STARK (in the LICENSE file). If not, see
+License along with STARK (in the LICENSES directory). If not, see
 <https://www.gnu.org/licenses/>.
 
 
@@ -44,7 +46,7 @@ General Public License:
 
     - You are not granted any rights to use any trade names,
       trademarks, or service marks associated with STARK, for any
-      purpose, without the express permission of Matthew
+      purpose, without the express written permission of Matthew
       Rothlisberger.
 
     - You are required to indemnify and to hold harmless licensors and
@@ -54,5 +56,5 @@ General Public License:
       those licensors and authors.
 
 The above supplemental terms apply, along with the GNU Affero General
-Public License, to all versions of STARK, modified or unmodified,
-except as explicitly permitted by Matthew Rothlisberger.
+Public License version 3, to all versions of STARK, modified or
+unmodified, except as explicitly permitted by Matthew Rothlisberger.
