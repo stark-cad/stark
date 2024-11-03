@@ -229,6 +229,37 @@ sail_fn! {
         // return out;
     }
 
+    "th-spawn" [fun] {
+        let reg = unsafe { (*_thr).region() };
+        let new = unsafe { (*_thr).spawn(None, None) };
+
+        let nr = unsafe { (*new).region() };
+        let to_apply = unsafe {
+            SlHndl::from_raw_unchecked(super::structure_copy(nr, fun))
+        };
+
+        unsafe { (*new).load_proc_immed(to_apply) };
+
+        let temp_spwn_addr = new as usize;
+
+        // TODO: track and utilize pool of OS threads
+        std::thread::spawn(move || super::thread::exec_thread(temp_spwn_addr));
+
+        let nq = unsafe { (*new).queue_inlet() };
+
+        let send_tgt = super::warp_hdl_init(reg, nq);
+        let new_hdl = super::thread_ref_init(reg, new);
+
+        set_next_list_elt(_env, new_hdl.clone(), send_tgt);
+
+        new_hdl
+    }
+
+    "th-join" [thref] {
+        let reg = unsafe { (*_thr).region() };
+        super::thread_ref_join(reg, thref)
+    }
+
     "qtx" [sender, item] {
         let id = unsafe { (*_thr).id };
 
@@ -376,7 +407,7 @@ sail_fn! {
         out
     }
 
-    "vec_push" [target, item] {
+    "vec-push" [target, item] {
         coretypck!(target ; VecStd);
 
         super::stdvec_push(target.clone(), item);

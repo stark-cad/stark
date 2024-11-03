@@ -22,7 +22,7 @@ use std::pin::Pin;
 use super::{eval, memmgt, parser, queue};
 use super::{SlHndl, Stab, Styc};
 
-/// Global context for inter-thread and human interaction
+/// Global context data for inter-thread and human interaction
 pub struct Tact {
     /// Table associating symbol names with symbol IDs
     symtab: Stab,
@@ -59,23 +59,55 @@ impl Tact {
 // threads and OS threads, in order to evenly and efficiently advance
 // all active Sail threads
 
+pub struct SlThreadRef {
+    raw: *mut ThreadHull,
+}
+
+// NOTE: once Sail threads are added to the weft (so as soon as they
+// are created), they should "magically" / automatically run
+
+// code which runs in each OS thread to advance Sail threads
+fn worker_runtime(th_list: &Vec<*mut ThreadHull>) {
+    // TODO: permit remote termination
+    loop {
+        for t in th_list {
+            unsafe {
+                // TODO: somehow communicate when thread done
+                (**t).advance();
+            }
+        }
+    }
+}
+
+// code which runs in main thread to apportion work
+fn scheduler(weft: &mut Weft) {
+    // sail threads may appear in the weft at any time
+
+    // check that all sail threads are assigned to a hardware thread
+
+    // for any unassigned threads, assign them in a balanced manner
+
+    // remove assignments of any finished sail threads
+}
+
 pub struct Weft {
     tact: Tact,
-    nxt_tid: usize,
 
-    threads: Vec<Pin<Box<ThreadHull>>>,
-
+    nxt_sl_thr_id: usize,
+    sl_threads: Vec<Pin<Box<ThreadHull>>>,
     append_lock: u8,
     // flags: Vec<u8>,
     // arcs: Vec<u32>,
+
+    // os_threads: Vec<std::thread::ThreadId>,
 }
 
 impl Weft {
     pub fn create(tact: Tact) -> Self {
         Self {
             tact,
-            nxt_tid: 0,
-            threads: Vec::new(),
+            nxt_sl_thr_id: 0,
+            sl_threads: Vec::new(),
             append_lock: false as u8,
         }
     }
@@ -90,7 +122,7 @@ impl Weft {
 
     fn get_tid(&self) -> usize {
         unsafe {
-            std::intrinsics::atomic_xadd_acqrel((&self.nxt_tid as *const usize).cast_mut(), 1)
+            std::intrinsics::atomic_xadd_acqrel((&self.nxt_sl_thr_id as *const usize).cast_mut(), 1)
         }
     }
 
@@ -103,18 +135,18 @@ impl Weft {
                 std::hint::spin_loop();
             }
 
-            let new_idx = self.threads.len();
-            this.threads.push(thread_hull);
+            let new_idx = self.sl_threads.len();
+            this.sl_threads.push(thread_hull);
 
             std::intrinsics::atomic_store_release(lock, false as u8);
 
-            Pin::into_inner_unchecked(Pin::as_mut(&mut this.threads[new_idx])) as *mut ThreadHull
+            Pin::into_inner_unchecked(Pin::as_mut(&mut this.sl_threads[new_idx])) as *mut ThreadHull
         }
     }
 
     fn rmv_thread(&self, thread_ptr: *mut ThreadHull) {
         unsafe {
-            let idx = match self.threads.iter().enumerate().find(|(_, b)| {
+            let idx = match self.sl_threads.iter().enumerate().find(|(_, b)| {
                 Pin::into_inner_unchecked((*b).as_ref()) as *const _ as usize == thread_ptr as usize
             }) {
                 Some((i, _)) => i,
@@ -128,7 +160,7 @@ impl Weft {
                 std::hint::spin_loop();
             }
 
-            let removed = this.threads.remove(idx);
+            let removed = this.sl_threads.remove(idx);
 
             std::intrinsics::atomic_store_release(lock, false as u8);
 
@@ -191,6 +223,7 @@ impl ThreadHull {
                 (&raw mut (*ptr).weft).write(weft);
 
                 (&raw mut (*ptr).reg).write(memmgt::Region::new(r_zone_size));
+                (*ptr).reg.init();
 
                 (&raw mut (*ptr).qin).write(queue::Inlet::new(&raw mut (*ptr).reg));
                 (&raw mut (*ptr).tenv).write(super::env_create(&raw mut (*ptr).reg, env_parent));
@@ -221,6 +254,7 @@ impl ThreadHull {
                 (&raw mut (*ptr).reg).write(memmgt::Region::new(
                     r_zone_size.unwrap_or(self.reg.zone_size),
                 ));
+                (*ptr).reg.init();
 
                 (&raw mut (*ptr).qin).write(queue::Inlet::new(&raw mut (*ptr).reg));
                 (&raw mut (*ptr).tenv).write(super::env_create(
@@ -266,13 +300,18 @@ impl ThreadHull {
         Ok(())
     }
 
-    pub fn load_proc_by_sym(&mut self, sym: u32) {
-        let mut proc = super::env_lookup_by_id(self.top_env(), sym).expect("symbol not bound");
+    pub fn load_proc_immed(&mut self, mut proc: SlHndl) {
         coretypck!(proc ; ProcLambda);
         assert!(self.eval.is_empty());
+
         self.eval
             .push_frame_head(&mut self.out, eval::Opcode::Apply, self.top_env());
         self.eval.push(proc);
+    }
+
+    pub fn load_proc_by_sym(&mut self, sym: u32) {
+        let proc = super::env_lookup_by_id(self.top_env(), sym).expect("symbol not bound");
+        self.load_proc_immed(proc)
     }
 
     // TODO: somehow assert that code to run is in local region
@@ -305,6 +344,11 @@ impl ThreadHull {
         }
     }
 
+    // TODO: this could be done much better (get it?)
+    pub fn done_p(&self) -> bool {
+        self.inert_p() && self.result().is_some()
+    }
+
     // pub fn insert_native_procs(&mut self, fns: &[(&str, super::NativeFn, u16)]) {
     //     super::insert_native_procs(self.region(), self.context().symtab(), self.top_env(), fns)
     // }
@@ -317,7 +361,7 @@ impl ThreadHull {
 
 /// Use with std::thread::spawn to take over an OS thread and run to
 /// completion of a Sail thread (simplest possible scheduler)
-fn exec_thread(ptr: usize) {
+pub fn exec_thread(ptr: usize) {
     let hull = ptr as *mut ThreadHull;
     let th_ref = unsafe { &mut *hull };
 

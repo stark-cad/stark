@@ -1908,6 +1908,7 @@ pub fn core_eq(mut fst: SlHndl, mut lst: SlHndl) -> bool {
             }
             Some(CoreType::Nil) => coretypp!(lst ; Ref) && ref_get(lst).is_none(),
             Some(typ) if typ != lst.core_type().unwrap() => false,
+            Some(CoreType::Bool) => bool_get(fst) == bool_get(lst),
             Some(CoreType::Symbol) => sym_get_id(fst) == sym_get_id(lst),
             Some(CoreType::VecStr) => string_get(fst) == string_get(lst),
             _ => false,

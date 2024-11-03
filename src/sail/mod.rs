@@ -161,6 +161,32 @@ fn warp_hdl_send(mut loc: SlHndl, msg: SlHndl, from: usize) {
     .transmit(from, msg)
 }
 
+fn thread_ref_init(reg: *mut memmgt::Region, tgt: *mut thread::ThreadHull) -> SlHndl {
+    assert!(!tgt.is_null());
+    unsafe {
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 8, T_THR_REF_ID.0));
+        write_field_unchecked(out.clone(), 0, tgt as u64);
+        out
+    }
+}
+
+fn thread_ref_join(reg: *mut memmgt::Region, mut loc: SlHndl) -> SlHndl {
+    assert_eq!(loc.type_id(), T_THR_REF_ID.0);
+
+    let addrs: u64 = read_field(loc, 0);
+
+    let th_ref = unsafe {
+        (addrs as *mut thread::ThreadHull)
+            .as_mut()
+            .expect("null thread reference")
+    };
+
+    // TODO: real thread management without spinloops
+    while !th_ref.done_p() {}
+
+    unsafe { SlHndl::from_raw_unchecked(structure_copy(reg, th_ref.result().unwrap())) }
+}
+
 /// Basic error codes for Sail faults
 #[derive(Debug)]
 #[repr(u16)]
@@ -339,6 +365,7 @@ incl_symbols! {
     T_ENG_HDL     "eng-hdl" Type;
     T_ENV         "env"     Type;
     T_ENV_LYR     "env-lyr" Type;
+    T_THR_REF     "thr-hdl" Type;
     SP_DEF        "def"     Basic;
     SP_DO         "do"      Basic;
     SP_EVAL       "eval"    Basic;
@@ -389,7 +416,8 @@ macro_rules! incl_types {
 incl_types! {
     TID_COUNT:
     T_FRM_HDL_ID  T_FRM_HDL;
-    T_ENG_HDL_ID  T_ENG_HDL
+    T_ENG_HDL_ID  T_ENG_HDL;
+    T_THR_REF_ID  T_THR_REF
 }
 
 pub fn structure_copy(tgt: *mut memmgt::Region, root: SlHndl) -> *mut SlHead {

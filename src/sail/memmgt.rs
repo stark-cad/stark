@@ -299,12 +299,14 @@ unsafe fn acquire_raw(reg: *mut Region, sz: u32) -> *mut u8 {
     let mut zone_ref = region_ref.head.as_mut().unwrap();
 
     let ptr = loop {
-        // advance if definitely no space
-        if zone_ref.used + sz >= region_ref.zone_size {
-            // zone_ref = zone_advance(region_ref, zone_ref)
-        }
+        // // advance if definitely no space
+        // if zone_ref.used + sz >= region_ref.zone_size {
+        //     // zone_ref = zone_advance(region_ref, zone_ref)
+        // }
+
         // try the free tree
-        else if let Some(ptr) = free_tree_seek(zone_ref, sz) {
+        /*else*/
+        if let Some(ptr) = free_tree_seek(zone_ref, sz) {
             break ptr;
         }
         // try empty space
@@ -1401,14 +1403,14 @@ pub struct Region {
 
 impl Region {
     pub fn new(zone_size: u32) -> Self {
-        let mut out = Self {
+        Self {
             zone_size,
             head: ptr::null_mut(),
-        };
+        }
+    }
 
-        unsafe { new_mem_zone(&mut out) };
-
-        out
+    pub fn init(&mut self) {
+        unsafe { new_mem_zone(self) };
     }
 }
 

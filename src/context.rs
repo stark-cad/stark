@@ -254,6 +254,8 @@ pub fn run_loop<Ij: 'static>(
             }
         })
         .unwrap();
+
+    drop(sl_weft);
 }
 
 /// Retrieves an icon from a PNG file and outputs it in the format desired by `winit`
