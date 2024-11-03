@@ -29,7 +29,6 @@ use winit::{
     event::{ElementState, Event, KeyEvent, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     keyboard::{Key, NamedKey},
-    window::{self, WindowBuilder},
 };
 
 use std::fs::File;
@@ -43,11 +42,13 @@ pub fn init_context(
     height: u32,
 ) -> (Frame, EventLoop<()>) {
     let event_loop = EventLoop::new().unwrap();
-    let frame = WindowBuilder::new()
-        .with_title(title)
-        .with_window_icon(get_icon(icon_file))
-        .with_inner_size(dpi::Size::Physical(dpi::PhysicalSize { width, height }))
-        .build(&event_loop)
+    let frame = event_loop
+        .create_window(
+            Frame::default_attributes()
+                .with_inner_size(dpi::Size::Physical(dpi::PhysicalSize { width, height }))
+                .with_title(title)
+                .with_window_icon(get_icon(icon_file)),
+        )
         .unwrap();
 
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -259,7 +260,7 @@ pub fn run_loop<Ij: 'static>(
 }
 
 /// Retrieves an icon from a PNG file and outputs it in the format desired by `winit`
-fn get_icon(filename: &str) -> Option<window::Icon> {
+fn get_icon(filename: &str) -> Option<winit::window::Icon> {
     let decoder = png::Decoder::new(File::open(filename).unwrap());
     let mut reader = decoder.read_info().unwrap();
     let (w, h) = (reader.info().width, reader.info().height);
@@ -267,5 +268,5 @@ fn get_icon(filename: &str) -> Option<window::Icon> {
 
     reader.next_frame(&mut buf).unwrap();
 
-    Some(window::Icon::from_rgba(buf, w, h).unwrap())
+    Some(winit::window::Icon::from_rgba(buf, w, h).unwrap())
 }

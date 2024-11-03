@@ -60,7 +60,7 @@ pub fn manager_loop(frame: Frame, sl_thr_ptr: usize) {
 
     let thread_ref = unsafe { &mut *sl_thr_ptr };
 
-    frame.set_cursor_icon(winit::window::CursorIcon::Crosshair);
+    frame.set_cursor(winit::window::CursorIcon::Crosshair);
 
     let frm_hdl = unsafe {
         SlHndl::from_raw_unchecked(sail::memmgt::alloc(

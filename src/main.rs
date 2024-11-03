@@ -31,7 +31,7 @@
 
 use stark::{context, graphics, manager_loop, sail, FrameHandles};
 
-use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use std::env;
 use std::io;
@@ -76,8 +76,8 @@ fn main() {
     let (frame, event_loop) = context::init_context(NAME, ICON, SIZE[0], SIZE[1]);
 
     let handles = FrameHandles {
-        window: frame.raw_window_handle(),
-        display: frame.raw_display_handle(),
+        window: frame.window_handle().unwrap().as_raw(),
+        display: frame.display_handle().unwrap().as_raw(),
     };
 
     let mut global_interact = sail::thread::Tact::create(251);
