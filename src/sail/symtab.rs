@@ -78,6 +78,18 @@ struct _SymEntry {
 
 // resize final: no operations
 
+impl Drop for SymbolTable {
+    fn drop(&mut self) {
+        unsafe {
+            let layout = alloc::Layout::from_size_align_unchecked(self.map_len * 8, 8);
+
+            alloc::dealloc(self.id_to_nm as *mut u8, layout);
+            alloc::dealloc(self.nm_to_id as *mut u8, layout);
+            alloc::dealloc(self.entries, layout);
+        }
+    }
+}
+
 impl SymbolTable {
     const U32S: usize = mem::size_of::<u32>();
     const U16S: usize = mem::size_of::<u16>();
@@ -380,8 +392,6 @@ impl SymbolTable {
         acc
     }
 }
-
-// TODO: add a Drop implementation to clean everything up
 
 #[cfg(test)]
 mod tests {

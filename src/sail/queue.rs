@@ -43,7 +43,9 @@ impl Qptr {
 
 // TODO: queue handle that only permits sends
 pub struct SendTgt {
-    tgt: *mut Inlet,
+    tgt_id: usize,
+    region: *mut memmgt::Region,
+    tail: Qptr,
 }
 
 pub struct Inlet {

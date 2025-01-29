@@ -160,7 +160,6 @@ impl SlHndl {
             inc_refc(loc);
             ptr::write_unaligned(&mut self.raw, loc);
 
-            // TODO: perhaps should have a destroy_redir function
             // NOTE: in these cases we know ONLY the redir chain may
             // be destroyed
 
@@ -298,15 +297,13 @@ impl SlHndl {
     #[inline(always)]
     fn cfg_byte(&mut self) -> u8 {
         unsafe { self.correct_pos() };
-
-        unsafe { ptr::read_unaligned(self.raw as *const u8) }
+        unsafe { ptr::read(self.raw as *const u8) }
     }
 
     #[inline(always)]
     pub fn refc_byte(&mut self) -> u8 {
         unsafe { self.correct_pos() };
-
-        unsafe { ptr::read_unaligned((self.raw as *const u8).add(1)) }
+        unsafe { ptr::read((self.raw as *const u8).add(1)) }
     }
 
     #[inline(always)]
@@ -632,13 +629,14 @@ fn __dbg_head_info(loc: *mut SlHead) {
 }
 
 /// Gets the full configuration byte from a Sail object
+#[inline(always)]
 fn raw_cfg_byte(loc: *mut SlHead) -> u8 {
-    unsafe { ptr::read_unaligned(loc as *const u8) }
+    unsafe { ptr::read(loc as *const u8) }
 }
 
 /// Gets the reference count byte from a Sail object
 fn raw_refc_byte(loc: *mut SlHead) -> u8 {
-    unsafe { ptr::read_unaligned((loc as *const u8).add(1)) }
+    unsafe { ptr::read((loc as *const u8).add(1)) }
 }
 
 /// Gets the size / type configuration from a Sail object
@@ -788,7 +786,7 @@ fn proc_native_size() -> u32 {
 
 // TODO: could avoid multithreaded / reentrance-safe reference count
 // handlers by requiring that all objects are known to only one
-// evaluation unit; queue objects would be the main concern
+// evaluation unit
 
 // TODO: to handle objects from a parent thread, check the address of
 // each object to find whether it sits in the appropriate region? all
@@ -797,6 +795,10 @@ fn proc_native_size() -> u32 {
 
 // NOTE: it seems that this would require a concept of which region /
 // thread we are "working from" for each reference count operation
+
+// TODO: region parameter, regions store their zone areas, fast search
+// (maybe binary?) to verify whether target object resides in the
+// current region. can we do anything meaningful without region?
 
 /// Increment the reference count stored in a Sail object, up to a
 /// maximum of 255; if the count is at 255, return true
@@ -827,6 +829,8 @@ pub fn inc_refc(loc: *mut SlHead) -> bool {
             break;
         }
     }
+
+    // unsafe { ptr::write(rc_pos, cur + 1) };
 
     if cfg!(feature = "memdbg") {
         println!(
@@ -870,6 +874,8 @@ pub fn dec_refc(loc: *mut SlHead) -> bool {
             break;
         }
     }
+
+    // unsafe { ptr::write(rc_pos, cur - 1) };
 
     if cfg!(feature = "memdbg") {
         println!(
@@ -2106,9 +2112,6 @@ fn core_cons_copy(reg: *mut Region, car: SlHndl, cdr: SlHndl) -> SlHndl {
 // }
 
 // TODO: deal somewhere with dynamic bindings, lexical bindings, argument bindings
-// TODO: give env and symtab their own predicate types
-// TODO: the core does not use maps except for env and symtab, so consolidate the code
-// TODO: improve the env data structure (this is where most evaluation time is spent)
 
 
 // TODO: should there be a small version (maybe an array with length 6
@@ -2365,7 +2368,7 @@ fn u8_make(reg: *mut Region) -> SlHndl {
 }
 
 #[inline(always)]
-fn u8_init(reg: *mut Region, val: u8) -> SlHndl {
+pub fn u8_init(reg: *mut Region, val: u8) -> SlHndl {
     let ptr = u8_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr

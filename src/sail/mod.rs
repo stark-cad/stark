@@ -375,9 +375,12 @@ incl_symbols! {
     SP_SET        "set"     Basic;
     SP_WHILE      "while"   Basic;
     S_MAIN        "main"    Basic;
+    S_MGR_TGT     "mgr-tgt" Basic;
+    S_MGR_ID      "mgr-id"  Basic;
     S_FRAME       "frame"   Basic;
     S_RNDR        "rndr"    Basic;
     S_RDR_TGT     "rdr-tgt" Basic;
+    S_RDR_ID      "rdr-id"  Basic;
     S_ENGINE      "engine"  Basic;
     S_T_INTERN    "%true"   Basic;
     S_F_INTERN    "%false"  Basic;
@@ -707,10 +710,30 @@ impl fmt::Display for SlContextVal<'_> {
                     }
                     write!(f, "}}")
                 }
+                VecArr => {
+                    let typ = arrvec_get_typ(value.clone());
+                    if typ == T_F32.0 {
+                        write!(f, "#[").unwrap();
+                        let len = arrvec_get_len(value.clone());
+                        for idx in 0..len {
+                            let val = read_field::<f32>(value.clone(), 8 + (4 * idx));
+                            write!(f, "{}", val).unwrap();
+                            if idx < len - 1 {
+                                write!(f, " ").unwrap();
+                            }
+                        }
+                        write!(f, "]")
+                    } else {
+                        write!(f, "<$arr-vec>")
+                    }
+                }
                 ProcLambda | ProcNative => write!(f, "<$proc>"),
                 _ => write!(f, "<@core/$other>"),
             },
-            None => write!(f, "<$other>"),
+            None => {
+                println!("{:?}", value.cfg_spec());
+                write!(f, "<$other>")
+            }
         }
     }
 }

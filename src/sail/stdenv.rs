@@ -229,6 +229,23 @@ sail_fn! {
         // return out;
     }
 
+    // TODO: and and or as macros or, more easily, special forms
+    "and" [lhs, rhs] {
+        if lhs.truthy() && rhs.truthy() {
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
+        }
+    }
+
+    "own-tx-hdl" [] {
+        let reg = unsafe { (*_thr).region() };
+
+        let tq = unsafe { (*_thr).queue_inlet() };
+
+        super::warp_hdl_init(reg, tq)
+    }
+
     "th-spawn" [fun] {
         let reg = unsafe { (*_thr).region() };
         let new = unsafe { (*_thr).spawn(None, None) };
@@ -304,6 +321,11 @@ sail_fn! {
             Some(h) => h,
             None => env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap(),
         }
+    }
+
+    "link" [fst, nxt] {
+        set_next_list_elt(_env, fst.clone(), nxt);
+        fst
     }
 
     "as-f32" [val] {
@@ -428,5 +450,14 @@ sail_fn! {
         super::stdvec_push(target.clone(), item);
 
         return target;
+    }
+
+    "vec-len" [target] {
+        let reg = unsafe { (*_thr).region() };
+        super::i64_init(reg, super::stdvec_get_len(target) as _)
+    }
+
+    "vec-get" [target, idx] {
+        super::stdvec_idx(target, super::i64_get(idx) as _)
     }
 }
