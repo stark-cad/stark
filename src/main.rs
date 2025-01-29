@@ -88,7 +88,7 @@ fn main() {
     // to pinned thread hulls
     let mut global_weft = sail::thread::Weft::create(global_interact);
 
-    let main_thr = sail::thread::ThreadHull::summon(&global_weft, 10000, 1 << 20, None);
+    let main_thr = sail::thread::ThreadHull::summon(&mut global_weft, 10000, 1 << 20, None);
     sail::thread_env_setup(main_thr);
     let main_thr_ref = unsafe { &mut *main_thr };
 
@@ -99,6 +99,13 @@ fn main() {
 
     let rndr_qin = rndr_thr_ref.queue_inlet();
 
+    global_weft.assign_special(main_thr_ref.id);
+    global_weft.assign_special(rndr_thr_ref.id);
+
+    // TODO: match available parallelism or setting
+    global_weft.add_worker();
+    global_weft.add_worker();
+
     let rdr_tgt_obj = sail::warp_hdl_init(main_thr_ref.region(), rndr_qin);
     sail::env_scope_ins_by_id(
         main_thr_ref.region(),
@@ -107,7 +114,31 @@ fn main() {
         rdr_tgt_obj,
     );
 
-    let ctxt_region = sail::memmgt::acquire_mem_region(1000);
+    let rdr_id_obj = sail::i64_init(main_thr_ref.region(), rndr_thr_ref.id as _);
+    sail::env_scope_ins_by_id(
+        main_thr_ref.region(),
+        main_thr_ref.top_env(),
+        sail::S_RDR_ID.0,
+        rdr_id_obj,
+    );
+
+    let mgr_tgt_obj = sail::warp_hdl_init(rndr_thr_ref.region(), main_qin);
+    sail::env_scope_ins_by_id(
+        rndr_thr_ref.region(),
+        rndr_thr_ref.top_env(),
+        sail::S_MGR_TGT.0,
+        mgr_tgt_obj,
+    );
+
+    let mgr_id_obj = sail::i64_init(rndr_thr_ref.region(), main_thr_ref.id as _);
+    sail::env_scope_ins_by_id(
+        rndr_thr_ref.region(),
+        rndr_thr_ref.top_env(),
+        sail::S_MGR_ID.0,
+        mgr_id_obj,
+    );
+
+    let ctxt_region = sail::memmgt::Region::acq(1000);
 
     let fr_dims = sail::arrvec_init::<u32>(main_thr_ref.region(), sail::T_U32.0, 2, &[0, 0]);
     let cur_pos = sail::arrvec_init::<f32>(main_thr_ref.region(), sail::T_F32.0, 2, &[0.0, 0.0]);

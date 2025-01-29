@@ -725,12 +725,15 @@ pub fn repl(stream_in: std::io::Stdin) {
 
     global_ctx_setup(weft.ctx_mut());
 
-    let thr = thread::ThreadHull::summon(&weft, 10000, 100000, None);
+    let thr = thread::ThreadHull::summon(&mut weft, 10000, 100000, None);
 
     thread_env_setup(thr);
 
     // TODO: some kind of thread handle?
     let thread_ref = unsafe { &mut *thr };
+
+    weft.assign_special(thread_ref.id);
+    weft.add_worker();
 
     let region = thread_ref.region();
 
@@ -773,10 +776,13 @@ pub fn interpret(code: &str, dolist: bool) -> Result<String, SlErrCode> {
     global_ctx_setup(&mut ctx);
 
     let mut weft = thread::Weft::create(ctx);
-    let thr = thread::ThreadHull::summon(&weft, 10000, 100000, None);
+    let thr = thread::ThreadHull::summon(&mut weft, 10000, 100000, None);
     thread_env_setup(thr);
 
     let thread_ref = unsafe { &mut *thr };
+
+    weft.assign_special(thread_ref.id);
+    weft.add_worker();
 
     thread_ref.load_from_text(code, dolist)?;
 

@@ -240,10 +240,9 @@ sail_fn! {
 
         unsafe { (*new).load_proc_immed(to_apply) };
 
-        let temp_spwn_addr = new as usize;
-
-        // TODO: track and utilize pool of OS threads
-        std::thread::spawn(move || super::thread::exec_thread(temp_spwn_addr));
+        if !unsafe { (*new).attempt_start() } {
+            panic!()
+        }
 
         let nq = unsafe { (*new).queue_inlet() };
 
@@ -258,6 +257,22 @@ sail_fn! {
     "th-join" [thref] {
         let reg = unsafe { (*_thr).region() };
         super::thread_ref_join(reg, thref)
+    }
+
+    "th-id" [thref] {
+        assert_eq!(thref.type_id(), super::T_THR_REF_ID.0);
+
+        let addrs: u64 = read_field(thref, 0);
+
+        let th_ref = unsafe {
+            (addrs as *mut super::thread::ThreadHull)
+                .as_mut()
+                .expect("null thread reference")
+        };
+
+        let reg = unsafe { (*_thr).region() };
+
+        super::i64_init(reg, th_ref.id as _)
     }
 
     "qtx" [sender, item] {

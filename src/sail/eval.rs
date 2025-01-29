@@ -764,7 +764,7 @@ mod tests {
 
         super::super::global_ctx_setup(t_weft.ctx_mut());
 
-        let t_thr = thread::ThreadHull::summon(&t_weft, 10000, 20000, None);
+        let t_thr = thread::ThreadHull::summon(&mut t_weft, 10000, 20000, None);
 
         super::super::thread_env_setup(t_thr);
 
@@ -788,7 +788,7 @@ mod tests {
 
         super::super::global_ctx_setup(t_weft.ctx_mut());
 
-        let t_thr = thread::ThreadHull::summon(&t_weft, 10000, 20000, None);
+        let t_thr = thread::ThreadHull::summon(&mut t_weft, 10000, 20000, None);
 
         super::super::thread_env_setup(t_thr);
 
