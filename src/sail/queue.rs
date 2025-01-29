@@ -211,8 +211,8 @@ mod inlet_tests {
 
     #[test]
     fn basic() {
-        let tx_reg = memmgt::acquire_mem_region(100);
-        let rx_reg = memmgt::acquire_mem_region(100);
+        let tx_reg = memmgt::Region::acq(100);
+        let rx_reg = memmgt::Region::acq(100);
 
         let mut rx_inlet = Inlet::new(rx_reg);
 
@@ -246,8 +246,8 @@ mod inlet_tests {
     fn layers() {
         let mut tbl = super::super::Stab::new(51);
 
-        let tx_reg = memmgt::acquire_mem_region(100);
-        let rx_reg = memmgt::acquire_mem_region(100);
+        let tx_reg = memmgt::Region::acq(100);
+        let rx_reg = memmgt::Region::acq(100);
 
         let mut rx_inlet = Inlet::new(rx_reg);
 
@@ -277,14 +277,14 @@ mod inlet_tests {
             }
         }
 
-        let rx_reg = memmgt::acquire_mem_region(SPAN * 10);
+        let rx_reg = memmgt::Region::acq(SPAN * 10);
         let mut inlet = Inlet::new(rx_reg);
         let hdl = unsafe { std::mem::transmute::<&mut Inlet, usize>(&mut inlet) };
 
         let mut th = vec![];
         let mut acc = 0;
         for tid in 0..THCT {
-            let tsr = memmgt::acquire_mem_region(SPAN) as usize;
+            let tsr = memmgt::Region::acq(SPAN) as usize;
             th.push(std::thread::spawn(move || {
                 send(tid as _, acc, SPAN as _, tsr, hdl)
             }));

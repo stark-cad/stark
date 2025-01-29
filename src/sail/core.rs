@@ -1037,7 +1037,7 @@ mod refc_tests {
     #[test]
     fn up_down() {
         unsafe {
-            let reg = memmgt::acquire_mem_region(100);
+            let reg = memmgt::Region::acq(100);
             let item = memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0BoolF));
 
             let adrs = item as usize;
@@ -1068,7 +1068,7 @@ mod refc_tests {
     #[test]
     fn stack_refs() {
         unsafe {
-            let reg = memmgt::acquire_mem_region(100);
+            let reg = memmgt::Region::acq(100);
 
             let dme = env_create(reg, None);
 
@@ -1747,7 +1747,7 @@ mod redir_test {
 
     #[test]
     fn chain_follow() {
-        let region = memmgt::acquire_mem_region(1000);
+        let region = memmgt::Region::acq(1000);
         let gt = bool_init(region, true);
 
         let r1 = redir_gen(region, gt.clone());
@@ -1762,7 +1762,7 @@ mod redir_test {
 
     #[test]
     fn ow_norm() {
-        let region = memmgt::acquire_mem_region(1000);
+        let region = memmgt::Region::acq(1000);
         let gt = bool_init(region, true);
 
         let re = redir_gen(region, gt.clone());
@@ -1779,7 +1779,7 @@ mod redir_test {
 
     #[test]
     fn ow_next() {
-        let region = memmgt::acquire_mem_region(1000);
+        let region = memmgt::Region::acq(1000);
         let gt = bool_init(region, true);
 
         let r1 = redir_gen(region, gt.clone());

@@ -235,7 +235,7 @@ impl Drop for RegionTable {
             for i in 0..self.len {
                 let cur_reg = ptr::read(self.region_array.add(i));
                 if cur_reg != last_reg {
-                    destroy_mem_region(cur_reg);
+                    drop(Box::from_raw(cur_reg));
                     last_reg = cur_reg;
                 }
             }
@@ -1350,7 +1350,8 @@ mod free_tree_tests {
         use super::super::Cfg;
 
         unsafe {
-            let region = acquire_mem_region(1000);
+            let region = Region::acq(1000);
+
             let zone = (*region).head;
 
             let obj = alloc(region, 0, cap(Cfg::B0BoolT));
@@ -1393,6 +1394,8 @@ mod free_tree_tests {
 }
 
 
+// TODO: store zone location information?
+
 /// A memory region is a linked list of memory zones, all of the same size
 #[derive(Debug)]
 #[repr(C)]
@@ -1409,6 +1412,12 @@ impl Region {
         }
     }
 
+    pub fn acq(zs: u32) -> *mut Self {
+        let mut new = Box::from(Self::new(zs));
+        new.init();
+        Box::into_raw(new)
+    }
+
     pub fn init(&mut self) {
         unsafe { new_mem_zone(self) };
     }
@@ -1417,7 +1426,7 @@ impl Region {
 impl Drop for Region {
     fn drop(&mut self) {
         unsafe {
-            let layout = alloc::Layout::from_size_align_unchecked(
+            let z_layout = alloc::Layout::from_size_align_unchecked(
                 self.zone_size as usize + MEM_ZONE_HEAD_SIZE,
                 1,
             );
@@ -1428,7 +1437,7 @@ impl Drop for Region {
                 if next == ptr::null_mut() {
                     break;
                 }
-                alloc::dealloc(cur as *mut u8, layout);
+                alloc::dealloc(cur as *mut u8, z_layout);
             }
         }
     }
@@ -1476,41 +1485,6 @@ struct FreeBlock {
 // const MEM_REGION_HEAD_SIZE: usize = mem::size_of::<Region>();
 const MEM_ZONE_HEAD_SIZE: usize = mem::size_of::<Zone>();
 
-// TODO: does this really need to start out as just a pointer?
-
-/// Creates a new memory region and accompanying zone
-pub fn acquire_mem_region(zone_size: u32) -> *mut Region {
-    if cfg!(feature = "memdbg") {
-        log::debug!("Creating mem region");
-    }
-
-    let out = Box::into_raw(Box::from(Region {
-        zone_size,
-        head: ptr::null_mut(),
-    }));
-
-    unsafe { new_mem_zone(out) };
-
-    out
-}
-
-pub unsafe fn destroy_mem_region(reg: *mut Region) {
-    let layout =
-        alloc::Layout::from_size_align_unchecked((*reg).zone_size as usize + MEM_ZONE_HEAD_SIZE, 1);
-    let mut next = (*reg).head;
-    loop {
-        let cur = next;
-        next = (*cur).next;
-        if next == ptr::null_mut() {
-            break;
-        }
-        alloc::dealloc(cur as *mut u8, layout);
-    }
-
-    let reg = Box::from_raw(reg);
-    drop(reg);
-}
-
 /// Returns the region and zone in which a given Sail object is stored
 unsafe fn which_mem_area(ptr: *mut SlHead) -> (*mut Region, *mut Zone) {
     assert_ne!(ptr, ptr::null_mut());
@@ -1530,13 +1504,6 @@ unsafe fn which_mem_area(ptr: *mut SlHead) -> (*mut Region, *mut Zone) {
 
         idx += 1;
     }
-
-    // for idx in 0..REGION_TABLE.len {
-    //     let entry = REGION_TABLE.index(idx);
-    //     if pos >= entry.0 && pos < entry.1 {
-    //         return (entry.3, entry.2);
-    //     }
-    // }
 
     panic!("INVALID memory area for {:x}", ptr as usize)
 }

@@ -858,7 +858,7 @@ mod tests {
 
     #[test]
     fn parses() {
-        let (reg, mut tbl) = (memmgt::acquire_mem_region(10000), Stab::new(51));
+        let (reg, mut tbl) = (memmgt::Region::acq(1000), Stab::new(51));
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
         let val = parser::parse(reg, &mut tbl, &exp, false).unwrap();
