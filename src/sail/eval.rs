@@ -21,7 +21,9 @@
 
 use super::core::*;
 use super::thread;
-use super::{SP_DEF, SP_DO, SP_EVAL, SP_FN, SP_IF, SP_QUOTE, SP_SET, SP_WHILE};
+use super::{
+    SP_AND, SP_COND, SP_DEF, SP_DO, SP_EVAL, SP_FN, SP_IF, SP_OR, SP_QUOTE, SP_SET, SP_WHILE,
+};
 
 use std::alloc;
 use std::ptr;
@@ -460,6 +462,21 @@ impl EvalStack {
 
                 if raw_op.basic_sym_p() {
                     match sym_get_id(raw_op.clone()) {
+                        id if id == SP_COND.0 => {
+                            self.push_frame_head(ret, Opcode::CondSeq, env.clone());
+                            self.push_slot();
+
+                            let predicate =
+                                raw_args.expect("cond called without arguments");
+                            self.push(
+                                get_next_list_elt(predicate.clone())
+                                    .expect("cond must have an even number of arguments"),
+                            );
+
+                            let pred_ret = self.frame_addr(0);
+                            self.eval_expr(pred_ret, env, predicate);
+                            return true;
+                        }
                         id if id == SP_DEF.0 => {
                             // needs: symbol to bind, object to bind to it
                             self.push_frame_head(ret, Opcode::Bind, env.clone());
@@ -517,6 +534,8 @@ impl EvalStack {
                                 )
                                 .unwrap(),
                             );
+
+                            // TODO: accept if with only one consequent (assume nil following)
 
                             let return_to = self.frame_addr(0);
 
@@ -645,7 +664,7 @@ impl EvalStack {
                     let return_to = self.frame_addr(1);
                     self.eval_expr(return_to, env.clone(), pred);
 
-                    // TODO: this sort of thing should be a macro!
+                    // TODO: this sort of thing should be a (Rust) macro!
                     unsafe {
                         if dec_refc(result.get_raw()) {
                             destroy_obj(env.clone(), result.get_raw())
@@ -657,6 +676,27 @@ impl EvalStack {
                 } else {
                     self.pop_frame();
                     self.write_addr_to(ret, result);
+                }
+            }
+            Opcode::CondSeq => {
+                let mut pred_res = self.frame_obj(0);
+                let consequent = self.frame_obj(1);
+
+                if pred_res.truthy() {
+                    self.pop_frame();
+                    self.eval_expr(ret, env, consequent);
+                } else if let Some(next_pred) = get_next_list_elt(consequent) {
+                    let next_cons = get_next_list_elt(next_pred.clone())
+                        .expect("cond must have an even number of arguments");
+
+                    let pred_ret = self.frame_addr(0);
+                    let cons_keep = self.frame_addr(1);
+
+                    self.write_addr_to(cons_keep, next_cons);
+                    self.eval_expr(pred_ret, env, next_pred);
+                } else {
+                    self.pop_frame();
+                    self.write_addr_to(ret, pred_res);
                 }
             }
             Opcode::Branch => {
@@ -826,6 +866,9 @@ enum_and_tryfrom! {
 
         /// Symbol, object
         Mutate,
+
+        /// Remaining predicate / consequent pairs
+        CondSeq,
 
         /// Remainder of list to do
         DoSeq,

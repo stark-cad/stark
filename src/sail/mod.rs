@@ -366,11 +366,14 @@ incl_symbols! {
     T_ENV         "env"     Type;
     T_ENV_LYR     "env-lyr" Type;
     T_THR_REF     "thr-hdl" Type;
+    SP_AND        "and"     Basic;
+    SP_COND       "cond"    Basic;
     SP_DEF        "def"     Basic;
     SP_DO         "do"      Basic;
     SP_EVAL       "eval"    Basic;
     SP_FN         "fn"      Basic;
     SP_IF         "if"      Basic;
+    SP_OR         "or"      Basic;
     SP_QUOTE      "quote"   Basic;
     SP_SET        "set"     Basic;
     SP_WHILE      "while"   Basic;
