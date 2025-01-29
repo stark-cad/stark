@@ -124,6 +124,9 @@ pub fn render_loop(name: &'static str, size: [u32; 2], frame: FrameHandles, sl_t
 
             engine.add_line(wd as u8, ln, cl);
 
+            // println!("line added!");
+            // println!("lines: {:?}", engine.lines);
+
             eng_ptr
         }
 
@@ -142,37 +145,47 @@ pub fn render_loop(name: &'static str, size: [u32; 2], frame: FrameHandles, sl_t
             eng_ptr
         }
 
-        "hit-test" [eng_ptr, x, y] {
+        "hit-test" [eng_ptr, point] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
 
-            crate::coretypck!(x ; F32);
-            crate::coretypck!(y ; F32);
+            assert_eq!(point.core_type(), Some(sail::CoreType::VecArr));
+            assert_eq!(sail::read_field::<u32>(point.clone(), 0), sail::T_F32.0);
 
-            let (x, y) = (sail::f32_get(x), sail::f32_get(y));
+            let (x, y) = (sail::read_field(point.clone(), 8), sail::read_field(point, 12));
 
-            let win = match engine.hittest(x, y) {
-                Some(w) => w as i64,
-                None => 0,
+            let (win, wx, wy) = match engine.hittest(x, y) {
+                Some((w, wx, wy)) => (w as i64, wx, wy),
+                None => (0, 0.0, 0.0),
             };
+
+            // println!("HITTEST: win {win} x {wx} y {wy}");
 
             let reg = unsafe { (*_thr).region() };
             let out = sail::i64_init(reg, win);
 
+            let coords = sail::arrvec_init(reg, sail::T_F32.0, 2, &[wx, wy]);
+            sail::set_next_list_elt(_env, out.clone(), coords);
+
             out
         }
 
+        // TODO: issue less-easily-guessed window handles?
+        // TODO: or verify Sail thread ID against provided handle
         "create-window" [eng_ptr] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
 
-            engine.create_window();
+            let iid = engine.create_window();
 
-            eng_ptr
+            let reg = unsafe { (*_thr).region() };
+            let out = sail::i64_init(reg, iid as _);
+
+            out
         }
 
         "modify-window" [eng_ptr, window, tlx, tly, brx, bry] {
@@ -201,12 +214,25 @@ pub fn render_loop(name: &'static str, size: [u32; 2], frame: FrameHandles, sl_t
                  sail::f32_get(brx),
                  sail::f32_get(bry));
 
+            // TODO: track windows in normalized frame coordinates for
+            // interface simplicity and resize handling
+
             let vpmod = &mut engine.viewports[wd];
 
-            vpmod.x = tlx;
-            vpmod.y = tly;
-            vpmod.width = brx - tlx;
-            vpmod.height = bry - tly;
+            let root_xtnt = engine.surface_res;
+            let topx = |f, b| (f + 1.0) * (b / 2) as f32;
+
+            let (tlxp, tlyp, brxp, bryp) = (
+                topx(tlx, root_xtnt.width),
+                topx(tly, root_xtnt.height),
+                topx(brx, root_xtnt.width),
+                topx(bry, root_xtnt.height),
+            );
+
+            vpmod.x = tlxp;
+            vpmod.y = tlyp;
+            vpmod.width = brxp - tlxp;
+            vpmod.height = bryp - tlyp;
 
             eng_ptr
         }
@@ -1062,17 +1088,21 @@ impl Engine {
         self.clear = clear;
     }
 
-    fn create_window(&mut self) {
+    fn create_window(&mut self) -> u8 {
+        let new_idx = self.window_order.len() as u8;
+
         self.lines.push(vec![]);
         self.colors.push(vec![]);
         self.buflen.push(256);
 
-        self.window_order.push(self.window_order.len() as u8);
+        self.window_order.push(new_idx);
 
         self.viewports.push(self.viewports[0].clone());
         self.scissors.push(self.scissors[0].clone());
 
         self.state_buffer_setup();
+
+        new_idx
     }
 
     fn delete_window(&mut self, window: u8) {
@@ -1110,17 +1140,21 @@ impl Engine {
 
     /// Add a line, with two endpoints and a color
     fn add_line(&mut self, window: u8, points: [f32; 4], color: [f32; 3]) {
+        log::debug!("lend | x: {}, y: {}", points[2], points[3]);
+
         self.lines[window as usize].push(points);
         self.colors[window as usize].push(color);
         self.buffer_size_check();
     }
 
     /// Return top window at position given in normalized frame coords
-    fn hittest(&mut self, x: f32, y: f32) -> Option<u8> {
+    fn hittest(&mut self, x: f32, y: f32) -> Option<(u8, f32, f32)> {
         let root_xtnt = self.surface_res;
 
         // TODO: potentially simplify by tracking window positions and
         // sizes in normalized frame coordinates at the engine level
+
+        // TODO: or... could use cur pixel coords direct from context
 
         // NOTE: in that case hit test would not require a conversion
         // step; viewports would be generated after any frame or
@@ -1134,8 +1168,9 @@ impl Engine {
             );
 
             let mut hit = 0;
+            let (mut inner_x, mut inner_y) = (0.0, 0.0);
 
-            for idx_u8 in &self.window_order[1..] {
+            for idx_u8 in self.window_order[1..].iter().rev() {
                 let w_idx = *idx_u8 as usize;
 
                 let vk::Viewport {
@@ -1154,10 +1189,13 @@ impl Engine {
                     && cur_px_x < max_vp_x
                     && cur_px_y < max_vp_y
                 {
-                    hit = *idx_u8
+                    hit = *idx_u8;
+                    inner_x = (cur_px_x - min_vp_x) / (cw / 2.0) - 1.0;
+                    inner_y = (cur_px_y - min_vp_y) / (ch / 2.0) - 1.0;
+                    break;
                 }
             }
-            Some(hit)
+            Some((hit, inner_x, inner_y))
         } else {
             None
         }

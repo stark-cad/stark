@@ -83,16 +83,16 @@ pub fn run_loop<Ij: 'static>(
 
             let mtx = unsafe { &mut *(m_send as *mut sail::queue::Inlet) };
 
+            let shell = sail::sym_init(sl_reg, sail::K_CX_SHELL.0);
+
             loop {
                 buffer.clear();
                 std::io::stdin().read_line(&mut buffer).unwrap();
 
                 let strin = sail::string_init(sl_reg, &buffer);
-                let shell = sail::sym_init(sl_reg, sail::K_CX_SHELL.0);
-
                 sail::set_next_list_elt(dm_env_ax.clone(), shell.clone(), strin);
 
-                mtx.transmit(1, shell);
+                mtx.transmit(1, shell.clone());
             }
         })
         .unwrap();
@@ -110,6 +110,12 @@ pub fn run_loop<Ij: 'static>(
 
     let mut focus = false;
 
+    let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
+    let destr = sail::sym_init(sl_reg, sail::K_CX_DESTR.0);
+    let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
+    let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
+    let moved = sail::sym_init(sl_reg, sail::K_CX_CURMV.0);
+
     // println!("fr_dims is at: {:x}", unsafe { fr_dims.get_raw() as usize });
     // println!("cur_pos is at: {:x}", unsafe { cur_pos.get_raw() as usize });
 
@@ -122,16 +128,13 @@ pub fn run_loop<Ij: 'static>(
 
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::RedrawRequested => {
-                        let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
-                        rndr_tx.transmit(1, redrw);
+                        rndr_tx.transmit(1, redrw.clone());
                     }
                     WindowEvent::CloseRequested => {
                         elwt.exit();
 
-                        let destr = sail::sym_init(sl_reg, sail::K_CX_DESTR.0);
-
                         rndr_tx.transmit(1, destr.clone());
-                        main_tx.transmit(1, destr);
+                        main_tx.transmit(1, destr.clone());
                     }
                     WindowEvent::Focused(f) => {
                         focus = f;
@@ -140,40 +143,38 @@ pub fn run_loop<Ij: 'static>(
                         frame_dims = [dims.width, dims.height];
                         sail::arrvec_rplc(fr_dims.clone(), &[dims.width, dims.height]);
 
-                        let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
-                        rndr_tx.transmit(1, resiz);
+                        rndr_tx.transmit(1, resiz.clone());
                     }
                     WindowEvent::MouseInput {
                         state, button: _, ..
                     } => {
+                        // TODO: send cursor position on each click;
+                        // otherwise rely on shared-memory updates
+
                         if state == ElementState::Pressed {
-                            let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
-                            main_tx.transmit(1, recrd);
+                            main_tx.transmit(1, recrd.clone());
                         }
                     }
                     WindowEvent::CursorMoved {
                         position: dpi::PhysicalPosition { x, y },
                         ..
                     } => {
-                        sail::arrvec_rplc(
-                            cur_pos.clone(),
-                            &[
-                                (x / (frame_dims[0] / 2) as f64 - 1.0) as f32,
-                                (y / (frame_dims[1] / 2) as f64 - 1.0) as f32,
-                            ],
-                        );
+                        // TODO: have read access to real window
+                        // positions and perform hit test right here?
 
-                        let moved = sail::sym_init(sl_reg, sail::K_CX_CURMV.0);
+                        let norm_x = (x / (frame_dims[0] / 2) as f64 - 1.0) as f32;
+                        let norm_y = (y / (frame_dims[1] / 2) as f64 - 1.0) as f32;
 
-                        // TODO: intern symbols by default, copy out into
-                        // lists as necessary
+                        sail::arrvec_rplc(cur_pos.clone(), &[norm_x, norm_y]);
 
-                        // TODO: in context thread, maintain one copy of
-                        // each keyword symbol, that gets "dispatched"
-                        // every time there is a message; the queue system
-                        // copies symbols into the receiving environment
+                        log::debug!("curp | x: {}, y: {}", norm_x, norm_y);
 
-                        rndr_tx.transmit(1, moved);
+                        unsafe {
+                            sail::inc_refc(cur_pos.get_raw());
+                            sail::set_next_list_elt_unsafe_unchecked(moved.clone(), cur_pos.clone())
+                        };
+
+                        rndr_tx.transmit(1, moved.clone());
                     }
                     WindowEvent::KeyboardInput {
                         event:
@@ -184,8 +185,13 @@ pub fn run_loop<Ij: 'static>(
                     } if focus && state == ElementState::Pressed => match logical_key {
                         // TODO: adjust / simplify the info sent for keypresses
 
+                        // TODO: should handle any standard key & arbitrary key codes
+
                         // TODO: runtime function rebinding to any key
                         // in any mode should be viable
+
+                        // TODO: intern symbols by default, copy out into
+                        // lists as necessary
                         Key::Character(s) => {
                             let key_sym = match s.bytes().nth(0).unwrap() {
                                 b'u' => {
@@ -233,8 +239,7 @@ pub fn run_loop<Ij: 'static>(
                         Key::Named(n) => match n {
                             NamedKey::Space => {
                                 // enter the point
-                                let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
-                                main_tx.transmit(1, recrd);
+                                main_tx.transmit(1, recrd.clone());
                             }
                             _ => {}
                         },
