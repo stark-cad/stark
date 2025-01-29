@@ -19,12 +19,10 @@
 
 (def rndr (fn []
 
+(def source ())
 (def input ())
 
 (def alive #T)
-
-; currently tracking next line?
-(def track #F)
 
 (def line (arr-vec-make $f32 4 (as-f32 0.0)))
 
@@ -32,72 +30,110 @@
 
 (def get-q-next (fn [] (def out ()) (while (eq out ()) (set out (rest (qrx)))) out))
 
+; TODO: iterators? transducers?
+
+(def vec-find (fn [target pred]
+     (def idx 0)
+     (def found #F)
+     (def entry ())
+     (while (and (not found) (not (= idx (vec-len target))))
+            (set entry (vec-get target idx))
+            (if (pred entry) (set found #T) ())
+            (set idx (+ 1 idx)))
+     (if found entry ())))
+
+(def windows [])
+
 ;(bg-col engine (as-f32 0.0) (as-f32 0.0) (as-f32 0.0))
 (redraw engine)
 
+(print mgr-id)
 (print "prepared for render loop")
 
+(def reported-pt ())
+(def ht-result ())
+(def ht-cur ())
+
+(def ht-last 0) ; temp
+
+(def cm-sig :cx-crmv)
+(def ht-sig :win-hit)
+
+; TODO: fix insane variable shadowing
 (while alive
-       ; TODO: avoid hardcoding this for lines here
-       (if drawing (do (if track
-                           (pop-line engine 0)
-                           (set track #T))
-                   (arr-vec-set line 0 (arr-vec-get point 0))
-                   (arr-vec-set line 1 (arr-vec-get point 1))
-                   (arr-vec-set line 2 (arr-vec-get cur-pos 0))
-                   (arr-vec-set line 3 (arr-vec-get cur-pos 1))
-                   (add-line engine 0 line line-col))
+       (set source (qrx))
+       (set input (rest source))
 
-                   (if track (do (pop-line engine 0) (set track #F)) ()))
+       (cond
+         (not source) ()
 
-       (set input (rest (qrx)))
-       (if (eq input :line-add)
-           (do (if track (do (pop-line engine 0) (set track #F)) ())
-               (arr-vec-set line 0 (get-q-next))
-               (arr-vec-set line 1 (get-q-next))
-               (arr-vec-set line 2 (get-q-next))
-               (arr-vec-set line 3 (get-q-next))
-               (add-line engine 0 line line-col)
-               (redraw engine))
+         (and (= source mgr-id) (eq input :get-win)) (do
+           (def for-id (rest input))
+           (def new-win (create-window engine))
+           ; (modify-window engine new-win (as-f32 -1.0) (as-f32 -1.0) (as-f32 0.0) (as-f32 1.0))
+           (vec-push windows (link new-win for-id))
+           (qtx mgr-tgt (link :win-ret new-win)))
 
-       (if (eq input :line-pop)
-           (do (pop-line engine 0) (redraw engine))
+         (and (= source mgr-id) (eq input :hit-win)) (do
+           (set reported-pt (rest input))
+           (set ht-result (hit-test engine (arr-vec-get reported-pt 0) (arr-vec-get reported-pt 1)))
+           (qtx mgr-tgt (link ht-sig ht-result)))
 
-       (if (eq input :line-col)
+           ;TODO: linking :win-hit to ht-result ONLY works the first time (???)
+           ;TODO: linking through a symbol works fine (???)
+
+         (eq input :line-add) (do
+           (def atgt (rest input))
+;           (if (= source (rest (vec-find windows (fn [e] (= e atgt))))) )
+           (if (= source (tmp-vec-match windows atgt))
+               (add-line engine atgt (rest atgt) line-col) ())
+           (redraw engine))
+
+         (eq input :line-pop) (do
+           (def ptgt (rest input))
+;           (if (= source (rest (vec-find windows (fn [e] (= e ptgt))))) )
+           (if (= source (tmp-vec-match windows ptgt))
+               (pop-line engine ptgt) ())
+           (redraw engine))
+
+         (eq input :line-col)
            (do (arr-vec-set line-col 0 (get-q-next))
                (arr-vec-set line-col 1 (get-q-next))
                (arr-vec-set line-col 2 (get-q-next)))
 
-       (if (eq input :back-col)
+         (eq input :back-col)
            (do (def r (get-q-next))
                (def g (get-q-next))
                (def b (get-q-next))
                (bg-col engine r g b)
                (redraw engine))
 
-       (if (eq input :clear)
+         (eq input :clear)
            (do (clear engine)
                (redraw engine))
 
-       (if (eq input :redraw)
+         (eq input :redraw)
            (do (redraw engine))
 
-       (if (eq input :cx-dstr)
-       (do
+         (eq input :cx-dstr) (do
            (print "destroying render")
            (set alive #F))
 
-       (if (eq input :cx-resz)
+         (eq input :cx-resz)
            (do (frame-size engine (arr-vec-get fr-dims 0) (arr-vec-get fr-dims 1)))
 
-       (if (eq input :cx-rdrw)
+         (eq input :cx-rdrw)
            (do (redraw engine))
 
-       (if (eq input :cx-crmv)
-           (do (if track (redraw engine) ()))
-
-       ()))))))))))
-       )
+       ; TODO: modify shared state indicating the current window and cursor position?
+         (eq input :cx-crmv) (do
+           (set ht-result (hit-test engine (tmp-coord-log (rest input))))
+           (if (not (= ht-last ht-result)) (do
+               (qtx mgr-tgt (link ht-sig ht-result))
+               (set ht-cur (vec-find windows (fn [e] (= e ht-result))))) ())
+           (set ht-last ht-result)
+           (if ht-cur (qtx (rest (rest ht-cur)) (link cm-sig (rest ht-result))) ()))
+       ))
 
 (print "render end")
 

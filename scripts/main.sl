@@ -69,64 +69,112 @@
 
 (def step (as-f32 0.0625))
 
+(def prot-rec-proc (eval (parse (temp-read-file "scripts/prot_line_rec.sl"))))
+
+(def child-records [])
+(def cur-child ())
+
+(def inst-window (fn []
+     (def new-thr (th-spawn prot-rec-proc))
+     (vec-push child-records new-thr)
+     (qtx rdr-tgt (link :get-win (link (th-id new-thr) (rest new-thr))))
+     (qtx (rest new-thr) (link :ini-rdt rdr-tgt))
+     (qtx (rest new-thr) (link :ini-cxt (own-tx-hdl)))
+))
+
+(def vec-find (fn [target pred]
+     (def idx 0)
+     (def found #F)
+     (def entry ())
+     (while (and (not found) (not (= idx (vec-len target))))
+            (set entry (vec-get target idx))
+            (if (pred entry) (set found #T) ())
+            (set idx (+ 1 idx)))
+     (if found entry ())))
+
+(inst-window)
+
 (print "prepared for main loop")
 
+(def cur-win ())
+(def last-ht-pt ())
+
+(def cm-sig :cx-crmv)
+
 (while alive
-       (set input (rest (qrx)))
+       ; TODO: blocking queue receive which parks the thread / strand
+       (set input (qrx))
 
-       (if (eq input :cx-dstr) (do
-           (print "destroying main")
-           (set alive #F))
+       (cond
+         (not input) ()
 
-       (if (eq input :cx-rcrd) (do
-           (if drawing (do
-               (set drawing #F)
-               (draw-fn (arr-vec-get point 0) (arr-vec-get point 1)
-                        (arr-vec-get cur-pos 0) (arr-vec-get cur-pos 1)))
-           (do (set drawing #T)
-               (arr-vec-set point 0 (arr-vec-get cur-pos 0))
-               (arr-vec-set point 1 (arr-vec-get cur-pos 1)))))
+           (= input rdr-id) (do
+              (set input (rest input))
+              (cond (eq input :win-ret) (do
+                 (def wh (rest input))
+                 (def id (rest wh))
+                 (def slot (vec-find child-records (fn [e] (= id (th-id e)))))
+                 (if (not (eq slot ())) (do
+                     (link (rest slot) wh)
+                     (qtx (rest slot) (link :ini-whd wh))) ()))
 
-       (if (eq input :cx-shel)
-           (do (print (eval (parse (rest input)))))
+           ; TODO: in most cases, first use of def in a loop shadows all to follow!!
+                 (eq input :win-hit) (do
+                     (set cur-win (rest input))
+                     (set last-ht-pt (rest cur-win))
+                     (set cur-child (vec-find child-records (fn [e] (= cur-win (rest (rest e)))))))
+           ))
 
-       (if (eq input :cx-kb-u)
-           (do (cur-pos-mod - (as-f32 0.0) step)
-               (qtx rdr-tgt :redraw))
+         (= input 1) (do
+           (set input (rest input))
+           (cond
+                (eq input :cx-crmv) (do
+                    (qtx rdr-tgt (link :hit-win cur-pos)))
 
-       (if (eq input :cx-kb-d)
-           (do (cur-pos-mod + (as-f32 0.0) step)
-               (qtx rdr-tgt :redraw))
+                (eq input :cx-dstr) (do
+                    (print "destroying main")
+                    (set alive #F))
 
-       (if (eq input :cx-kb-f)
-           (do (cur-pos-mod + step (as-f32 0.0))
-               (qtx rdr-tgt :redraw))
+                (eq input :cx-shel) (do
+                    (print (eval (parse (rest input)))))
 
-       (if (eq input :cx-kb-b)
-           (do (cur-pos-mod - step (as-f32 0.0))
-               (qtx rdr-tgt :redraw))
+                (eq input :cx-rcrd) (do
+                    (if cur-child (qtx (rest cur-child) input) ()))
 
-       (if (eq input :cx-kb-l)
-           (do (set step (* step (as-f32 2.0))))
+                (eq input :cx-kb-u) (do
+                    (if cur-child (qtx (rest cur-child) input) ()))
 
-       (if (eq input :cx-kb-s)
-           (do (set step (/ step (as-f32 2.0))))
+                (eq input :cx-kb-d) (do
+                    (if cur-child (qtx (rest cur-child) input) ()))
 
-       ; TODO: move track out of rndr
-       (if (eq input :cx-kb-e)
-           (do (set drawing #F)
-               (qtx rdr-tgt :redraw)
-               (qtx rdr-tgt :redraw))
+                (eq input :cx-kb-f) (do
+                    (if cur-child (qtx (rest cur-child) input) ()))
 
-       (if (eq input :cx-kb-k)
-           (do (qtx rdr-tgt :line-pop))
+                (eq input :cx-kb-b) (do
+                    (if cur-child (qtx (rest cur-child) input) ()))
 
-       (if (eq input :cx-kb-m)
-           (do (if (eq draw-fn line-f32)
-                   (set draw-fn rect-f32)
-                   (set draw-fn line-f32)))
+                (eq input :cx-kb-l) (do
+                    (if cur-child (qtx (rest cur-child) input) ()))
 
-       ())))))))))))))
+                (eq input :cx-kb-s) (do
+                    (if cur-child (qtx (rest cur-child) input) ()))
+
+                (eq input :cx-kb-e) (do
+                    (if cur-child (qtx (rest cur-child) input) ()))
+
+                (eq input :cx-kb-k) (do
+                    (if cur-child (qtx (rest cur-child) input) ()))
+
+                (eq input :cx-kb-m) (do
+                    (if cur-child (qtx (rest cur-child) input) ()))
+           ))
+
+         (= input (th-id cur-child)) (do
+             (set input (rest input))
+             (if (eq input :cmv-req) (do
+                 (print "cursor move requested, lol"))
+          ()))
+))
 
 (print "main end")
 

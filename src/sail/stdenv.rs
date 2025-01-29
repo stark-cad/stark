@@ -434,6 +434,33 @@ sail_fn! {
         };
     }
 
+    "parse-prog" [strin] {
+        coretypck!(strin ; VecStr);
+        let strsl = string_get(strin);
+
+        let reg = unsafe { (*_thr).region() };
+        let tbl = unsafe { ((*_thr).context()).symtab() };
+
+        return match super::parser::parse(reg, tbl, strsl, true) {
+            Ok(head) => head,
+            Err(err) => super::errcode_init(reg, err),
+        };
+    }
+
+    "temp-read-file" [path] {
+        coretypck!(path ; VecStr);
+        let pth = string_get(path);
+
+        let reg = unsafe { (*_thr).region() };
+
+        let out = match std::fs::read_to_string(pth) {
+            Ok(s) => super::string_init(reg, &s),
+            Err(_) => super::errcode_init(reg, super::SlErrCode::FileCouldNotRead)
+        };
+
+        out
+    }
+
     "_itsp_mdbg_id" [obj] {
         let id = obj.memdbg_obj_id();
 
@@ -459,5 +486,32 @@ sail_fn! {
 
     "vec-get" [target, idx] {
         super::stdvec_idx(target, super::i64_get(idx) as _)
+    }
+
+    "tmp-vec-match" [target, item] {
+        coretypck!(target ; VecStd);
+
+        for i in 0..super::stdvec_get_len(target.clone()) {
+            let this = super::stdvec_idx(target.clone(), i);
+            if super::i64_get(this.clone()) == super::i64_get(item.clone()) {
+                return match get_next_list_elt(this.clone()) {
+                    Some(t) => t,
+                    None => env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap(),
+                }
+            }
+        }
+
+        env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
+    }
+
+    "tmp-coord-log" [tgt] {
+        coretypck!(tgt ; VecArr);
+
+        let x = super::read_field::<f32>(tgt.clone(), 8);
+        let y = super::read_field::<f32>(tgt.clone(), 12);
+
+        log::debug!("sail | x: {x}, y: {y}");
+
+        tgt
     }
 }
