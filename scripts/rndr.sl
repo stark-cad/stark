@@ -120,7 +120,7 @@
            (set alive #F))
 
          (eq input :cx-resz)
-           (do (frame-size engine (arr-vec-get fr-dims 0) (arr-vec-get fr-dims 1)))
+           (do (redraw engine))
 
          (eq input :cx-rdrw)
            (do (redraw engine))

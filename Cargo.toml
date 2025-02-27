@@ -5,7 +5,7 @@
 name = "stark"
 version = "0.2.0-dev"
 authors = ["Matthew Rothlisberger <mattjrothlis@gmail.com>"]
-edition = "2021"
+edition = "2024"
 
 [features]
 # intensive Sail memory debugging

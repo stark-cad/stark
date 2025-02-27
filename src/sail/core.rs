@@ -147,24 +147,26 @@ unsafe impl Sync for SlHndl {}
 
 impl SlHndl {
     unsafe fn correct_pos(&mut self) {
-        let orig = self.raw;
-        let mut loc = orig;
+        unsafe {
+            let orig = self.raw;
+            let mut loc = orig;
 
-        while raw_cfg_byte(loc) == Cfg::B0Redir as u8 {
-            // TODO: rewrite addresses in memory to avoid indirection!
-            println!("-- redir hit --");
-            loc = (ptr::read_unaligned(loc as *mut usize) >> 16) as *mut SlHead;
-        }
+            while raw_cfg_byte(loc) == Cfg::B0Redir as u8 {
+                // TODO: rewrite addresses in memory to avoid indirection!
+                println!("-- redir hit --");
+                loc = (ptr::read_unaligned(loc as *mut usize) >> 16) as *mut SlHead;
+            }
 
-        if loc != orig {
-            inc_refc(loc);
-            ptr::write_unaligned(&mut self.raw, loc);
+            if loc != orig {
+                inc_refc(loc);
+                ptr::write_unaligned(&mut self.raw, loc);
 
-            // NOTE: in these cases we know ONLY the redir chain may
-            // be destroyed
+                // NOTE: in these cases we know ONLY the redir chain may
+                // be destroyed
 
-            if dec_refc(orig) {
-                destroy_redir(orig);
+                if dec_refc(orig) {
+                    destroy_redir(orig);
+                }
             }
         }
     }
@@ -595,7 +597,6 @@ pub fn raw_siz_fld_p(loc: *mut SlHead) -> bool {
     head >> 5 > 5
 }
 
-#[deprecated]
 pub fn raw_type_id(loc: *mut SlHead) -> u32 {
     assert!(raw_typ_fld_p(loc));
     unsafe { ptr::read_unaligned((loc as *mut u8).add(HEAD_LEN as usize) as *const u32) }
@@ -635,7 +636,7 @@ fn raw_cfg_byte(loc: *mut SlHead) -> u8 {
 }
 
 /// Gets the reference count byte from a Sail object
-fn raw_refc_byte(loc: *mut SlHead) -> u8 {
+fn _raw_refc_byte(loc: *mut SlHead) -> u8 {
     unsafe { ptr::read((loc as *const u8).add(1)) }
 }
 
@@ -1048,17 +1049,17 @@ mod refc_tests {
 
             let adrs = item as usize;
 
-            assert_eq!(raw_refc_byte(item), 1);
+            assert_eq!(_raw_refc_byte(item), 1);
 
             inc_refc(item);
             inc_refc(item);
 
-            assert_eq!(raw_refc_byte(item), 3);
+            assert_eq!(_raw_refc_byte(item), 3);
 
             dec_refc(item);
             dec_refc(item);
 
-            assert_eq!(raw_refc_byte(item), 1);
+            assert_eq!(_raw_refc_byte(item), 1);
 
             if dec_refc(item) {
                 println!("count reached 0");
@@ -1082,16 +1083,16 @@ mod refc_tests {
             let ptr_a = hdl_a_1.get_raw();
             println!("Object at {:x}", ptr_a as usize);
 
-            assert_eq!(raw_refc_byte(ptr_a), 1);
+            assert_eq!(_raw_refc_byte(ptr_a), 1);
 
             let hdl_a_2 = hdl_a_1.clone();
             let hdl_a_3 = hdl_a_1.clone();
 
-            assert_eq!(raw_refc_byte(ptr_a), 3);
+            assert_eq!(_raw_refc_byte(ptr_a), 3);
 
             let hdl_b_1 = ref_init(reg, hdl_a_1);
 
-            assert_eq!(raw_refc_byte(ptr_a), 3);
+            assert_eq!(_raw_refc_byte(ptr_a), 3);
 
             let hdl_c_1 = bool_make(reg);
             let hdl_c_2 = hdl_c_1.clone();
@@ -1102,25 +1103,25 @@ mod refc_tests {
 
             println!("Bool next elt set to u64");
 
-            assert_eq!(raw_refc_byte(ptr_a), 3);
+            assert_eq!(_raw_refc_byte(ptr_a), 3);
 
             drop(hdl_b_1);
 
             println!("Ref to u64 dropped");
 
-            assert_eq!(raw_refc_byte(ptr_a), 2);
+            assert_eq!(_raw_refc_byte(ptr_a), 2);
 
             drop(hdl_c_2);
 
             println!("Bool handle dropped");
 
-            assert_eq!(raw_refc_byte(ptr_a), 1);
+            assert_eq!(_raw_refc_byte(ptr_a), 1);
 
             drop(hdl_a_3);
 
             println!("u64 handle dropped");
 
-            assert_eq!(raw_refc_byte(ptr_a), 0);
+            assert_eq!(_raw_refc_byte(ptr_a), 0);
         }
     }
 }
@@ -1145,7 +1146,7 @@ pub fn write_ptr(env: SlHndl, mut loc: SlHndl, offset: u32, pto: SlHndl) {
     }
 }
 
-fn write_ptr_atomic(env: SlHndl, mut loc: SlHndl, offset: u32, pto: SlHndl) {
+fn _write_ptr_atomic(env: SlHndl, mut loc: SlHndl, offset: u32, pto: SlHndl) {
     assert!(offset + PTR_LEN <= loc.size());
 
     unsafe {
@@ -1280,8 +1281,10 @@ pub unsafe fn read_ptr_unchecked(mut loc: SlHndl, offset: u32) -> Option<SlHndl>
 
 #[inline(always)]
 unsafe fn get_ptr_ptr_unchecked(mut loc: SlHndl, offset: u32) -> *mut *mut SlHead {
-    debug_assert!(offset + PTR_LEN <= loc.size());
-    loc.value_ptr().add(offset as usize) as _
+    unsafe {
+        debug_assert!(offset + PTR_LEN <= loc.size());
+        loc.value_ptr().add(offset as usize) as _
+    }
 }
 
 // TODO: check that the given offset matches a valid field offset in the object?
@@ -1299,9 +1302,11 @@ pub fn write_field<T: SizedBase>(mut loc: SlHndl, offset: u32, src: T) {
 /// Write to a field of a Sail object without any checks
 #[inline(always)]
 pub unsafe fn write_field_unchecked<T: SizedBase>(mut loc: SlHndl, offset: u32, src: T) {
-    debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
-    let dst = loc.value_ptr().add(offset as usize) as *mut T;
-    ptr::write_unaligned(dst, src)
+    unsafe {
+        debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
+        let dst = loc.value_ptr().add(offset as usize) as *mut T;
+        ptr::write_unaligned(dst, src)
+    }
 }
 
 /// Write to a field of a Sail object atomically without any checks
@@ -1311,9 +1316,11 @@ pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(
     offset: u32,
     src: T,
 ) {
-    debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
-    let dst = loc.value_ptr().add(offset as usize) as *mut T;
-    std::intrinsics::atomic_store_release(dst, src);
+    unsafe {
+        debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
+        let dst = loc.value_ptr().add(offset as usize) as *mut T;
+        std::intrinsics::atomic_store_release(dst, src);
+    }
 }
 
 /// Write to a field of a Sail object only if the current value is the
@@ -1328,9 +1335,11 @@ pub unsafe fn write_field_cmpxcg_unchecked<T: SizedBase + Copy>(
     old: T,
     src: T,
 ) -> bool {
-    debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
-    let dst = loc.value_ptr().add(offset as usize) as *mut T;
-    std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, src).1
+    unsafe {
+        debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
+        let dst = loc.value_ptr().add(offset as usize) as *mut T;
+        std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, src).1
+    }
 }
 
 /// Read from a field of a Sail object of a core type
@@ -1346,20 +1355,22 @@ pub fn read_field<T: SizedBase>(mut loc: SlHndl, offset: u32) -> T {
 /// Get a pointer into a Sail object without any checks
 #[inline(always)]
 unsafe fn get_field_ptr_unchecked<T: SizedBase>(mut loc: SlHndl, offset: u32) -> *mut T {
-    debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
-    loc.value_ptr().add(offset as usize) as *mut T
+    unsafe {
+        debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
+        loc.value_ptr().add(offset as usize) as *mut T
+    }
 }
 
 /// Read from a field of a Sail object without any checks
 #[inline(always)]
-pub unsafe fn read_field_unchecked<T: SizedBase>(mut loc: SlHndl, offset: u32) -> T {
-    ptr::read_unaligned(get_field_ptr_unchecked(loc, offset))
+pub unsafe fn read_field_unchecked<T: SizedBase>(loc: SlHndl, offset: u32) -> T {
+    unsafe { ptr::read_unaligned(get_field_ptr_unchecked(loc, offset)) }
 }
 
 /// Read from a field of a Sail object atomically without any checks
 #[inline(always)]
-pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(mut loc: SlHndl, offset: u32) -> T {
-    std::intrinsics::atomic_load_acquire(get_field_ptr_unchecked(loc, offset))
+pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(loc: SlHndl, offset: u32) -> T {
+    unsafe { std::intrinsics::atomic_load_acquire(get_field_ptr_unchecked(loc, offset)) }
 }
 
 /// Set the pointer to a list element's next element
@@ -1465,11 +1476,13 @@ pub fn set_next_list_elt_cmpxcg(
 
 #[inline(always)]
 pub unsafe fn set_next_list_elt_unsafe_unchecked(loc: SlHndl, next: SlHndl) {
-    let head = ptr::read_unaligned(loc.get_raw() as *mut u16);
-    ptr::write_unaligned(
-        loc.get_raw() as *mut u64,
-        ((next.get_raw() as u64) << 16) + head as u64,
-    );
+    unsafe {
+        let head = ptr::read_unaligned(loc.get_raw() as *mut u16);
+        ptr::write_unaligned(
+            loc.get_raw() as *mut u64,
+            ((next.get_raw() as u64) << 16) + head as u64,
+        );
+    }
 }
 
 /// Gets the pointer to the next element from a list element
@@ -1678,14 +1691,6 @@ pub fn stdvec_idx(mut loc: SlHndl, idx: u32) -> SlHndl {
     read_ptr(loc, 4 + 4 + (idx * 8)).unwrap()
 }
 
-// NOTE: interim position and name
-fn true_obj(mut loc: SlHndl) -> SlHndl {
-    while loc.cfg_byte() == Cfg::B0Redir as u8 {
-        loc = get_next_list_elt(loc).unwrap()
-    }
-    loc
-}
-
 // TODO: Insert check everywhere we attempt to read from a new object
 fn write_correct_pos_slot(slot: *mut *mut SlHead) {
     unsafe {
@@ -1749,6 +1754,13 @@ mod redir_test {
             set_next_list_elt_unsafe_unchecked(out.clone(), tgt);
             out
         }
+    }
+
+    fn true_obj(mut loc: SlHndl) -> SlHndl {
+        while loc.cfg_byte() == Cfg::B0Redir as u8 {
+            loc = get_next_list_elt(loc).unwrap()
+        }
+        loc
     }
 
     #[test]
@@ -2375,13 +2387,13 @@ pub fn u8_init(reg: *mut Region, val: u8) -> SlHndl {
 }
 
 #[inline(always)]
-fn u8_set(mut loc: SlHndl, val: u8) {
+fn _u8_set(mut loc: SlHndl, val: u8) {
     coretypck!(loc ; U8);
     write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn u8_get(mut loc: SlHndl) -> u8 {
+fn _u8_get(mut loc: SlHndl) -> u8 {
     coretypck!(loc ; U8);
     read_field(loc, 0)
 }
@@ -2399,13 +2411,13 @@ fn u16_init(reg: *mut Region, val: u16) -> SlHndl {
 }
 
 #[inline(always)]
-fn u16_set(mut loc: SlHndl, val: u16) {
+fn _u16_set(mut loc: SlHndl, val: u16) {
     coretypck!(loc ; U16);
     write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn u16_get(mut loc: SlHndl) -> u16 {
+fn _u16_get(mut loc: SlHndl) -> u16 {
     coretypck!(loc ; U16);
     read_field(loc, 0)
 }
@@ -2447,7 +2459,7 @@ fn u64_init(reg: *mut Region, val: u64) -> SlHndl {
 }
 
 #[inline(always)]
-fn u64_set(mut loc: SlHndl, val: u64) {
+fn _u64_set(mut loc: SlHndl, val: u64) {
     coretypck!(loc ; U64);
     write_field(loc, 0, val)
 }
@@ -2473,13 +2485,13 @@ fn u128_init(reg: *mut Region, val: u128) -> SlHndl {
 }
 
 #[inline(always)]
-fn u128_set(mut loc: SlHndl, val: u128) {
+fn _u128_set(mut loc: SlHndl, val: u128) {
     coretypck!(loc ; U128);
     write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn u128_get(mut loc: SlHndl) -> u128 {
+fn _u128_get(mut loc: SlHndl) -> u128 {
     coretypck!(loc ; U128);
     read_field(loc, 0)
 }
@@ -2497,13 +2509,13 @@ fn i8_init(reg: *mut Region, val: i8) -> SlHndl {
 }
 
 #[inline(always)]
-fn i8_set(mut loc: SlHndl, val: i8) {
+fn _i8_set(mut loc: SlHndl, val: i8) {
     coretypck!(loc ; I8);
     write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn i8_get(mut loc: SlHndl) -> i8 {
+fn _i8_get(mut loc: SlHndl) -> i8 {
     coretypck!(loc ; I8);
     read_field(loc, 0)
 }
@@ -2521,13 +2533,13 @@ fn i16_init(reg: *mut Region, val: i16) -> SlHndl {
 }
 
 #[inline(always)]
-fn i16_set(mut loc: SlHndl, val: i16) {
+fn _i16_set(mut loc: SlHndl, val: i16) {
     coretypck!(loc ; I16);
     write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn i16_get(mut loc: SlHndl) -> i16 {
+fn _i16_get(mut loc: SlHndl) -> i16 {
     coretypck!(loc ; I16);
     read_field(loc, 0)
 }
@@ -2545,13 +2557,13 @@ fn i32_init(reg: *mut Region, val: i32) -> SlHndl {
 }
 
 #[inline(always)]
-fn i32_set(mut loc: SlHndl, val: i32) {
+fn _i32_set(mut loc: SlHndl, val: i32) {
     coretypck!(loc ; I32);
     write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn i32_get(mut loc: SlHndl) -> i32 {
+fn _i32_get(mut loc: SlHndl) -> i32 {
     coretypck!(loc ; I32);
     read_field(loc, 0)
 }
@@ -2595,13 +2607,13 @@ fn i128_init(reg: *mut Region, val: i128) -> SlHndl {
 }
 
 #[inline(always)]
-fn i128_set(mut loc: SlHndl, val: i128) {
+fn _i128_set(mut loc: SlHndl, val: i128) {
     coretypck!(loc ; I128);
     write_field(loc, 0, val)
 }
 
 #[inline(always)]
-fn i128_get(mut loc: SlHndl) -> i128 {
+fn _i128_get(mut loc: SlHndl) -> i128 {
     coretypck!(loc ; I128);
     read_field(loc, 0)
 }

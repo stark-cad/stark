@@ -35,6 +35,8 @@ macro_rules! sail_fn {
     ( const $array:ident; $thr:ident $env:ident;
       $( $name:literal [ $($args:ident),* ] $body:block )+
     ) => {
+        // compiler incorrectly warns on required 'mut $args'
+        #[allow(unused_mut)]
         pub const $array: &[(&str, crate::sail::core::NativeFn, u16)] =
             &[$(($name, |
                 _thr: *mut crate::sail::thread::ThreadHull,
@@ -56,6 +58,8 @@ macro_rules! sail_fn {
     ( let $array:ident; $thr:ident $env:ident;
       $( $name:literal [ $($args:ident),* ] $body:block )+
     ) => {
+        // compiler incorrectly warns on required 'mut $args'
+        #[allow(unused_mut)]
         let $array: &[(&str, crate::sail::core::NativeFn, u16)] =
             &[$(($name, |
                 _thr: *mut crate::sail::thread::ThreadHull,
@@ -294,9 +298,7 @@ sail_fn! {
 
     "qtx" [sender, item] {
         let id = unsafe { (*_thr).id };
-
         super::warp_hdl_send(sender, item, id);
-
         env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
     }
 

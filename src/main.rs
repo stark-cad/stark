@@ -29,7 +29,7 @@
 
 // <>
 
-use stark::{context, graphics, manager_loop, sail, FrameHandles};
+use stark::{FrameHandles, context, graphics, manager_loop, sail};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -163,7 +163,7 @@ fn main() {
     // This thread renders to the graphical frame: the output interface
     let render = thread::Builder::new()
         .name("render".to_string())
-        .spawn(move || graphics::render_loop(NAME, SIZE, handles, sl_rndr_thr))
+        .spawn(move || graphics::render_loop(NAME, handles, sl_rndr_thr))
         .unwrap();
 
     // This thread manages the program, treating the actual main thread as a source of user input

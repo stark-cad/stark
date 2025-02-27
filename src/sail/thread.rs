@@ -20,8 +20,8 @@
 use std::pin::Pin;
 use std::usize;
 
-use super::{eval, memmgt, parser, queue};
 use super::{SlHndl, Stab, Styc};
+use super::{eval, memmgt, parser, queue};
 
 /// Global context data for inter-thread and human interaction
 pub struct Tact {
@@ -217,9 +217,7 @@ impl Weft {
     }
 
     fn get_tid(&mut self) -> usize {
-        unsafe {
-            std::intrinsics::atomic_xadd_acqrel(&mut self.nxt_sl_thr_id as *mut usize, 1)
-        }
+        unsafe { std::intrinsics::atomic_xadd_acqrel(&mut self.nxt_sl_thr_id as *mut usize, 1) }
     }
 
     // NOTE: mutation through const pointers might require use of

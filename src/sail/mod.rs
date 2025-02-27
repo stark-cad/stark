@@ -66,7 +66,7 @@ impl Styc {
     }
 
     unsafe fn set_next_id(&mut self, id: u32) {
-        std::intrinsics::atomic_store_release(&mut self.inner, id)
+        unsafe { std::intrinsics::atomic_store_release(&mut self.inner, id) }
     }
 }
 
@@ -404,6 +404,7 @@ incl_symbols! {
     K_CX_KEY_E    "cx-kb-e" Keyword;
     K_CX_KEY_K    "cx-kb-k" Keyword;
     K_CX_KEY_M    "cx-kb-m" Keyword;
+    K_CX_KEY_W    "cx-kb-w" Keyword;
     K_FD_GNMAP    "gensyms" Keyword;
     K_FD_TYMAP    "types"   Keyword;
     K_FD_MDMAP    "modules" Keyword;

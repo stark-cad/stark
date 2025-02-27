@@ -21,9 +21,7 @@
 
 use super::core::*;
 use super::thread;
-use super::{
-    SP_AND, SP_COND, SP_DEF, SP_DO, SP_EVAL, SP_FN, SP_IF, SP_OR, SP_QUOTE, SP_SET, SP_WHILE,
-};
+use super::{SP_COND, SP_DEF, SP_DO, SP_EVAL, SP_FN, SP_IF, SP_QUOTE, SP_SET, SP_WHILE};
 
 use std::alloc;
 use std::ptr;
@@ -466,8 +464,7 @@ impl EvalStack {
                             self.push_frame_head(ret, Opcode::CondSeq, env.clone());
                             self.push_slot();
 
-                            let predicate =
-                                raw_args.expect("cond called without arguments");
+                            let predicate = raw_args.expect("cond called without arguments");
                             self.push(
                                 get_next_list_elt(predicate.clone())
                                     .expect("cond must have an even number of arguments"),
@@ -726,6 +723,7 @@ impl EvalStack {
 
                 let apply_start = self.frame_start;
 
+                // NOTE: assume no particular argument evaluation order!
                 let mut arg = Some(raw_args);
                 for i in 0..proc_get_argct(proc) {
                     let return_to =

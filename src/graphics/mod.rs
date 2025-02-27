@@ -29,8 +29,8 @@
 
 // <>
 
-use crate::sail::{self, SlHndl};
 use crate::FrameHandles;
+use crate::sail::{self, SlHndl};
 
 use ash::vk;
 
@@ -39,11 +39,11 @@ use std::mem::size_of;
 mod text;
 
 /// Sail interpreter loop for the render thread (holds graphics state)
-pub fn render_loop(name: &'static str, size: [u32; 2], frame: FrameHandles, sl_thr_ptr: usize) {
+pub fn render_loop(name: &'static str, frame: FrameHandles, sl_thr_ptr: usize) {
     let sl_thr_ptr = sl_thr_ptr as *mut sail::thread::ThreadHull;
     let thread_ref = unsafe { &mut *sl_thr_ptr };
 
-    let mut engine = Engine::new(frame, name, size[0], size[1]);
+    let mut engine = Engine::new(frame, name);
 
     let mut test_glyph = text::load();
 
@@ -85,20 +85,21 @@ pub fn render_loop(name: &'static str, size: [u32; 2], frame: FrameHandles, sl_t
             eng_ptr
         }
 
-        "frame-size" [eng_ptr, w, h] {
-            assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
-            let engine = unsafe {
-                &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
-            };
+        // "frame-size" [eng_ptr, w, h] {
+        //     assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
+        //     let engine = unsafe {
+        //         &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
+        //     };
 
-            // let w = sail::u32_get(w);
-            // let h = sail::u32_get(h);
+        //     // let w = sail::u32_get(w);
+        //     // let h = sail::u32_get(h);
 
-            engine.need_surface_cfg = true;
+        //     engine.need_surface_cfg = true;
 
-            eng_ptr
-        }
+        //     eng_ptr
+        // }
 
+        // TODO: drawing slows as count of lines ever drawn increases
         "add-line" [eng_ptr, window, points, colors] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
@@ -194,9 +195,6 @@ pub fn render_loop(name: &'static str, size: [u32; 2], frame: FrameHandles, sl_t
                 &mut *(sail::read_field_unchecked::<u64>(eng_ptr.clone(), 0) as *mut Engine)
             };
 
-            // TODO: this should take normalized frame coords (-1.0 to
-            // 1.0), not pixel coords
-
             // (prospective policy: no pixel information exposed to
             // Sail; convert from pixels to normalized form in input
             // handler and convert back in renderer)
@@ -214,25 +212,12 @@ pub fn render_loop(name: &'static str, size: [u32; 2], frame: FrameHandles, sl_t
                  sail::f32_get(brx),
                  sail::f32_get(bry));
 
-            // TODO: track windows in normalized frame coordinates for
-            // interface simplicity and resize handling
+            let winmod = &mut engine.window_coords[wd];
 
-            let vpmod = &mut engine.viewports[wd];
-
-            let root_xtnt = engine.surface_res;
-            let topx = |f, b| (f + 1.0) * (b / 2) as f32;
-
-            let (tlxp, tlyp, brxp, bryp) = (
-                topx(tlx, root_xtnt.width),
-                topx(tly, root_xtnt.height),
-                topx(brx, root_xtnt.width),
-                topx(bry, root_xtnt.height),
-            );
-
-            vpmod.x = tlxp;
-            vpmod.y = tlyp;
-            vpmod.width = brxp - tlxp;
-            vpmod.height = bryp - tlyp;
+            winmod.x = tlx;
+            winmod.y = tly;
+            winmod.w = brx - tlx;
+            winmod.h = bry - tly;
 
             eng_ptr
         }
@@ -314,6 +299,14 @@ pub fn render_loop(name: &'static str, size: [u32; 2], frame: FrameHandles, sl_t
     drop(engine);
 }
 
+#[derive(Clone)]
+struct Window {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
 // TODO: update to latest version of ash, ash-window,
 // and raw-window-handle
 
@@ -326,6 +319,7 @@ pub struct Engine {
 
     // window data
     window_order: Vec<u8>,
+    window_coords: Vec<Window>,
 
     need_surface_cfg: bool,
 
@@ -350,8 +344,12 @@ pub struct Engine {
     present_queue: vk::Queue,
     present_images: Vec<vk::Image>,
 
-    viewports: Vec<vk::Viewport>,
-    scissors: Vec<vk::Rect2D>,
+    // TODO: store window info separately in normalized frame coords;
+    // regenerate viewports in pixel coords on resizes or other state
+    // changes; could also generate viewports at frame time
+    // viewports: Vec<vk::Viewport>,
+    // scissors: Vec<vk::Rect2D>,
+    scissor: vk::Rect2D,
 
     cmd_pool: vk::CommandPool,
     cmd_buffers: Vec<vk::CommandBuffer>,
@@ -369,7 +367,7 @@ pub struct Engine {
 
 impl Engine {
     /// Initialize the graphics engine
-    fn new(frame: FrameHandles, name: &str, width: u32, height: u32) -> Self {
+    fn new(frame: FrameHandles, name: &str) -> Self {
         // let entry = unsafe { ash::Entry::load() }.expect("Ash entry error");
         let entry = ash::Entry::linked();
         let app_name = std::ffi::CString::new(name).unwrap();
@@ -575,16 +573,15 @@ impl Engine {
                 .unwrap()
         };
 
-        let (surface_res, swapchain, framebuffer, viewport, scissor, present_images) =
-            Self::surface_gen(
-                &device,
-                &pdevice,
-                &renderpass,
-                &surface_loader,
-                &surface,
-                &surface_format,
-                &swapchain_loader,
-            );
+        let (surface_res, swapchain, framebuffer, scissor, present_images) = Self::surface_gen(
+            &device,
+            &pdevice,
+            &renderpass,
+            &surface_loader,
+            &surface,
+            &surface_format,
+            &swapchain_loader,
+        );
 
         Self {
             clear: [0.0, 0.0, 0.0, 1.0],
@@ -593,6 +590,12 @@ impl Engine {
             buflen: vec![256],
 
             window_order: vec![0],
+            window_coords: vec![Window {
+                x: -1.0,
+                y: -1.0,
+                w: 2.0,
+                h: 2.0,
+            }],
 
             need_surface_cfg: false,
 
@@ -617,8 +620,7 @@ impl Engine {
             framebuffer,
             present_images,
 
-            viewports: vec![viewport],
-            scissors: vec![scissor],
+            scissor,
 
             cmd_pool: pool,
             cmd_buffers: command_buffers,
@@ -643,54 +645,56 @@ impl Engine {
         p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
         _user_data: *mut std::os::raw::c_void,
     ) -> vk::Bool32 {
-        let callback_data = *p_callback_data;
-        let message_id_number: i32 = callback_data.message_id_number;
+        unsafe {
+            let callback_data = *p_callback_data;
+            let message_id_number: i32 = callback_data.message_id_number;
 
-        let message_id_name = if callback_data.p_message_id_name.is_null() {
-            std::borrow::Cow::from("")
-        } else {
-            std::ffi::CStr::from_ptr(callback_data.p_message_id_name).to_string_lossy()
-        };
+            let message_id_name = if callback_data.p_message_id_name.is_null() {
+                std::borrow::Cow::from("")
+            } else {
+                std::ffi::CStr::from_ptr(callback_data.p_message_id_name).to_string_lossy()
+            };
 
-        let message = if callback_data.p_message.is_null() {
-            std::borrow::Cow::from("")
-        } else {
-            std::ffi::CStr::from_ptr(callback_data.p_message).to_string_lossy()
-        };
+            let message = if callback_data.p_message.is_null() {
+                std::borrow::Cow::from("")
+            } else {
+                std::ffi::CStr::from_ptr(callback_data.p_message).to_string_lossy()
+            };
 
-        match message_severity {
-            vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => log::error!(
-                "{:?} [{} ({})] : {}",
-                message_type,
-                message_id_name,
-                &message_id_number.to_string(),
-                message
-            ),
-            vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => log::warn!(
-                "{:?} [{} ({})] : {}",
-                message_type,
-                message_id_name,
-                &message_id_number.to_string(),
-                message
-            ),
-            vk::DebugUtilsMessageSeverityFlagsEXT::INFO => log::info!(
-                "{:?} [{} ({})] : {}",
-                message_type,
-                message_id_name,
-                &message_id_number.to_string(),
-                message
-            ),
-            vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => log::trace!(
-                "{:?} [{} ({})] : {}",
-                message_type,
-                message_id_name,
-                &message_id_number.to_string(),
-                message
-            ),
-            _ => (),
+            match message_severity {
+                vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => log::error!(
+                    "{:?} [{} ({})] : {}",
+                    message_type,
+                    message_id_name,
+                    &message_id_number.to_string(),
+                    message
+                ),
+                vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => log::warn!(
+                    "{:?} [{} ({})] : {}",
+                    message_type,
+                    message_id_name,
+                    &message_id_number.to_string(),
+                    message
+                ),
+                vk::DebugUtilsMessageSeverityFlagsEXT::INFO => log::info!(
+                    "{:?} [{} ({})] : {}",
+                    message_type,
+                    message_id_name,
+                    &message_id_number.to_string(),
+                    message
+                ),
+                vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => log::trace!(
+                    "{:?} [{} ({})] : {}",
+                    message_type,
+                    message_id_name,
+                    &message_id_number.to_string(),
+                    message
+                ),
+                _ => (),
+            }
+
+            vk::FALSE
         }
-
-        vk::FALSE
     }
 
     /// Generate Vulkan objects that change when the surface changes
@@ -706,7 +710,6 @@ impl Engine {
         vk::Extent2D,
         vk::SwapchainKHR,
         vk::Framebuffer,
-        vk::Viewport,
         vk::Rect2D,
         Vec<vk::Image>,
     ) {
@@ -799,20 +802,12 @@ impl Engine {
 
         let present_images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
 
-        let viewport = vk::Viewport::default()
-            .x(0.0)
-            .y(0.0)
-            .width(surface_resolution.width as f32)
-            .height(surface_resolution.height as f32)
-            .max_depth(1.0);
-
         let scissor = vk::Rect2D::default().extent(surface_resolution);
 
         (
             surface_resolution,
             swapchain,
             framebuffer,
-            viewport,
             scissor,
             present_images,
         )
@@ -838,8 +833,7 @@ impl Engine {
             self.surface_res,
             self.swapchain,
             self.framebuffer,
-            self.viewports[0],
-            self.scissors[0],
+            self.scissor,
             self.present_images,
         ) = Self::surface_gen(
             &self.device,
@@ -923,40 +917,42 @@ impl Engine {
         usage: vk::BufferUsageFlags,
         properties: vk::MemoryPropertyFlags,
     ) -> (vk::DeviceMemory, vk::Buffer) {
-        let buffer = {
-            let buf_create_info = vk::BufferCreateInfo::default()
-                .size(buffer_len)
-                .usage(usage);
-            self.device.create_buffer(&buf_create_info, None).unwrap()
-        };
+        unsafe {
+            let buffer = {
+                let buf_create_info = vk::BufferCreateInfo::default()
+                    .size(buffer_len)
+                    .usage(usage);
+                self.device.create_buffer(&buf_create_info, None).unwrap()
+            };
 
-        let req = self.device.get_buffer_memory_requirements(buffer);
+            let req = self.device.get_buffer_memory_requirements(buffer);
 
-        let mem_types = self.dev_mem_prop.memory_types
-            [0..self.dev_mem_prop.memory_type_count as usize]
-            .to_vec();
+            let mem_types = self.dev_mem_prop.memory_types
+                [0..self.dev_mem_prop.memory_type_count as usize]
+                .to_vec();
 
-        let buf_mem = {
-            let mem_type_idx = mem_types
-                .into_iter()
-                .enumerate()
-                .find(|(id, ty)| {
-                    (req.memory_type_bits & (1_u32 << id) != 0)
-                        && ty.property_flags.contains(properties)
-                })
-                .map(|(id, _ty)| id as u32)
-                .unwrap();
+            let buf_mem = {
+                let mem_type_idx = mem_types
+                    .into_iter()
+                    .enumerate()
+                    .find(|(id, ty)| {
+                        (req.memory_type_bits & (1_u32 << id) != 0)
+                            && ty.property_flags.contains(properties)
+                    })
+                    .map(|(id, _ty)| id as u32)
+                    .unwrap();
 
-            let mem_alloc_info = vk::MemoryAllocateInfo::default()
-                .allocation_size(req.size)
-                .memory_type_index(mem_type_idx);
+                let mem_alloc_info = vk::MemoryAllocateInfo::default()
+                    .allocation_size(req.size)
+                    .memory_type_index(mem_type_idx);
 
-            self.device.allocate_memory(&mem_alloc_info, None).unwrap()
-        };
+                self.device.allocate_memory(&mem_alloc_info, None).unwrap()
+            };
 
-        self.device.bind_buffer_memory(buffer, buf_mem, 0).unwrap();
+            self.device.bind_buffer_memory(buffer, buf_mem, 0).unwrap();
 
-        (buf_mem, buffer)
+            (buf_mem, buffer)
+        }
     }
 
     /// Generate a basic graphics pipeline
@@ -967,109 +963,114 @@ impl Engine {
         fragment_shader: &str,
         primitive_type: vk::PrimitiveTopology,
     ) -> vk::Pipeline {
-        let vtx_shader_mod = {
-            let shader_code = Self::compile_shader(vertex_shader, shaderc::ShaderKind::Vertex);
-            let shader_mod_create_info = vk::ShaderModuleCreateInfo::default().code(&shader_code);
-            self.device
-                .create_shader_module(&shader_mod_create_info, None)
-                .unwrap()
-        };
+        unsafe {
+            let vtx_shader_mod = {
+                let shader_code = Self::compile_shader(vertex_shader, shaderc::ShaderKind::Vertex);
+                let shader_mod_create_info =
+                    vk::ShaderModuleCreateInfo::default().code(&shader_code);
+                self.device
+                    .create_shader_module(&shader_mod_create_info, None)
+                    .unwrap()
+            };
 
-        let frag_shader_mod = {
-            let shader_code = Self::compile_shader(fragment_shader, shaderc::ShaderKind::Fragment);
-            let shader_mod_create_info = vk::ShaderModuleCreateInfo::default().code(&shader_code);
-            self.device
-                .create_shader_module(&shader_mod_create_info, None)
-                .unwrap()
-        };
+            let frag_shader_mod = {
+                let shader_code =
+                    Self::compile_shader(fragment_shader, shaderc::ShaderKind::Fragment);
+                let shader_mod_create_info =
+                    vk::ShaderModuleCreateInfo::default().code(&shader_code);
+                self.device
+                    .create_shader_module(&shader_mod_create_info, None)
+                    .unwrap()
+            };
 
-        let entry_name = std::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0");
+            let entry_name = std::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0");
 
-        let shader_stage_info = [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(vtx_shader_mod)
-                .name(entry_name),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(frag_shader_mod)
-                .name(entry_name),
-        ];
+            let shader_stage_info = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(vtx_shader_mod)
+                    .name(entry_name),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(frag_shader_mod)
+                    .name(entry_name),
+            ];
 
-        let line_binding = vk::VertexInputBindingDescription::default()
-            .binding(0)
-            .stride((size_of::<f32>() * 2) as u32)
-            .input_rate(vk::VertexInputRate::VERTEX);
+            let line_binding = vk::VertexInputBindingDescription::default()
+                .binding(0)
+                .stride((size_of::<f32>() * 2) as u32)
+                .input_rate(vk::VertexInputRate::VERTEX);
 
-        let line_attribute = vk::VertexInputAttributeDescription::default()
-            .location(0)
-            .binding(0)
-            .format(vk::Format::R32G32_SFLOAT)
-            .offset(0);
+            let line_attribute = vk::VertexInputAttributeDescription::default()
+                .location(0)
+                .binding(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(0);
 
-        let vertex_bindings = [line_binding];
+            let vertex_bindings = [line_binding];
 
-        let vertex_attributes = [line_attribute];
+            let vertex_attributes = [line_attribute];
 
-        let vertex_input_state_info = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(&vertex_bindings)
-            .vertex_attribute_descriptions(&vertex_attributes);
+            let vertex_input_state_info = vk::PipelineVertexInputStateCreateInfo::default()
+                .vertex_binding_descriptions(&vertex_bindings)
+                .vertex_attribute_descriptions(&vertex_attributes);
 
-        let input_assembly_state_info =
-            vk::PipelineInputAssemblyStateCreateInfo::default().topology(primitive_type);
+            let input_assembly_state_info =
+                vk::PipelineInputAssemblyStateCreateInfo::default().topology(primitive_type);
 
-        let viewport_state_info = vk::PipelineViewportStateCreateInfo::default()
-            .viewport_count(1)
-            .scissor_count(1);
+            let viewport_state_info = vk::PipelineViewportStateCreateInfo::default()
+                .viewport_count(1)
+                .scissor_count(1);
 
-        let rasterization_state_info = vk::PipelineRasterizationStateCreateInfo::default()
-            .polygon_mode(vk::PolygonMode::FILL)
-            .line_width(1.0);
+            let rasterization_state_info = vk::PipelineRasterizationStateCreateInfo::default()
+                .polygon_mode(vk::PolygonMode::FILL)
+                .line_width(1.0);
 
-        let multisample_state_info = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+            let multisample_state_info = vk::PipelineMultisampleStateCreateInfo::default()
+                .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
-        let attachment_blend = vk::PipelineColorBlendAttachmentState::default()
-            .blend_enable(false)
-            .color_write_mask(
-                vk::ColorComponentFlags::R
-                    | vk::ColorComponentFlags::G
-                    | vk::ColorComponentFlags::B
-                    | vk::ColorComponentFlags::A,
-            );
+            let attachment_blend = vk::PipelineColorBlendAttachmentState::default()
+                .blend_enable(false)
+                .color_write_mask(
+                    vk::ColorComponentFlags::R
+                        | vk::ColorComponentFlags::G
+                        | vk::ColorComponentFlags::B
+                        | vk::ColorComponentFlags::A,
+                );
 
-        let blend_attachments = [attachment_blend];
+            let blend_attachments = [attachment_blend];
 
-        let color_blend_state_info =
-            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
+            let color_blend_state_info =
+                vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
-        let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
-            .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
+            let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
+                .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
 
-        let pipeline_create_info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&shader_stage_info)
-            .vertex_input_state(&vertex_input_state_info)
-            .input_assembly_state(&input_assembly_state_info)
-            .viewport_state(&viewport_state_info)
-            .rasterization_state(&rasterization_state_info)
-            .multisample_state(&multisample_state_info)
-            .color_blend_state(&color_blend_state_info)
-            .dynamic_state(&dynamic_state_info)
-            .layout(pipeline_layout)
-            .render_pass(self.renderpass)
-            .subpass(0);
+            let pipeline_create_info = vk::GraphicsPipelineCreateInfo::default()
+                .stages(&shader_stage_info)
+                .vertex_input_state(&vertex_input_state_info)
+                .input_assembly_state(&input_assembly_state_info)
+                .viewport_state(&viewport_state_info)
+                .rasterization_state(&rasterization_state_info)
+                .multisample_state(&multisample_state_info)
+                .color_blend_state(&color_blend_state_info)
+                .dynamic_state(&dynamic_state_info)
+                .layout(pipeline_layout)
+                .render_pass(self.renderpass)
+                .subpass(0);
 
-        let pipeline_create_infos = [pipeline_create_info];
+            let pipeline_create_infos = [pipeline_create_info];
 
-        let pipeline = self
-            .device
-            .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_create_infos, None)
-            .unwrap()[0];
+            let pipeline = self
+                .device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_create_infos, None)
+                .unwrap()[0];
 
-        self.device.destroy_shader_module(vtx_shader_mod, None);
-        self.device.destroy_shader_module(frag_shader_mod, None);
+            self.device.destroy_shader_module(vtx_shader_mod, None);
+            self.device.destroy_shader_module(frag_shader_mod, None);
 
-        pipeline
+            pipeline
+        }
     }
 
     /// Compile GLSL shader code into SPIR-V
@@ -1096,9 +1097,7 @@ impl Engine {
         self.buflen.push(256);
 
         self.window_order.push(new_idx);
-
-        self.viewports.push(self.viewports[0].clone());
-        self.scissors.push(self.scissors[0].clone());
+        self.window_coords.push(self.window_coords[0].clone());
 
         self.state_buffer_setup();
 
@@ -1112,8 +1111,7 @@ impl Engine {
         self.colors.swap_remove(idx);
         self.buflen.swap_remove(idx);
 
-        self.viewports.swap_remove(idx);
-        self.scissors.swap_remove(idx);
+        self.window_coords.swap_remove(idx);
 
         let plast = self.window_order.len() as u8 - 1;
 
@@ -1147,51 +1145,41 @@ impl Engine {
         self.buffer_size_check();
     }
 
+    fn win_vp(&self, w_id: usize) -> vk::Viewport {
+        let root_xtnt = self.surface_res;
+        let wdc = &self.window_coords[w_id];
+
+        vk::Viewport::default()
+            .x((wdc.x + 1.0) * (root_xtnt.width / 2) as f32)
+            .y((wdc.y + 1.0) * (root_xtnt.height / 2) as f32)
+            .width(wdc.w * (root_xtnt.width / 2) as f32)
+            .height(wdc.h * (root_xtnt.height / 2) as f32)
+    }
+
     /// Return top window at position given in normalized frame coords
     fn hittest(&mut self, x: f32, y: f32) -> Option<(u8, f32, f32)> {
-        let root_xtnt = self.surface_res;
-
-        // TODO: potentially simplify by tracking window positions and
-        // sizes in normalized frame coordinates at the engine level
-
-        // TODO: or... could use cur pixel coords direct from context
-
-        // NOTE: in that case hit test would not require a conversion
-        // step; viewports would be generated after any frame or
-        // window configuration change by transforming into frame
-        // pixel coordinates
+        // TODO: use cur pixel coords direct from context (?)
 
         if x >= -1.0 && y >= -1.0 && x <= 1.0 && y <= 1.0 {
-            let (cur_px_x, cur_px_y) = (
-                (x + 1.0) * (root_xtnt.width / 2) as f32,
-                (y + 1.0) * (root_xtnt.height / 2) as f32,
-            );
-
             let mut hit = 0;
             let (mut inner_x, mut inner_y) = (0.0, 0.0);
 
             for idx_u8 in self.window_order[1..].iter().rev() {
                 let w_idx = *idx_u8 as usize;
 
-                let vk::Viewport {
-                    x: cx,
-                    y: cy,
-                    width: cw,
-                    height: ch,
-                    ..
-                } = self.viewports[w_idx];
+                let Window {
+                    x: min_x,
+                    y: min_y,
+                    w: ww,
+                    h: wh,
+                } = self.window_coords[w_idx];
 
-                let (min_vp_x, min_vp_y) = (cx, cy);
-                let (max_vp_x, max_vp_y) = (cx + cw, cy + ch);
+                let (max_x, max_y) = (min_x + ww, min_y + wh);
 
-                if cur_px_x >= min_vp_x
-                    && cur_px_y >= min_vp_y
-                    && cur_px_x < max_vp_x
-                    && cur_px_y < max_vp_y
-                {
+                if x >= min_x && y >= min_y && x < max_x && y < max_y {
                     hit = *idx_u8;
-                    inner_x = (cur_px_x - min_vp_x) / (cw / 2.0) - 1.0;
-                    inner_y = (cur_px_y - min_vp_y) / (ch / 2.0) - 1.0;
+                    inner_x = 2.0 * (x - ((ww / 2.0) + min_x)) / ww;
+                    inner_y = 2.0 * (y - ((wh / 2.0) + min_y)) / wh;
                     break;
                 }
             }
@@ -1200,12 +1188,6 @@ impl Engine {
             None
         }
     }
-
-    // /// Empty the engine of all lines
-    // fn empty_lines(&mut self) {
-    //     self.lines.clear();
-    //     self.colors.clear();
-    // }
 
     /// Check whether the buffer has enough space for all vertices
     fn buffer_size_check(&mut self) {
@@ -1362,9 +1344,9 @@ impl Engine {
                 let w_idx = *idx_u8 as usize;
 
                 self.device
-                    .cmd_set_viewport(self.cmd_buffers[1], 0, &[self.viewports[w_idx]]);
+                    .cmd_set_viewport(self.cmd_buffers[1], 0, &[self.win_vp(w_idx)]);
                 self.device
-                    .cmd_set_scissor(self.cmd_buffers[1], 0, &[self.scissors[w_idx]]);
+                    .cmd_set_scissor(self.cmd_buffers[1], 0, &[self.scissor]);
 
                 self.device.cmd_bind_vertex_buffers(
                     self.cmd_buffers[1],
@@ -1460,71 +1442,3 @@ impl Drop for Engine {
         }
     }
 }
-
-// pub fn draw_clear_frame(&mut self, color: [f32; 4]) -> Result<(), &str> {
-//     let timeout_ns = 1_000_000_000;
-
-//     unsafe {
-//         self.device
-//             .wait_for_fence(self.submission_complete_fence.as_ref().unwrap(), timeout_ns)
-//             .unwrap();
-//         self.device
-//             .reset_fence(self.submission_complete_fence.as_mut().unwrap())
-//             .unwrap();
-
-//         self.command_pool.as_mut().unwrap().reset(false);
-//     }
-
-//     let surface_image = unsafe {
-//         match self.surface.as_mut().unwrap().acquire_image(timeout_ns) {
-//             Ok((image, _)) => image,
-//             Err(_) => return Err("Could not acquire image"),
-//         }
-//     };
-
-//     unsafe {
-//         let buffer = &mut self.command_buffers[0];
-
-//         buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
-
-//         buffer.begin_render_pass(
-//             &self.render_passes[0],
-//             &self.framebuffer.as_ref().unwrap(),
-//             Rect {
-//                 x: 0,
-//                 y: 0,
-//                 w: self.surface_extent.width as i16,
-//                 h: self.surface_extent.height as i16,
-//             },
-//             iter::once(RenderAttachmentInfo {
-//                 image_view: surface_image.borrow(),
-//                 clear_value: ClearValue {
-//                     color: ClearColor { float32: color },
-//                 },
-//             }),
-//             SubpassContents::Inline,
-//         );
-
-//         buffer.end_render_pass();
-//         buffer.finish();
-//     }
-
-//     unsafe {
-//         self.queue_group.queues[0].submit(
-//             vec![&self.command_buffers[0]].into_iter(),
-//             vec![].into_iter(),
-//             vec![self.rendering_complete_semaphore.as_ref().unwrap()].into_iter(),
-//             self.submission_complete_fence.as_mut(),
-//         );
-
-//         self.queue_group.queues[0]
-//             .present(
-//                 self.surface.as_mut().unwrap(),
-//                 surface_image,
-//                 self.rendering_complete_semaphore.as_mut(),
-//             )
-//             .unwrap();
-//     }
-
-//     Ok(())
-// }

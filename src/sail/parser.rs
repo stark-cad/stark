@@ -20,7 +20,7 @@
 
 // TODO: move to using &mut for the Region instead of *mut
 
-use super::{core::*, memmgt, SlErrCode, Stab};
+use super::{SlErrCode, Stab, core::*, memmgt};
 
 use std::iter;
 use std::str;

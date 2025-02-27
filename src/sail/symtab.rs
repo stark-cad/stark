@@ -441,7 +441,7 @@ mod tests {
     fn multisym() {
         let mut tab = SymbolTable::new(100000);
 
-        fn gen(tgt: usize) {
+        fn r#gen(tgt: usize) {
             let tab = unsafe { mem::transmute::<usize, &mut SymbolTable>(tgt) };
 
             // symbols aA00 - zZ99
@@ -466,7 +466,7 @@ mod tests {
 
         let mut th = vec![];
         for _ in 0..5 {
-            th.push(std::thread::spawn(move || gen(hdl)))
+            th.push(std::thread::spawn(move || r#gen(hdl)))
         }
 
         for j in th {

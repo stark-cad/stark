@@ -19,7 +19,7 @@
 
 // <>
 
-use crate::{sail, Frame};
+use crate::{Frame, sail};
 
 // TODO: update to latest version of winit
 

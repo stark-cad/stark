@@ -37,8 +37,8 @@
 (def rect-f32 (fn [wh x1 y1 x2 y2]
                   (line-f32 wh x1 y1 x2 y1)
                   (line-f32 wh x1 y1 x1 y2)
-                  (line-f32 wh x2 y2 x1 y2)
-                  (line-f32 wh x2 y2 x2 y1)))
+                  (line-f32 wh x1 y2 x2 y2)
+                  (line-f32 wh x2 y1 x2 y2)))
 
 (def draw-fn line-f32)
 

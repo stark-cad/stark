@@ -76,154 +76,154 @@ impl RegionTable {
         }
     }
 
-    unsafe fn len(&mut self) -> usize {
-        let lock: *mut u8 = &mut self.lock;
-        while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
-            std::hint::spin_loop();
+    unsafe fn len(tgt: *mut Self) -> usize {
+        unsafe {
+            let lock: *mut u8 = &raw mut (*tgt).lock;
+            while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+                std::hint::spin_loop();
+            }
+
+            std::intrinsics::atomic_fence_acqrel();
+
+            let out = (*tgt).len;
+
+            std::intrinsics::atomic_store_release(lock, false as u8);
+
+            out
         }
-
-        std::intrinsics::atomic_fence_acqrel();
-
-        let out = self.len;
-
-        std::intrinsics::atomic_store_release(lock, false as u8);
-
-        out
     }
 
     /// Resize the table, reallocating as necessary
     unsafe fn resize(&mut self, cap: usize) {
-        // let lock: *mut u8 = &mut self.lock;
-        // while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
-        //     std::hint::spin_loop();
-        // }
+        unsafe {
+            // let lock: *mut u8 = &mut self.lock;
+            // while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+            //     std::hint::spin_loop();
+            // }
 
-        if self.cap != cap {
-            if self.resized {
-                let current_layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
+            if self.cap != cap {
+                if self.resized {
+                    let current_layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
 
-                self.low_array = alloc::realloc(self.low_array as *mut u8, current_layout, cap * 8)
-                    as *mut usize;
-                self.high_array =
-                    alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8)
-                        as *mut usize;
-                self.zone_array =
-                    alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8)
-                        as *mut *mut Zone;
-                self.region_array =
-                    alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8)
-                        as *mut *mut Region;
-            } else {
-                let layout = alloc::Layout::from_size_align_unchecked(cap * 8, 8);
+                    self.low_array =
+                        alloc::realloc(self.low_array as *mut u8, current_layout, cap * 8)
+                            as *mut usize;
+                    self.high_array =
+                        alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8)
+                            as *mut usize;
+                    self.zone_array =
+                        alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8)
+                            as *mut *mut Zone;
+                    self.region_array =
+                        alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8)
+                            as *mut *mut Region;
+                } else {
+                    let layout = alloc::Layout::from_size_align_unchecked(cap * 8, 8);
 
-                let old_low = self.low_array;
-                let old_high = self.high_array;
-                let old_zone = self.zone_array;
-                let old_reg = self.region_array;
+                    let old_low = self.low_array;
+                    let old_high = self.high_array;
+                    let old_zone = self.zone_array;
+                    let old_reg = self.region_array;
 
-                self.low_array = alloc::alloc(layout) as *mut usize;
-                self.high_array = alloc::alloc(layout) as *mut usize;
-                self.zone_array = alloc::alloc(layout) as *mut *mut Zone;
-                self.region_array = alloc::alloc(layout) as *mut *mut Region;
+                    self.low_array = alloc::alloc(layout) as *mut usize;
+                    self.high_array = alloc::alloc(layout) as *mut usize;
+                    self.zone_array = alloc::alloc(layout) as *mut *mut Zone;
+                    self.region_array = alloc::alloc(layout) as *mut *mut Region;
 
-                ptr::copy_nonoverlapping(old_low, self.low_array, self.cap);
-                ptr::copy_nonoverlapping(old_high, self.high_array, self.cap);
-                ptr::copy_nonoverlapping(old_zone, self.zone_array, self.cap);
-                ptr::copy_nonoverlapping(old_reg, self.region_array, self.cap);
+                    ptr::copy_nonoverlapping(old_low, self.low_array, self.cap);
+                    ptr::copy_nonoverlapping(old_high, self.high_array, self.cap);
+                    ptr::copy_nonoverlapping(old_zone, self.zone_array, self.cap);
+                    ptr::copy_nonoverlapping(old_reg, self.region_array, self.cap);
 
-                self.resized = true;
+                    self.resized = true;
+                }
+
+                self.cap = cap;
             }
 
-            self.cap = cap;
+            // std::intrinsics::atomic_store_release(lock, false as u8);
         }
-
-        // std::intrinsics::atomic_store_release(lock, false as u8);
     }
 
     /// Add a new entry to the table
-    unsafe fn append(&mut self, start: usize, end: usize, zone: *mut Zone, region: *mut Region) {
-        // while self.lock == true as u8 {
-        //     std::hint::spin_loop();
-        // }
-        // std::intrinsics::atomic_fence_acqrel();
+    unsafe fn append(
+        tgt: *mut Self,
+        start: usize,
+        end: usize,
+        zone: *mut Zone,
+        region: *mut Region,
+    ) {
+        unsafe {
+            let lock: *mut u8 = &raw mut (*tgt).lock;
+            while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+                std::hint::spin_loop();
+            }
 
-        let lock: *mut u8 = &mut self.lock;
-        while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
-            std::hint::spin_loop();
+            std::intrinsics::atomic_fence_acqrel();
+
+            let old_len = (*tgt).len;
+
+            if old_len >= (*tgt).cap {
+                Self::resize(tgt.as_mut_unchecked(), (*tgt).cap * 2);
+            }
+
+            (*tgt).len += 1;
+
+            // TODO: use atomic_store_rel if needed?
+            ptr::write((*tgt).low_array.add(old_len), start);
+            ptr::write((*tgt).high_array.add(old_len), end);
+            ptr::write((*tgt).zone_array.add(old_len), zone);
+            ptr::write((*tgt).region_array.add(old_len), region);
+
+            std::intrinsics::atomic_fence_acqrel();
+
+            std::intrinsics::atomic_store_release(lock, false as u8);
+
+            println!("registered {:x} to {:x}", start, end);
+
+            // if cfg!(feature = "memdbg") {
+
+            // println!("- Zone added -");
+            // for i in 0..self.len {
+            //     let entry = self.index(i);
+            //     if !entry.2.is_null() {
+            //         println!(
+            //             "Zone {}, idx {}: {:x} to {:x}",
+            //             (*entry.2).id,
+            //             i,
+            //             entry.0,
+            //             entry.1
+            //         )
+            //     }
+            // }
+            // println!()
+
+            // }
         }
-
-        std::intrinsics::atomic_fence_acqrel();
-
-        if self.len >= self.cap {
-            self.resize(self.cap * 2);
-        }
-
-        // let len_ptr: *mut usize = &mut self.len;
-        // let mut old_len = *len_ptr;
-        // while !std::intrinsics::atomic_cxchg_acqrel_acquire(len_ptr, old_len, old_len + 1).1 {
-        //     old_len = *len_ptr;
-        // }
-
-        let old_len = self.len;
-        self.len += 1;
-
-        // TODO: use atomic_store_rel if needed?
-        ptr::write(self.low_array.add(old_len), start);
-        ptr::write(self.high_array.add(old_len), end);
-        ptr::write(self.zone_array.add(old_len), zone);
-        ptr::write(self.region_array.add(old_len), region);
-
-        std::intrinsics::atomic_fence_acqrel();
-
-        std::intrinsics::atomic_store_release(lock, false as u8);
-
-        println!("registered {:x} to {:x}", start, end);
-
-        // if cfg!(feature = "memdbg") {
-
-        // println!("- Zone added -");
-        // for i in 0..self.len {
-        //     let entry = self.index(i);
-        //     if !entry.2.is_null() {
-        //         println!(
-        //             "Zone {}, idx {}: {:x} to {:x}",
-        //             (*entry.2).id,
-        //             i,
-        //             entry.0,
-        //             entry.1
-        //         )
-        //     }
-        // }
-        // println!()
-
-        // }
     }
 
     /// Gets a table entry by index
-    unsafe fn index(&mut self, idx: usize) -> (usize, usize, *mut Zone, *mut Region) {
-        // while self.lock == true as u8 {
-        //     std::hint::spin_loop();
-        // }
-        // std::intrinsics::atomic_fence_acqrel();
+    unsafe fn index(tgt: *mut Self, idx: usize) -> (usize, usize, *mut Zone, *mut Region) {
+        unsafe {
+            let lock: *mut u8 = &raw mut (*tgt).lock;
+            while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+                std::hint::spin_loop();
+            }
 
-        let lock: *mut u8 = &mut self.lock;
-        while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
-            std::hint::spin_loop();
+            std::intrinsics::atomic_fence_acqrel();
+
+            assert!(idx < (*tgt).len);
+
+            // TODO: use atomic_load_acq if needed?
+            let start = ptr::read((*tgt).low_array.add(idx));
+            let end = ptr::read((*tgt).high_array.add(idx));
+            let zone = ptr::read((*tgt).zone_array.add(idx));
+            let region = ptr::read((*tgt).region_array.add(idx));
+
+            std::intrinsics::atomic_store_release(lock, false as u8);
+
+            (start, end, zone, region)
         }
-
-        std::intrinsics::atomic_fence_acqrel();
-
-        assert!(idx < self.len);
-
-        // TODO: use atomic_load_acq if needed?
-        let start = ptr::read(self.low_array.add(idx));
-        let end = ptr::read(self.high_array.add(idx));
-        let zone = ptr::read(self.zone_array.add(idx));
-        let region = ptr::read(self.region_array.add(idx));
-
-        std::intrinsics::atomic_store_release(lock, false as u8);
-
-        (start, end, zone, region)
     }
 }
 
@@ -261,17 +261,23 @@ mod table_tests {
 
         unsafe {
             for i in 1..13 {
-                TABLE.append(i, i * 2, std::ptr::null_mut(), std::ptr::null_mut());
+                RegionTable::append(
+                    &raw mut TABLE,
+                    i,
+                    i * 2,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
             }
 
-            assert_eq!(TABLE.cap, 16);
+            assert_eq!((*(&raw const TABLE)).cap, 16);
 
-            match TABLE.index(2) {
+            match RegionTable::index(&raw mut TABLE, 2) {
                 (3, 6, _, _) => (),
                 _ => panic!(),
             }
 
-            match TABLE.index(10) {
+            match RegionTable::index(&raw mut TABLE, 10) {
                 (11, 22, _, _) => (),
                 _ => panic!(),
             }
@@ -295,33 +301,35 @@ pub const fn cap(cfg: super::Cfg) -> u32 {
 
 /// Returns a pointer to `sz` unused bytes somewhere in the region `reg`
 unsafe fn acquire_raw(reg: *mut Region, sz: u32) -> *mut u8 {
-    let region_ref = reg.as_mut().unwrap();
-    let mut zone_ref = region_ref.head.as_mut().unwrap();
+    unsafe {
+        let region_ref = reg.as_mut().unwrap();
+        let mut zone_ref = region_ref.head.as_mut().unwrap();
 
-    let ptr = loop {
-        // // advance if definitely no space
-        // if zone_ref.used + sz >= region_ref.zone_size {
-        //     // zone_ref = zone_advance(region_ref, zone_ref)
-        // }
+        let ptr = loop {
+            // // advance if definitely no space
+            // if zone_ref.used + sz >= region_ref.zone_size {
+            //     // zone_ref = zone_advance(region_ref, zone_ref)
+            // }
 
-        // try the free tree
-        /*else*/
-        if let Some(ptr) = free_tree_seek(zone_ref, sz) {
-            break ptr;
-        }
-        // try empty space
-        else if let Some(ptr) = void_seek(zone_ref, sz) {
-            break ptr;
-        }
+            // try the free tree
+            /*else*/
+            if let Some(ptr) = free_tree_seek(zone_ref, sz) {
+                break ptr;
+            }
+            // try empty space
+            else if let Some(ptr) = void_seek(zone_ref, sz) {
+                break ptr;
+            }
 
-        // advance if all individual spaces too small
-        zone_ref = zone_advance(region_ref, zone_ref)
-    };
+            // advance if all individual spaces too small
+            zone_ref = zone_advance(region_ref, zone_ref)
+        };
 
-    assert!(ptr >= zone_ref.bot);
-    assert!(ptr < zone_ref.end);
+        assert!(ptr >= zone_ref.bot);
+        assert!(ptr < zone_ref.end);
 
-    ptr
+        ptr
+    }
 }
 
 pub fn copy_direct(src: *mut SlHead, into: *mut Region, rc: u8) -> *mut SlHead {
@@ -363,41 +371,43 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
     let obj_len =
         (HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN) + (size_fld_p as u32 * NUM_32_LEN)) + size;
 
-    let ptr = acquire_raw(region, obj_len);
+    unsafe {
+        let ptr = acquire_raw(region, obj_len);
 
-    // zero the whole object
-    ptr::write_bytes(ptr, 0, obj_len as _);
+        // zero the whole object
+        ptr::write_bytes(ptr, 0, obj_len as _);
 
-    let ptr = ptr as *mut SlHead;
+        let ptr = ptr as *mut SlHead;
 
-    let head = SlHead { cfg, rc: 1 };
-    ptr::write_unaligned(ptr, head);
+        let head = SlHead { cfg, rc: 1 };
+        ptr::write_unaligned(ptr, head);
 
-    if type_fld_p {
-        ptr::write_unaligned((ptr as *mut u8).add(HEAD_LEN as usize) as *mut _, typ_id);
+        if type_fld_p {
+            ptr::write_unaligned((ptr as *mut u8).add(HEAD_LEN as usize) as *mut _, typ_id);
+        }
+
+        if size_fld_p {
+            ptr::write_unaligned(
+                (ptr as *mut u8).add((HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN)) as _) as *mut _,
+                size,
+            );
+        }
+
+        if cfg!(feature = "memdbg") {
+            let obj_id = std::intrinsics::atomic_xadd_acqrel(&raw mut OBJECT_ID_CTR, 1);
+            ptr::write_unaligned((ptr as *mut u32).add(2), obj_id);
+
+            let ty = if type_fld_p {
+                format!("{typ_id:b}")
+            } else {
+                format!("{:?}", super::Cfg::try_from(maybe_cfg).unwrap())
+            };
+
+            println!("O {obj_id} BIRTH (p {:x} s {size:3} t {ty})", ptr as usize);
+        }
+
+        ptr
     }
-
-    if size_fld_p {
-        ptr::write_unaligned(
-            (ptr as *mut u8).add((HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN)) as _) as *mut _,
-            size,
-        );
-    }
-
-    if cfg!(feature = "memdbg") {
-        let obj_id = std::intrinsics::atomic_xadd_acqrel(&raw mut OBJECT_ID_CTR, 1);
-        ptr::write_unaligned((ptr as *mut u32).add(2), obj_id);
-
-        let ty = if type_fld_p {
-            format!("{typ_id:b}")
-        } else {
-            format!("{:?}", super::Cfg::try_from(maybe_cfg).unwrap())
-        };
-
-        println!("O {obj_id} BIRTH (p {:x} s {size:3} t {ty})", ptr as usize);
-    }
-
-    ptr
 }
 
 macro_rules! znlck {
@@ -426,11 +436,13 @@ macro_rules! znlck {
 
 /// Return the next zone in a region, creating one if none exists
 unsafe fn zone_advance<'a>(region_ref: &mut Region, zone_ref: &'a mut Zone) -> &'a mut Zone {
-    match zone_ref.next.as_mut() {
-        Some(refer) => refer,
-        None => {
-            new_mem_zone(region_ref);
-            region_ref.head.as_mut().unwrap()
+    unsafe {
+        match zone_ref.next.as_mut() {
+            Some(refer) => refer,
+            None => {
+                new_mem_zone(region_ref);
+                region_ref.head.as_mut().unwrap()
+            }
         }
     }
 }
@@ -443,76 +455,79 @@ unsafe fn fblk_try_acq(
     precedes_parent: bool,
     obj_len: u32,
 ) -> Option<*mut u8> {
-    // NOTE: functions beginning in `fblk` must ONLY be used on a
-    // locked zone
+    unsafe {
+        // NOTE: functions beginning in `fblk` must ONLY be used on a
+        // locked zone
 
-    let fb_len_cur = fblk_get_len(cursor);
+        let fb_len_cur = fblk_get_len(cursor);
 
-    let replace = if fb_len_cur == obj_len {
-        true
-    } else if fb_len_cur >= obj_len + HEAD_LEN {
-        false
-    } else {
-        return None;
-    };
+        let replace = if fb_len_cur == obj_len {
+            true
+        } else if fb_len_cur >= obj_len + HEAD_LEN {
+            false
+        } else {
+            return None;
+        };
 
-    if !replace {
-        let fb_len_new = fb_len_cur - obj_len;
-        fblk_set_len(cursor, fb_len_new);
+        if !replace {
+            let fb_len_new = fb_len_cur - obj_len;
+            fblk_set_len(cursor, fb_len_new);
+
+            zone_ref.used += obj_len;
+
+            return Some((cursor as *mut u8).add(fb_len_new as _));
+        }
+
+        let (cur_prev, cur_next) = (
+            fblk_get_prev_blk(zone_ref, cursor),
+            fblk_get_next_blk(zone_ref, cursor),
+        );
+
+        if parent.is_null() {
+            match (cur_prev.is_null(), cur_next.is_null()) {
+                (true, true) => zone_ref.free = ptr::null_mut(),
+                (true, false) => zone_ref.free = cur_next,
+                (false, true) => zone_ref.free = cur_prev,
+                (false, false) => {
+                    zone_ref.free = cur_prev;
+                    insert_fblk_at(zone_ref, cur_prev, cur_next);
+                }
+            }
+        } else {
+            if precedes_parent {
+                fblk_set_prev_blk(zone_ref, parent, ptr::null_mut())
+            } else {
+                fblk_set_next_blk(zone_ref, parent, ptr::null_mut())
+            }
+
+            if !cur_prev.is_null() {
+                insert_fblk_at(zone_ref, parent, cur_prev)
+            }
+            if !cur_next.is_null() {
+                insert_fblk_at(zone_ref, parent, cur_next)
+            }
+        }
 
         zone_ref.used += obj_len;
 
-        return Some((cursor as *mut u8).add(fb_len_new as _));
+        Some(cursor as _)
     }
-
-    let (cur_prev, cur_next) = (
-        fblk_get_prev_blk(zone_ref, cursor),
-        fblk_get_next_blk(zone_ref, cursor),
-    );
-
-    if parent.is_null() {
-        match (cur_prev.is_null(), cur_next.is_null()) {
-            (true, true) => zone_ref.free = ptr::null_mut(),
-            (true, false) => zone_ref.free = cur_next,
-            (false, true) => zone_ref.free = cur_prev,
-            (false, false) => {
-                zone_ref.free = cur_prev;
-                insert_fblk_at(zone_ref, cur_prev, cur_next);
-            }
-        }
-    } else {
-        if precedes_parent {
-            fblk_set_prev_blk(zone_ref, parent, ptr::null_mut())
-        } else {
-            fblk_set_next_blk(zone_ref, parent, ptr::null_mut())
-        }
-
-        if !cur_prev.is_null() {
-            insert_fblk_at(zone_ref, parent, cur_prev)
-        }
-        if !cur_next.is_null() {
-            insert_fblk_at(zone_ref, parent, cur_next)
-        }
-    }
-
-    zone_ref.used += obj_len;
-
-    Some(cursor as _)
 }
 
 /// Seek a zone's free tree and return the first available space
 /// for a live block of the given length
 unsafe fn free_tree_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
-    let mut cursor = zone_ref.free;
-    let mut parent = ptr::null_mut();
-    let mut precedes_parent = false;
-    let mut stack = vec![];
+    unsafe {
+        let mut cursor = zone_ref.free;
+        let mut parent = ptr::null_mut();
+        let mut precedes_parent = false;
+        let mut stack = vec![];
 
-    if cursor.is_null() {
-        return None;
-    }
+        if cursor.is_null() {
+            return None;
+        }
 
-    znlck!(zone_ref => 'cs: {
+        znlck!(zone_ref => 'cs: {
 
     cursor = zone_ref.free;
     if cursor.is_null() {
@@ -547,16 +562,18 @@ unsafe fn free_tree_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
     }
 
     } ENDLCK)
+    }
 }
 
 /// Return space for a live block of the given length from the empty
 /// area at the end of a zone, if available
 unsafe fn void_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
-    if zone_ref.top.add(obj_len as _) > zone_ref.end {
-        return None;
-    }
+    unsafe {
+        if zone_ref.top.add(obj_len as _) > zone_ref.end {
+            return None;
+        }
 
-    znlck!(zone_ref => 'cs: {
+        znlck!(zone_ref => 'cs: {
 
     let ptr = zone_ref.top;
 
@@ -570,6 +587,7 @@ unsafe fn void_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
     Some(ptr)
 
     } ENDLCK)
+    }
 }
 
 // TODO: replace *mut SlHead with nonnull, Option-wrappable SlPtr?
@@ -577,28 +595,29 @@ unsafe fn void_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
 /// Lengthen an object; may write to a new address, in which case a
 /// redirect is left if there is more than one reference
 pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
-    let cur_size = lblk_get_len(obj);
-    if size == cur_size {
-        return obj;
-    }
+    unsafe {
+        let cur_size = lblk_get_len(obj);
+        if size == cur_size {
+            return obj;
+        }
 
-    if size < cur_size {
-        panic!("cannot yet decrease object size")
-    }
+        if size < cur_size {
+            panic!("cannot yet decrease object size")
+        }
 
-    let diff = size - cur_size;
+        let diff = size - cur_size;
 
-    let size_fld_p = super::raw_siz_fld_p(obj);
-    let type_fld_p = super::raw_typ_fld_p(obj);
+        let size_fld_p = super::raw_siz_fld_p(obj);
+        let type_fld_p = super::raw_typ_fld_p(obj);
 
-    let new_len =
-        (HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN) + (size_fld_p as u32 * NUM_32_LEN)) + size;
+        let new_len =
+            (HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN) + (size_fld_p as u32 * NUM_32_LEN)) + size;
 
-    let (c_regn, c_zone) = which_mem_area(obj);
+        let (c_regn, c_zone) = which_mem_area(obj);
 
-    let mut ret_ptr = obj;
+        let mut ret_ptr = obj;
 
-    let qp = znlck!(*c_zone => {
+        let qp = znlck!(*c_zone => {
         // first, check whether we happen to be at the end of the used area; extend if so
         if super::raw_val_ptr(obj).add(cur_size as _) == (*c_zone).top {
             let ptr = (*c_zone).top;
@@ -613,38 +632,40 @@ pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
         } else { false }
     } ENDLCK);
 
-    // last, find available space in the region, acquire it, and copy into it
-    if !qp {
-        let old_ptr = obj as *mut u8;
-        let new_ptr = acquire_raw(c_regn, new_len);
+        // last, find available space in the region, acquire it, and copy into it
+        if !qp {
+            let old_ptr = obj as *mut u8;
+            let new_ptr = acquire_raw(c_regn, new_len);
 
-        ptr::copy_nonoverlapping(old_ptr, new_ptr, cur_size as _);
-        ptr::write_bytes(new_ptr.add(cur_size as _), 0, diff as _);
+            ptr::copy_nonoverlapping(old_ptr, new_ptr, cur_size as _);
+            ptr::write_bytes(new_ptr.add(cur_size as _), 0, diff as _);
 
-        // set refct of new loc to 2, for the redir and the return
-        ptr::write(new_ptr.add(1), 2);
+            // set refct of new loc to 2, for the redir and the return
+            ptr::write(new_ptr.add(1), 2);
 
-        ret_ptr = new_ptr as _;
+            ret_ptr = new_ptr as _;
 
-        // in the final case, proceed by replacing the original space with a redirect
-        let old_refc = ptr::read(old_ptr.add(1));
-        ptr::write(
-            old_ptr as *mut u64,
-            super::Cfg::B0Redir as u64 + ((old_refc as u64) << 8) + ((new_ptr as u64) << 16),
-        );
+            // in the final case, proceed by replacing the original space with a redirect
+            let old_refc = ptr::read(old_ptr.add(1));
+            ptr::write(
+                old_ptr as *mut u64,
+                super::Cfg::B0Redir as u64 + ((old_refc as u64) << 8) + ((new_ptr as u64) << 16),
+            );
 
-        // free all space not required for redirect (> 8 bytes)
-        reclaim_raw(old_ptr.add(HEAD_LEN as _), cur_size - HEAD_LEN);
+            // free all space not required for redirect (> 8 bytes)
+            reclaim_raw(old_ptr.add(HEAD_LEN as _), cur_size - HEAD_LEN);
+        }
+
+        if size_fld_p {
+            ptr::write_unaligned(
+                (ret_ptr as *mut u8).add((HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN)) as _)
+                    as *mut _,
+                size,
+            );
+        }
+
+        ret_ptr
     }
-
-    if size_fld_p {
-        ptr::write_unaligned(
-            (ret_ptr as *mut u8).add((HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN)) as _) as *mut _,
-            size,
-        );
-    }
-
-    ret_ptr
 }
 
 /// Get total length of live block
@@ -657,19 +678,20 @@ fn lblk_get_len(blk: *mut SlHead) -> u32 {
 
 /// Begin accounting a span somewhere in a region as free space
 unsafe fn reclaim_raw(ptr: *mut u8, sz: u32) {
-    assert!(
-        sz < 1u32.reverse_bits(),
-        "attempt to reclaim too-large span"
-    );
+    unsafe {
+        assert!(
+            sz < 1u32.reverse_bits(),
+            "attempt to reclaim too-large span"
+        );
 
-    let zone = which_mem_area(ptr as _).1;
-    let zone_ref = zone.as_mut().unwrap();
+        let zone = which_mem_area(ptr as _).1;
+        let zone_ref = zone.as_mut().unwrap();
 
-    let newblk = ptr as *mut FreeBlock;
+        let newblk = ptr as *mut FreeBlock;
 
-    // TODO: establish concurrency characteristics of alloc / dealloc
+        // TODO: establish concurrency characteristics of alloc / dealloc
 
-    znlck!(zone_ref => 'lb: {
+        znlck!(zone_ref => 'lb: {
 
     let trunk = zone_ref.free;
 
@@ -949,114 +971,126 @@ unsafe fn reclaim_raw(ptr: *mut u8, sz: u32) {
     }
 
     } ENDLCK);
+    }
 }
 
 /// Adds memory that used to hold a Sail object to the freed memory
 /// structure in its zone
 pub unsafe fn dealloc(val: *mut SlHead) {
-    if cfg!(feature = "memdbg") {
-        let obj_id = ptr::read_unaligned((val as *mut u32).add(2));
-        println!("O {obj_id} RECLAIM")
+    unsafe {
+        if cfg!(feature = "memdbg") {
+            let obj_id = ptr::read_unaligned((val as *mut u32).add(2));
+            println!("O {obj_id} RECLAIM")
+        }
+
+        // TODO: panic if object appears to exceed zone's max obj size
+
+        reclaim_raw(val as _, lblk_get_len(val))
     }
-
-    // TODO: panic if object appears to exceed zone's max obj size
-
-    reclaim_raw(val as _, lblk_get_len(val))
 }
 
 unsafe fn insert_fblk_at(zone: *const Zone, tgt: *mut FreeBlock, blk: *mut FreeBlock) {
-    assert_ne!(tgt, ptr::null_mut());
-    assert_ne!(blk, ptr::null_mut());
+    unsafe {
+        assert_ne!(tgt, ptr::null_mut());
+        assert_ne!(blk, ptr::null_mut());
 
-    let mut cursor = tgt;
-    loop {
-        if blk < cursor {
-            let prospect = fblk_get_prev_blk(zone, cursor);
-            if prospect.is_null() {
-                fblk_set_prev_blk(zone, cursor, blk);
-                break;
+        let mut cursor = tgt;
+        loop {
+            if blk < cursor {
+                let prospect = fblk_get_prev_blk(zone, cursor);
+                if prospect.is_null() {
+                    fblk_set_prev_blk(zone, cursor, blk);
+                    break;
+                } else {
+                    cursor = prospect
+                }
+            } else if blk > cursor {
+                let prospect = fblk_get_next_blk(zone, cursor);
+                if prospect.is_null() {
+                    fblk_set_next_blk(zone, cursor, blk);
+                    break;
+                } else {
+                    cursor = prospect
+                }
             } else {
-                cursor = prospect
+                unreachable!()
             }
-        } else if blk > cursor {
-            let prospect = fblk_get_next_blk(zone, cursor);
-            if prospect.is_null() {
-                fblk_set_next_blk(zone, cursor, blk);
-                break;
-            } else {
-                cursor = prospect
-            }
-        } else {
-            unreachable!()
         }
     }
 }
 
 /// Set the length of a free memory block in a zone
 unsafe fn fblk_set_len(block: *mut FreeBlock, length: u32) {
-    assert!(!block.is_null());
-    assert!(length >= HEAD_LEN);
+    unsafe {
+        assert!(!block.is_null());
+        assert!(length >= HEAD_LEN);
 
-    let exceeds_head = length > HEAD_LEN;
-    let exceeds_tag = length > 255;
-    let exceeds_temporary_limit = length > (1 << 31) - 1;
+        let exceeds_head = length > HEAD_LEN;
+        let exceeds_tag = length > 255;
+        let exceeds_temporary_limit = length > (1 << 31) - 1;
 
-    if exceeds_temporary_limit {
-        panic!("attempt to assert free block too large")
-    }
+        if exceeds_temporary_limit {
+            panic!("attempt to assert free block too large")
+        }
 
-    {
-        let block = block as *mut u8;
-        if exceeds_head {
-            if exceeds_tag {
-                ptr::write_unaligned(block.add(HEAD_LEN as usize), 0);
-                ptr::write_unaligned(block.add(HEAD_LEN as usize + 1) as *mut u32, length as u32);
-            } else {
-                ptr::write_unaligned(block.add(HEAD_LEN as usize), length as u8);
+        {
+            let block = block as *mut u8;
+            if exceeds_head {
+                if exceeds_tag {
+                    ptr::write_unaligned(block.add(HEAD_LEN as usize), 0);
+                    ptr::write_unaligned(
+                        block.add(HEAD_LEN as usize + 1) as *mut u32,
+                        length as u32,
+                    );
+                } else {
+                    ptr::write_unaligned(block.add(HEAD_LEN as usize), length as u8);
+                }
             }
         }
+
+        let head = ptr::read_unaligned(block as *mut u64);
+
+        let next_ofs = head & 0x7FFFFFFF;
+        let prev_ofs = (head >> 32) & 0x7FFFFFFF;
+
+        let parity_flag = {
+            let set_bits =
+                (exceeds_head as u8).count_ones() + prev_ofs.count_ones() + next_ofs.count_ones();
+            assert!(set_bits <= 63);
+
+            !(set_bits as u64 & 1) & 1
+        };
+
+        let new_head =
+            ((exceeds_head as u64) << 63) + (prev_ofs << 32) + (parity_flag << 31) + next_ofs;
+
+        ptr::write_unaligned(block as *mut u64, new_head);
     }
-
-    let head = ptr::read_unaligned(block as *mut u64);
-
-    let next_ofs = head & 0x7FFFFFFF;
-    let prev_ofs = (head >> 32) & 0x7FFFFFFF;
-
-    let parity_flag = {
-        let set_bits =
-            (exceeds_head as u8).count_ones() + prev_ofs.count_ones() + next_ofs.count_ones();
-        assert!(set_bits <= 63);
-
-        !(set_bits as u64 & 1) & 1
-    };
-
-    let new_head =
-        ((exceeds_head as u64) << 63) + (prev_ofs << 32) + (parity_flag << 31) + next_ofs;
-
-    ptr::write_unaligned(block as *mut u64, new_head);
 }
 
 /// Get the length stored in a free memory block
 unsafe fn fblk_get_len(block: *const FreeBlock) -> u32 {
-    assert!(!block.is_null());
+    unsafe {
+        assert!(!block.is_null());
 
-    let head = ptr::read_unaligned(block as *const u64);
+        let head = ptr::read_unaligned(block as *const u64);
 
-    // odd parity check
-    assert_eq!(head.count_ones() & 1, 1);
+        // odd parity check
+        assert_eq!(head.count_ones() & 1, 1);
 
-    let exceeds_head = (head >> 63) != 0;
+        let exceeds_head = (head >> 63) != 0;
 
-    if exceeds_head {
-        let tag = ptr::read_unaligned((block as *const u8).add(HEAD_LEN as usize));
-        let exceeds_tag = tag < 9;
-        if exceeds_tag {
-            ptr::read_unaligned((block as *const u8).add(HEAD_LEN as usize + 1) as *mut u32)
+        if exceeds_head {
+            let tag = ptr::read_unaligned((block as *const u8).add(HEAD_LEN as usize));
+            let exceeds_tag = tag < 9;
+            if exceeds_tag {
+                ptr::read_unaligned((block as *const u8).add(HEAD_LEN as usize + 1) as *mut u32)
+            } else {
+                tag as u32
+            }
         } else {
-            tag as u32
+            HEAD_LEN
         }
-    } else {
-        HEAD_LEN
     }
 }
 
@@ -1067,146 +1101,162 @@ const FBLK_NULL_OFFSET: u32 = (!1u32).reverse_bits();
 
 /// Set a free block's offset pointer to the previous block
 unsafe fn fblk_set_prev_ofs(block: *mut FreeBlock, offset: u32) {
-    let head_ptr = block as *mut u64;
-    let head = ptr::read_unaligned(head_ptr);
+    unsafe {
+        let head_ptr = block as *mut u64;
+        let head = ptr::read_unaligned(head_ptr);
 
-    let size_flag = head >> 63;
+        let size_flag = head >> 63;
 
-    assert_eq!(offset & 1u32.reverse_bits(), 0);
-    let prev_ofs = offset as u64;
+        assert_eq!(offset & 1u32.reverse_bits(), 0);
+        let prev_ofs = offset as u64;
 
-    let next_ofs = head & 0x7FFFFFFF;
+        let next_ofs = head & 0x7FFFFFFF;
 
-    let parity_flag = {
-        let set_bits = size_flag.count_ones() + prev_ofs.count_ones() + next_ofs.count_ones();
-        assert!(set_bits <= 63);
+        let parity_flag = {
+            let set_bits = size_flag.count_ones() + prev_ofs.count_ones() + next_ofs.count_ones();
+            assert!(set_bits <= 63);
 
-        !(set_bits as u64 & 1) & 1
-    };
+            !(set_bits as u64 & 1) & 1
+        };
 
-    let new_head = (size_flag << 63) + (prev_ofs << 32) + (parity_flag << 31) + next_ofs;
+        let new_head = (size_flag << 63) + (prev_ofs << 32) + (parity_flag << 31) + next_ofs;
 
-    ptr::write_unaligned(head_ptr, new_head)
+        ptr::write_unaligned(head_ptr, new_head)
+    }
 }
 
 /// Get a free block's offset pointer to the previous block
 unsafe fn fblk_get_prev_ofs(block: *const FreeBlock) -> u32 {
-    let head_ptr = block as *mut u64;
-    let head = ptr::read_unaligned(head_ptr);
+    unsafe {
+        let head_ptr = block as *mut u64;
+        let head = ptr::read_unaligned(head_ptr);
 
-    // odd parity check
-    assert_eq!(head.count_ones() & 1, 1);
+        // odd parity check
+        assert_eq!(head.count_ones() & 1, 1);
 
-    (head >> 32) as u32 & 0x7FFFFFFF
+        (head >> 32) as u32 & 0x7FFFFFFF
+    }
 }
 
 /// Set a free block's offset pointer to the next block
 unsafe fn fblk_set_next_ofs(block: *mut FreeBlock, offset: u32) {
-    let head_ptr = block as *mut u64;
-    let head = ptr::read_unaligned(head_ptr);
+    unsafe {
+        let head_ptr = block as *mut u64;
+        let head = ptr::read_unaligned(head_ptr);
 
-    let size_flag = head >> 63;
+        let size_flag = head >> 63;
 
-    let prev_ofs = (head >> 32) & 0x7FFFFFFF;
+        let prev_ofs = (head >> 32) & 0x7FFFFFFF;
 
-    assert_eq!(offset & 1u32.reverse_bits(), 0);
-    let next_ofs = offset as u64;
+        assert_eq!(offset & 1u32.reverse_bits(), 0);
+        let next_ofs = offset as u64;
 
-    let parity_flag = {
-        let set_bits = size_flag.count_ones() + prev_ofs.count_ones() + next_ofs.count_ones();
-        assert!(set_bits <= 63);
+        let parity_flag = {
+            let set_bits = size_flag.count_ones() + prev_ofs.count_ones() + next_ofs.count_ones();
+            assert!(set_bits <= 63);
 
-        !(set_bits as u64 & 1) & 1
-    };
+            !(set_bits as u64 & 1) & 1
+        };
 
-    let new_head = (size_flag << 63) + (prev_ofs << 32) + (parity_flag << 31) + next_ofs;
+        let new_head = (size_flag << 63) + (prev_ofs << 32) + (parity_flag << 31) + next_ofs;
 
-    ptr::write_unaligned(head_ptr, new_head)
+        ptr::write_unaligned(head_ptr, new_head)
+    }
 }
 
 /// Get a free block's offset pointer to the next block
 unsafe fn fblk_get_next_ofs(block: *const FreeBlock) -> u32 {
-    let head_ptr = block as *mut u64;
-    let head = ptr::read_unaligned(head_ptr);
+    unsafe {
+        let head_ptr = block as *mut u64;
+        let head = ptr::read_unaligned(head_ptr);
 
-    // odd parity check
-    assert_eq!(head.count_ones() & 1, 1);
+        // odd parity check
+        assert_eq!(head.count_ones() & 1, 1);
 
-    head as u32 & 0x7FFFFFFF
+        head as u32 & 0x7FFFFFFF
+    }
 }
 
 /// Set which block a free block points to as the prior block
 unsafe fn fblk_set_prev_blk(zone: *const Zone, block: *mut FreeBlock, prev: *const FreeBlock) {
-    debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+    unsafe {
+        debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
 
-    if prev.is_null() {
-        fblk_set_prev_ofs(block, FBLK_NULL_OFFSET);
-        return;
+        if prev.is_null() {
+            fblk_set_prev_ofs(block, FBLK_NULL_OFFSET);
+            return;
+        }
+
+        debug_assert_eq!(which_mem_area(prev as *mut _).1 as *const _, zone);
+
+        let start = (*zone).bot;
+        let prev_ofs = prev as u64 - start as u64;
+
+        assert!(prev_ofs < FBLK_NULL_OFFSET as u64);
+
+        fblk_set_prev_ofs(block, prev_ofs as u32)
     }
-
-    debug_assert_eq!(which_mem_area(prev as *mut _).1 as *const _, zone);
-
-    let start = (*zone).bot;
-    let prev_ofs = prev as u64 - start as u64;
-
-    assert!(prev_ofs < FBLK_NULL_OFFSET as u64);
-
-    fblk_set_prev_ofs(block, prev_ofs as u32)
 }
 
 /// Get the block a free block points to as the prior block
 unsafe fn fblk_get_prev_blk(zone: *const Zone, block: *const FreeBlock) -> *mut FreeBlock {
-    debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+    unsafe {
+        debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
 
-    let start = (*zone).bot;
-    let prev_ofs = fblk_get_prev_ofs(block);
+        let start = (*zone).bot;
+        let prev_ofs = fblk_get_prev_ofs(block);
 
-    if prev_ofs == FBLK_NULL_OFFSET {
-        return ptr::null_mut();
+        if prev_ofs == FBLK_NULL_OFFSET {
+            return ptr::null_mut();
+        }
+
+        assert!(prev_ofs < FBLK_NULL_OFFSET);
+
+        let out = (start as u64 + prev_ofs as u64) as *mut FreeBlock;
+        debug_assert_eq!(which_mem_area(out as *mut _).1 as *const _, zone);
+        out
     }
-
-    assert!(prev_ofs < FBLK_NULL_OFFSET);
-
-    let out = (start as u64 + prev_ofs as u64) as *mut FreeBlock;
-    debug_assert_eq!(which_mem_area(out as *mut _).1 as *const _, zone);
-    out
 }
 
 /// Set which block a free block points to as the following block
 unsafe fn fblk_set_next_blk(zone: *const Zone, block: *mut FreeBlock, next: *const FreeBlock) {
-    debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+    unsafe {
+        debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
 
-    if next.is_null() {
-        fblk_set_next_ofs(block, FBLK_NULL_OFFSET);
-        return;
+        if next.is_null() {
+            fblk_set_next_ofs(block, FBLK_NULL_OFFSET);
+            return;
+        }
+
+        debug_assert_eq!(which_mem_area(next as *mut _).1 as *const _, zone);
+
+        let start = (*zone).bot;
+        let next_ofs = next as u64 - start as u64;
+
+        assert!(next_ofs <= 1u32.reverse_bits() as u64 - 1);
+
+        fblk_set_next_ofs(block, next_ofs as u32)
     }
-
-    debug_assert_eq!(which_mem_area(next as *mut _).1 as *const _, zone);
-
-    let start = (*zone).bot;
-    let next_ofs = next as u64 - start as u64;
-
-    assert!(next_ofs <= 1u32.reverse_bits() as u64 - 1);
-
-    fblk_set_next_ofs(block, next_ofs as u32)
 }
 
 /// Get the block a free block points to as the following block
 unsafe fn fblk_get_next_blk(zone: *const Zone, block: *const FreeBlock) -> *mut FreeBlock {
-    debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+    unsafe {
+        debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
 
-    let start = (*zone).bot;
-    let next_ofs = fblk_get_next_ofs(block);
+        let start = (*zone).bot;
+        let next_ofs = fblk_get_next_ofs(block);
 
-    if next_ofs == FBLK_NULL_OFFSET {
-        return ptr::null_mut();
+        if next_ofs == FBLK_NULL_OFFSET {
+            return ptr::null_mut();
+        }
+
+        assert!(next_ofs < FBLK_NULL_OFFSET);
+
+        let out = (start as u64 + next_ofs as u64) as *mut FreeBlock;
+        debug_assert_eq!(which_mem_area(out as *mut _).1 as *const _, zone);
+        out
     }
-
-    assert!(next_ofs < FBLK_NULL_OFFSET);
-
-    let out = (start as u64 + next_ofs as u64) as *mut FreeBlock;
-    debug_assert_eq!(which_mem_area(out as *mut _).1 as *const _, zone);
-    out
 }
 
 fn __dbg_visualize_zone(zone: *const Zone) {
@@ -1487,65 +1537,75 @@ const MEM_ZONE_HEAD_SIZE: usize = mem::size_of::<Zone>();
 
 /// Returns the region and zone in which a given Sail object is stored
 unsafe fn which_mem_area(ptr: *mut SlHead) -> (*mut Region, *mut Zone) {
-    assert_ne!(ptr, ptr::null_mut());
+    unsafe {
+        assert_ne!(ptr, ptr::null_mut());
 
-    let pos = ptr as usize;
+        let pos = ptr as usize;
 
-    let mut idx = 0;
-    loop {
-        if idx >= REGION_TABLE.len() {
-            break;
+        let mut idx = 0;
+        loop {
+            if idx >= RegionTable::len(&raw mut REGION_TABLE) {
+                break;
+            }
+
+            let entry = RegionTable::index(&raw mut REGION_TABLE, idx);
+            if pos >= entry.0 && pos < entry.1 {
+                return (entry.3, entry.2);
+            }
+
+            idx += 1;
         }
 
-        let entry = REGION_TABLE.index(idx);
-        if pos >= entry.0 && pos < entry.1 {
-            return (entry.3, entry.2);
-        }
-
-        idx += 1;
+        panic!("INVALID memory area for {:x}", ptr as usize)
     }
-
-    panic!("INVALID memory area for {:x}", ptr as usize)
 }
 
 /// Creates and links in a new memory zone within the given region
 /// TODO: this function may need to be reentrant
 unsafe fn new_mem_zone(region: *mut Region) {
-    assert_ne!(region, ptr::null_mut());
+    unsafe {
+        assert_ne!(region, ptr::null_mut());
 
-    if cfg!(feature = "memdbg") {
-        log::debug!("Creating mem zone");
+        if cfg!(feature = "memdbg") {
+            log::debug!("Creating mem zone");
+        }
+
+        let region_head = region.as_mut().unwrap();
+        let size = region_head.zone_size;
+        let cur_head = region_head.head;
+
+        let ptr = {
+            let layout =
+                alloc::Layout::from_size_align_unchecked(size as usize + MEM_ZONE_HEAD_SIZE, 1);
+            alloc::alloc(layout) as *mut Zone
+        };
+
+        let start = (ptr as *mut u8).add(MEM_ZONE_HEAD_SIZE);
+        let end = start.add(size as _);
+
+        RegionTable::append(
+            &raw mut REGION_TABLE,
+            start as usize,
+            end as usize,
+            ptr,
+            region,
+        );
+
+        let zn_id = std::intrinsics::atomic_xadd_acqrel(&raw mut ZONE_ID_CTR, 1);
+
+        let new_head = Zone {
+            used: 0,
+            id: zn_id,
+            free: ptr::null_mut(),
+            next: cur_head,
+            top: start,
+            end,
+            bot: start,
+            lock: false as u8,
+        };
+
+        ptr::write_unaligned(ptr, new_head);
+
+        ptr::write_unaligned(&mut (*region).head, ptr);
     }
-
-    let region_head = region.as_mut().unwrap();
-    let size = region_head.zone_size;
-    let cur_head = region_head.head;
-
-    let ptr = {
-        let layout =
-            alloc::Layout::from_size_align_unchecked(size as usize + MEM_ZONE_HEAD_SIZE, 1);
-        alloc::alloc(layout) as *mut Zone
-    };
-
-    let start = (ptr as *mut u8).add(MEM_ZONE_HEAD_SIZE);
-    let end = start.add(size as _);
-
-    REGION_TABLE.append(start as usize, end as usize, ptr, region);
-
-    let zn_id = std::intrinsics::atomic_xadd_acqrel(&raw mut ZONE_ID_CTR, 1);
-
-    let new_head = Zone {
-        used: 0,
-        id: zn_id,
-        free: ptr::null_mut(),
-        next: cur_head,
-        top: start,
-        end,
-        bot: start,
-        lock: false as u8,
-    };
-
-    ptr::write_unaligned(ptr, new_head);
-
-    ptr::write_unaligned(&mut (*region).head, ptr);
 }

@@ -194,16 +194,18 @@ mod atom_ops {
 
     #[inline(always)]
     pub unsafe fn load(from: *const Qptr) -> Qptr {
-        Qptr(std::intrinsics::atomic_load_acquire(from as *const usize))
+        unsafe { Qptr(std::intrinsics::atomic_load_acquire(from as *const usize)) }
     }
     #[inline(always)]
     pub unsafe fn cxcg(tgt: *mut Qptr, old: Qptr, new: Qptr) -> (Qptr, bool) {
-        let out = std::intrinsics::atomic_cxchg_acqrel_acquire(
-            tgt as *mut usize,
-            std::mem::transmute::<Qptr, usize>(old),
-            std::mem::transmute::<Qptr, usize>(new),
-        );
-        (Qptr(out.0), out.1)
+        unsafe {
+            let out = std::intrinsics::atomic_cxchg_acqrel_acquire(
+                tgt as *mut usize,
+                std::mem::transmute::<Qptr, usize>(old),
+                std::mem::transmute::<Qptr, usize>(new),
+            );
+            (Qptr(out.0), out.1)
+        }
     }
 }
 
