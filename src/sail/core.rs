@@ -24,8 +24,9 @@
 use std::mem;
 use std::ptr;
 
-use super::thread::ThreadHull;
 use std::intrinsics::AtomicOrdering as AO;
+
+use super::thread::Vessel;
 
 use super::memmgt::{self, Region};
 
@@ -546,7 +547,7 @@ impl TryFrom<Cfg> for CoreType {
 /// - Structure for local thread
 /// - Current environment
 /// - Slice containing all Sail arguments
-pub type NativeFn = fn(*mut ThreadHull, SlHndl, &[SlHndl]) -> SlHndl;
+pub type NativeFn = fn(*mut Vessel, SlHndl, &[SlHndl]) -> SlHndl;
 
 // TODO: should the env be provided as part of the argument slice?
 

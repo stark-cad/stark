@@ -54,17 +54,16 @@ pub struct FrameHandles {
 
 unsafe impl Send for FrameHandles {}
 
-/// Sail interpreter loop for the manager thread
-pub fn manager_loop(frame: Frame, sl_thr_ptr: usize) {
-    let sl_thr_ptr = sl_thr_ptr as *mut sail::thread::ThreadHull;
-
-    let thread_ref = unsafe { &mut *sl_thr_ptr };
+/// Sail interpreter loop for the manager vessel
+pub fn manager_loop(frame: Frame, vsl_ptr: usize) {
+    let vsl_ptr = vsl_ptr as *mut sail::thread::Vessel;
+    let vessel_ref = unsafe { &mut *vsl_ptr };
 
     frame.set_cursor(winit::window::CursorIcon::Crosshair);
 
     let frm_hdl = unsafe {
         SlHndl::from_raw_unchecked(sail::memmgt::alloc(
-            thread_ref.region(),
+            vessel_ref.region(),
             8,
             sail::T_FRM_HDL_ID.0,
         ))
@@ -73,8 +72,8 @@ pub fn manager_loop(frame: Frame, sl_thr_ptr: usize) {
     unsafe { sail::write_field_unchecked(frm_hdl.clone(), 0, (&frame as *const _) as u64) };
 
     sail::env_scope_ins_by_id(
-        thread_ref.region(),
-        thread_ref.top_env(),
+        vessel_ref.region(),
+        vessel_ref.top_env(),
         sail::S_FRAME.0,
         frm_hdl,
     );
@@ -88,7 +87,7 @@ pub fn manager_loop(frame: Frame, sl_thr_ptr: usize) {
 
     sail_fn! {
         let mngr_fns;
-        _thr _env;
+        _vsl _env;
 
         "cursor-vis" [frm_ptr, vis] {
             assert_eq!(frm_ptr.cfg_spec(), sail::Cfg::B8Other);
@@ -129,21 +128,21 @@ pub fn manager_loop(frame: Frame, sl_thr_ptr: usize) {
     }
 
     sail::insert_native_procs(
-        thread_ref.region(),
-        thread_ref.context().symtab(),
-        thread_ref.top_env(),
+        vessel_ref.region(),
+        vessel_ref.context().symtab(),
+        vessel_ref.top_env(),
         mngr_fns,
     );
 
     let prog_txt = &std::fs::read_to_string("scripts/main.sl").unwrap();
-    thread_ref.load_from_text(prog_txt, true).unwrap();
+    vessel_ref.load_from_text(prog_txt, true).unwrap();
 
-    while thread_ref.advance() {}
+    while vessel_ref.advance() {}
 
-    thread_ref.load_proc_by_sym(sail::S_MAIN.0);
+    vessel_ref.load_proc_by_sym(sail::S_MAIN.0);
 
     loop {
-        if !thread_ref.advance() {
+        if !vessel_ref.advance() {
             println!("manager thread ended");
             break;
         }

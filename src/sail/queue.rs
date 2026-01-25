@@ -13,13 +13,14 @@
 
 // src/sail/queue.rs
 
-// Queues for communication between threads in Sail code.
+// Queues for communication between vessels (independent single-thread
+// execution contexts) in Sail code.
 
 // <>
 
-// Each execution thread gets a blessed queue receiver. Any thread
-// (for which the target is in scope?) can send messages / object
-// copies down that channel.
+// Each execution unit gets a blessed queue receiver. Any thread (for
+// which the target is in scope?) can send messages / object copies
+// down that channel.
 
 use std::ptr;
 

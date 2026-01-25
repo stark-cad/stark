@@ -428,7 +428,7 @@ impl EvalStack {
     /// executing this function repeatedly will evaluate any Sail
     /// expression. It handles all defined opcodes and adds more
     /// frames to the stack as necessary, and never uses recursion.
-    pub fn iter_once(&mut self, thread_ref: *mut thread::ThreadHull) -> bool {
+    pub fn iter_once(&mut self, vessel_ref: *mut thread::Vessel) -> bool {
         // ***********************************
         // * Sail stack-based evaluation logic
         // ***********************************
@@ -437,7 +437,7 @@ impl EvalStack {
             return false;
         }
 
-        let reg = unsafe { (*thread_ref).region() };
+        let reg = unsafe { (*vessel_ref).region() };
 
         let (ret, env, opc) = self.frame_top();
 
@@ -766,7 +766,7 @@ impl EvalStack {
                         std::slice::from_raw_parts(self.frame_addr(1) as _, argct as usize)
                     };
 
-                    let fn_rslt = proc_native_get_body(proc)(thread_ref, env, args);
+                    let fn_rslt = proc_native_get_body(proc)(vessel_ref, env, args);
 
                     self.write_addr_to(ret, fn_rslt);
 
@@ -802,11 +802,11 @@ mod tests {
 
         super::super::global_ctx_setup(t_weft.ctx_mut());
 
-        let t_thr = thread::ThreadHull::summon(&mut t_weft, 10000, 20000, None);
+        let t_vsl = thread::Vessel::summon(&mut t_weft, 10000, 20000, None);
 
-        super::super::thread_env_setup(t_thr);
+        super::super::vessel_env_setup(t_vsl);
 
-        let thread_ref = unsafe { &mut *t_thr };
+        let thread_ref = unsafe { &mut *t_vsl };
 
         thread_ref.load_from_text(&"(+ (- 8 6) 2)", false).unwrap();
 
@@ -826,21 +826,21 @@ mod tests {
 
         super::super::global_ctx_setup(t_weft.ctx_mut());
 
-        let t_thr = thread::ThreadHull::summon(&mut t_weft, 10000, 20000, None);
+        let t_vsl = thread::Vessel::summon(&mut t_weft, 10000, 20000, None);
 
-        super::super::thread_env_setup(t_thr);
+        super::super::vessel_env_setup(t_vsl);
 
-        let thread_ref = unsafe { &mut *t_thr };
+        let vessel_ref = unsafe { &mut *t_vsl };
 
-        thread_ref
+        vessel_ref
             .load_from_text(&"(do (+ 1 2) (- 4 3))", false)
             .unwrap();
 
-        while thread_ref.advance() {}
+        while vessel_ref.advance() {}
 
-        assert!(thread_ref.inert_p());
+        assert!(vessel_ref.inert_p());
 
-        let result = thread_ref.result().unwrap();
+        let result = vessel_ref.result().unwrap();
 
         println!("{}", result.clone().refc_byte());
 

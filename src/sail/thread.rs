@@ -13,7 +13,8 @@
 
 // src/sail/thread.rs
 
-// Sail execution threads
+// Multi-threaded Sail execution. Mapping between M OS threads and N
+// Sail vessels, with potentially N >>> M.
 
 // <>
 
@@ -51,28 +52,28 @@ impl Tact {
     }
 }
 
-// TODO: track refs to thread from parent thread / other owners
+// TODO: track refs to vessel from parent / other owners
 
-// TODO: adjust the weft / thread data structures to avoid misuse of
+// TODO: adjust the weft / vessel data structures to avoid misuse of
 // pointers; align with Rust norms to benefit from guarantees
 
-// TODO: hand out handles to threads, not raw pointers
+// TODO: hand out handles to vessels, not raw pointers
 
 // TODO: structures / functions for arbitrary mapping between Sail
-// threads and OS threads, in order to evenly and efficiently advance
-// all active Sail threads
+// vessels and OS threads, in order to evenly and efficiently advance
+// all active Sail vessels
 
-pub struct SlThreadRef {
-    raw: *mut ThreadHull,
+pub struct SlVslHdl {
+    raw: *mut Vessel,
 }
 
-// NOTE: once Sail threads are added to the weft (so as soon as they
+// NOTE: once Sail vessels are added to the weft (so as soon as they
 // are created), they should "magically" / automatically run
 
 struct WorkTgtNode {
     next: *mut WorkTgtNode,
     prev: *mut WorkTgtNode,
-    thr: *mut ThreadHull,
+    vsl: *mut Vessel,
 
     _pin: std::marker::PhantomPinned,
 }
@@ -80,8 +81,8 @@ struct WorkTgtNode {
 unsafe impl Send for WorkTgtNode {}
 unsafe impl Sync for WorkTgtNode {}
 
-// NOTE: code which runs in each OS thread to advance Sail threads
-// TODO: track stopped Sail threads and thread::park when inactive
+// NOTE: code which runs in each OS thread to advance Sail vessels
+// TODO: track stopped Sail vessels and thread::park when no work
 // TODO: exit / terminate thread on command (sentinel in sentinel?)
 fn worker_runtime(th_list_sentinel: usize) {
     let th_list_sentinel = th_list_sentinel as *const WorkTgtNode;
@@ -102,15 +103,15 @@ fn worker_runtime(th_list_sentinel: usize) {
             }
         };
 
-        if list_head.thr as usize == usize::MAX {
+        if list_head.vsl as usize == usize::MAX {
             break;
         }
 
-        // TODO: somehow communicate when thread done
-        match unsafe { cur_tgt.thr.as_mut() } {
-            Some(thref) => {
+        // TODO: somehow communicate when vessel done
+        match unsafe { cur_tgt.vsl.as_mut() } {
+            Some(vsl_ref) => {
                 // TODO: re-freeze when stack empty
-                if thref.advance() {
+                if vsl_ref.advance() {
                     count += 1;
                 }
             }
@@ -143,29 +144,29 @@ fn worker_runtime(th_list_sentinel: usize) {
 // groups of vectors in the weft are parallel arrays, with equal
 // element counts and associated indices!
 
-// TODO: use a different name to distinguish Sail threads OS threads?
+// NOTE: other names: fiber? timber? member? strand? sheet?
 
-// fiber? timber? member? strand? sheet?
+// assign usizes are indices into the Sail vessel list
 
-// assign usizes are indices into the Sail thread list
-
-// TODO: should assign by thread ID instead? might require mapping
+// TODO: should assign by vessel ID instead? might require mapping
 
 // NOTE: can shorten structure by unifying parallel vector accounting
 
 // TODO: basis lock and assignment lock?
 
 pub struct Weft {
-    tact: Tact,
+    pub tact: Tact,
     append_lock: u8,
-    nxt_sl_thr_id: usize,
+    nxt_vsl_id: usize,
 
-    sl_threads: Vec<Pin<Box<ThreadHull>>>,
+    /// Straight-line Sail execution contexts
+    fleet: Vec<Pin<Box<Vessel>>>,
     // flags: Vec<u8>,
     // arcs: Vec<u32>,
     work_nodes: Vec<Pin<Box<WorkTgtNode>>>,
 
-    worker_os_threads: Vec<std::thread::JoinHandle<()>>,
+    /// OS threads used as workers
+    warp: Vec<std::thread::JoinHandle<()>>,
     sentinels: Vec<Pin<Box<WorkTgtNode>>>,
     assignments: Vec<Vec<usize>>,
 
@@ -177,14 +178,14 @@ pub struct Weft {
 impl Drop for Weft {
     fn drop(&mut self) {
         for mut s in self.sentinels.drain(..) {
-            unsafe { Pin::into_inner_unchecked(s.as_mut()) }.thr = usize::MAX as *mut ThreadHull;
+            unsafe { Pin::into_inner_unchecked(s.as_mut()) }.vsl = usize::MAX as *mut Vessel;
         }
 
-        for t in self.worker_os_threads.iter() {
+        for t in self.warp.iter() {
             t.thread().unpark()
         }
 
-        for t in self.worker_os_threads.drain(..) {
+        for t in self.warp.drain(..) {
             t.join().unwrap()
         }
     }
@@ -195,12 +196,12 @@ impl Weft {
         Self {
             tact,
             append_lock: false as u8,
-            nxt_sl_thr_id: 2,
+            nxt_vsl_id: 2,
 
-            sl_threads: Vec::with_capacity(4),
+            fleet: Vec::with_capacity(4),
             work_nodes: Vec::with_capacity(4),
 
-            worker_os_threads: Vec::new(),
+            warp: Vec::new(),
             sentinels: Vec::new(),
             assignments: Vec::new(),
 
@@ -230,7 +231,7 @@ impl Weft {
     // NOTE: mutation through const pointers might require use of
     // unsafecell to be sound
 
-    fn add_thread(&mut self, thread_hull: Pin<Box<ThreadHull>>) -> *mut ThreadHull {
+    fn add_vessel(&mut self, vsl: Pin<Box<Vessel>>) -> *mut Vessel {
         unsafe {
             let lock: *mut u8 = &mut self.append_lock;
             while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
@@ -243,18 +244,17 @@ impl Weft {
                 std::hint::spin_loop();
             }
 
-            let thr_raw_pos = (Pin::into_inner_unchecked(Pin::as_ref(&thread_hull))
-                as *const ThreadHull)
-                .cast_mut();
+            let vsl_raw_pos =
+                (Pin::into_inner_unchecked(Pin::as_ref(&vsl)) as *const Vessel).cast_mut();
 
-            let new_idx = self.sl_threads.len();
-            self.sl_threads.push(thread_hull);
-            assert!(self.sl_threads.len() > new_idx);
+            let new_idx = self.fleet.len();
+            self.fleet.push(vsl);
+            assert!(self.fleet.len() > new_idx);
 
             let node = Box::pin(WorkTgtNode {
                 next: std::ptr::null_mut(),
                 prev: std::ptr::null_mut(),
-                thr: thr_raw_pos,
+                vsl: vsl_raw_pos,
 
                 _pin: std::marker::PhantomPinned,
             });
@@ -262,18 +262,18 @@ impl Weft {
             self.work_nodes.push(node);
             self.frozen.push(new_idx);
 
-            assert_eq!(self.sl_threads.len(), self.work_nodes.len());
+            assert_eq!(self.fleet.len(), self.work_nodes.len());
 
             std::intrinsics::atomic_store::<_, { AO::Release }>(lock, false as u8);
 
-            thr_raw_pos
+            vsl_raw_pos
         }
     }
 
-    fn rmv_thread(&self, thread_ptr: *mut ThreadHull) {
+    fn rmv_vessel(&self, vsl_ptr: *mut Vessel) {
         unsafe {
-            let idx = match self.sl_threads.iter().enumerate().find(|(_, b)| {
-                Pin::into_inner_unchecked((*b).as_ref()) as *const _ as usize == thread_ptr as usize
+            let idx = match self.fleet.iter().enumerate().find(|(_, b)| {
+                Pin::into_inner_unchecked((*b).as_ref()) as *const _ as usize == vsl_ptr as usize
             }) {
                 Some((i, _)) => i,
                 None => return,
@@ -292,9 +292,9 @@ impl Weft {
                 std::hint::spin_loop();
             }
 
-            let removed = this.sl_threads.remove(idx);
+            let removed = this.fleet.remove(idx);
 
-            // TODO: remove all traces of the thread in the structure
+            // TODO: remove all traces of the vessel in the structure
 
             std::intrinsics::atomic_store::<_, { AO::Release }>(lock, false as u8);
 
@@ -312,7 +312,7 @@ impl Weft {
             unsafe {
                 (&raw mut (*ptr).next).write(ptr);
                 (&raw mut (*ptr).prev).write(ptr);
-                (&raw mut (*ptr).thr).write(std::ptr::null_mut());
+                (&raw mut (*ptr).vsl).write(std::ptr::null_mut());
             }
 
             Box::into_pin(unsafe { uninit.assume_init() })
@@ -320,22 +320,22 @@ impl Weft {
 
         let sp = unsafe { Pin::into_inner_unchecked(sentinel.as_ref()) as *const _ } as usize;
         let new_thr = std::thread::Builder::new()
-            .name(format!("worker {}", self.worker_os_threads.len()))
+            .name(format!("worker {}", self.warp.len()))
             .spawn(move || worker_runtime(sp))
             .unwrap();
 
-        self.worker_os_threads.push(new_thr);
+        self.warp.push(new_thr);
         self.sentinels.push(sentinel);
         self.assignments.push(Vec::new());
 
-        assert_eq!(self.sentinels.len(), self.worker_os_threads.len());
-        assert_eq!(self.assignments.len(), self.worker_os_threads.len());
+        assert_eq!(self.sentinels.len(), self.warp.len());
+        assert_eq!(self.assignments.len(), self.warp.len());
     }
 
     fn apportion_work(&mut self) {
-        // sail threads may appear in the weft at any time
+        // new vessels may appear in the weft at any time
 
-        // check that all sail threads are assigned to a hardware thread
+        // check that all vessels are assigned to a hardware thread
         let live_unassigned = {
             let mut una = vec![true; self.work_nodes.len()];
 
@@ -352,7 +352,7 @@ impl Weft {
                 .collect::<Vec<usize>>()
         };
 
-        // for any unassigned threads, assign them in a balanced manner
+        // for any unassigned vessels, assign them in a balanced manner
         let mut next_worker = 0;
         // TODO: this is not balanced
         for idx in live_unassigned {
@@ -376,17 +376,17 @@ impl Weft {
                 );
             }
 
-            self.worker_os_threads[next_worker].thread().unpark();
+            self.warp[next_worker].thread().unpark();
 
-            next_worker = (next_worker + 1) % self.worker_os_threads.len();
+            next_worker = (next_worker + 1) % self.warp.len();
         }
 
-        // remove assignments of any finished sail threads (?)
+        // remove assignments of any finished vessels (?)
     }
 
     pub fn assign_special(&mut self, id: usize) {
         let tgt_idx = self
-            .sl_threads
+            .fleet
             .iter()
             .enumerate()
             .find_map(|(i, t)| if t.id == id { Some(i) } else { None })
@@ -408,7 +408,7 @@ impl Weft {
 
     fn thaw(&mut self, id: usize) -> bool {
         let tgt_idx = self
-            .sl_threads
+            .fleet
             .iter()
             .enumerate()
             .find_map(|(i, t)| if t.id == id { Some(i) } else { None })
@@ -424,8 +424,8 @@ impl Weft {
                 // let this = unsafe { (self as *const Self).cast_mut().as_mut_unchecked() };
                 self.frozen.swap_remove(fi);
 
-                // TODO: start Sail threads only once ready (loaded)!
-                if !self.worker_os_threads.is_empty() {
+                // TODO: start vessels only once ready (loaded)!
+                if !self.warp.is_empty() {
                     self.apportion_work(); // ???
                     true
                 } else {
@@ -437,19 +437,17 @@ impl Weft {
     }
 }
 
-// TODO: threads could contain their own prev and next pointers for
+// TODO: vessels could contain their own prev and next pointers for
 // worker target tracking; then they'd be exactly 128 bytes (2 words)
 
-// TODO: currently tact and weft probably contain the same pointer
-
-pub struct ThreadHull {
+#[repr(C)]
+pub struct Vessel {
     /// identifier (index in weft)
     pub id: usize,
 
     /// symtab and typctr (both shared)
     tact: *mut Tact,
-
-    /// tracker for all extant threads
+    /// tracker for all extant vessels
     weft: *mut Weft,
 
     /// dedicated memory
@@ -471,12 +469,14 @@ pub struct ThreadHull {
     _pin: std::marker::PhantomPinned,
 }
 
-unsafe impl Send for ThreadHull {}
+unsafe impl Send for Vessel {}
 
-// TODO: implement new-model threads and queues to cleanly support
-// manager thread, record threads, and render thread
+// TODO: implement vessels and queues to cleanly support governor,
+// codex managers, record keepers, and render thread
 
-impl ThreadHull {
+
+// previously "ThreadHull"
+impl Vessel {
     pub fn summon(
         weft: &mut Weft,
         s_init_size: usize,
@@ -506,7 +506,7 @@ impl ThreadHull {
             Box::into_pin(unsafe { uninit.assume_init() })
         };
 
-        weft.add_thread(it)
+        weft.add_vessel(it)
     }
 
     pub fn spawn(&self, s_init_size: Option<usize>, r_zone_size: Option<u32>) -> *mut Self {
@@ -542,7 +542,7 @@ impl ThreadHull {
             Box::into_pin(unsafe { uninit.assume_init() })
         };
 
-        weft.add_thread(it)
+        weft.add_vessel(it)
     }
 
     pub fn context<'a, 'b>(&'a self) -> &'b mut Tact {
@@ -633,10 +633,10 @@ impl ThreadHull {
 }
 
 /// Use with std::thread::spawn to take over an OS thread and run to
-/// completion of a Sail thread (simplest possible scheduler)
-pub fn exec_thread(ptr: usize) {
-    let hull = ptr as *mut ThreadHull;
-    let th_ref = unsafe { &mut *hull };
+/// completion of a vessel (simplest possible scheduler)
+pub fn exec_vessel(ptr: usize) {
+    let vsl = ptr as *mut Vessel;
+    let th_ref = unsafe { &mut *vsl };
 
     loop {
         if !th_ref.advance() {

@@ -32,18 +32,18 @@ use super::{core::*, memmgt};
 /// a valid Sail object.
 #[macro_export]
 macro_rules! sail_fn {
-    ( const $array:ident; $thr:ident $env:ident;
+    ( const $array:ident; $vsl:ident $env:ident;
       $( $name:literal [ $($args:ident),* ] $body:block )+
     ) => {
         // compiler incorrectly warns on required 'mut $args'
         #[allow(unused_mut)]
         pub const $array: &[(&str, crate::sail::core::NativeFn, u16)] =
             &[$(($name, |
-                _thr: *mut crate::sail::thread::ThreadHull,
+                _vsl: *mut crate::sail::thread::Vessel,
                 _env: crate::sail::SlHndl,
                 _args: &[crate::sail::SlHndl],
               | {
-                    let $thr = _thr;
+                    let $vsl = _vsl;
                     let $env = _env;
 
                     $(
@@ -55,18 +55,18 @@ macro_rules! sail_fn {
               ${count($args)})),+];
     };
 
-    ( let $array:ident; $thr:ident $env:ident;
+    ( let $array:ident; $vsl:ident $env:ident;
       $( $name:literal [ $($args:ident),* ] $body:block )+
     ) => {
         // compiler incorrectly warns on required 'mut $args'
         #[allow(unused_mut)]
         let $array: &[(&str, crate::sail::core::NativeFn, u16)] =
             &[$(($name, |
-                _thr: *mut crate::sail::thread::ThreadHull,
+                _vsl: *mut crate::sail::thread::Vessel,
                 _env: crate::sail::SlHndl,
                 _args: &[crate::sail::SlHndl],
                 | {
-                    let $thr = _thr;
+                    let $vsl = _vsl;
                     let $env = _env;
 
                     $(
@@ -83,7 +83,7 @@ macro_rules! sail_fn {
 // TODO: sensible type checking & operator overloading
 sail_fn! {
     const ENVFNS;
-    _thr _env;
+    _vsl _env;
 
     // TODO: use fixed point at times to avoid floating point errors?
 
@@ -91,7 +91,7 @@ sail_fn! {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
@@ -114,7 +114,7 @@ sail_fn! {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
@@ -137,7 +137,7 @@ sail_fn! {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
@@ -160,7 +160,7 @@ sail_fn! {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
@@ -180,7 +180,7 @@ sail_fn! {
     }
 
     "mod" [fst, snd] {
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
         let out = i64_make(reg);
         let result = i64_get(fst) % i64_get(snd);
@@ -189,7 +189,7 @@ sail_fn! {
     }
 
     "neg" [val] {
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
         match val.core_type().expect("type invalid") {
             CoreType::I64 => {
                 return i64_init(reg, -i64_get(val));
@@ -243,16 +243,16 @@ sail_fn! {
     }
 
     "own-tx-hdl" [] {
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
-        let tq = unsafe { (*_thr).queue_inlet() };
+        let tq = unsafe { (*_vsl).inlet_hdl() };
 
         super::warp_hdl_init(reg, tq)
     }
 
     "th-spawn" [fun] {
-        let reg = unsafe { (*_thr).region() };
-        let new = unsafe { (*_thr).spawn(None, None) };
+        let reg = unsafe { (*_vsl).region() };
+        let new = unsafe { (*_vsl).spawn(None, None) };
 
         let nr = unsafe { (*new).region() };
         let to_apply = unsafe {
@@ -268,7 +268,7 @@ sail_fn! {
         let nq = unsafe { (*new).queue_inlet() };
 
         let send_tgt = super::warp_hdl_init(reg, nq);
-        let new_hdl = super::thread_ref_init(reg, new);
+        let new_hdl = super::vessel_ref_init(reg, new);
 
         set_next_list_elt(_env, new_hdl.clone(), send_tgt);
 
@@ -276,8 +276,8 @@ sail_fn! {
     }
 
     "th-join" [thref] {
-        let reg = unsafe { (*_thr).region() };
-        super::thread_ref_join(reg, thref)
+        let reg = unsafe { (*_vsl).region() };
+        super::vessel_ref_join(reg, thref)
     }
 
     "th-id" [thref] {
@@ -286,27 +286,27 @@ sail_fn! {
         let addrs: u64 = read_field(thref, 0);
 
         let th_ref = unsafe {
-            (addrs as *mut super::thread::ThreadHull)
+            (addrs as *mut super::thread::Vessel)
                 .as_mut()
                 .expect("null thread reference")
         };
 
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
         super::i64_init(reg, th_ref.id as _)
     }
 
     "qtx" [sender, item] {
-        let id = unsafe { (*_thr).id };
         super::warp_hdl_send(sender, item, id);
+        let id = unsafe { (*_vsl).id };
         env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
     }
 
     "qrx" [] {
-        let reg = unsafe { (*_thr).region() };
         let inlet = unsafe { (*_thr).queue_inlet() };
 
         let msg = unsafe { (&mut *inlet).receive() };
+        let reg = unsafe { (*_vsl).region() };
 
         match msg.1 {
             Some(r) => {
@@ -331,8 +331,8 @@ sail_fn! {
     }
 
     "as-f32" [val] {
-        let reg = unsafe { (*_thr).region() };
         return f32_init(reg, f64_get(val) as f32);
+        let reg = unsafe { (*_vsl).region() };
     }
 
     "arr-vec-make" [typ, len, init] {
@@ -345,7 +345,7 @@ sail_fn! {
         assert!(temp_base_sized_p(typ));
         // assert_eq!(typ, super::get_self_type(init));
 
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
         unsafe {
             let size = vec_size(8, temp_get_size(typ), len);
@@ -376,7 +376,7 @@ sail_fn! {
         let idx = i64_get(idx) as u32;
         assert!(idx < super::arrvec_get_len(target.clone()));
 
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
         return temp_init_from(reg, typ, unsafe {
             target.value_ptr().add(8 + (temp_get_size(typ) * idx) as usize)
@@ -405,14 +405,14 @@ sail_fn! {
     }
 
     "print" [arg] {
-        let tbl = unsafe { ((*_thr).context()).symtab() };
+        let tbl = unsafe { ((*_vsl).context()).symtab() };
 
         println!("{}", super::context(tbl, arg.clone()).to_string());
         return arg;
     }
 
     "dbg" [arg] {
-        let tbl = unsafe { ((*_thr).context()).symtab() };
+        let tbl = unsafe { ((*_vsl).context()).symtab() };
 
         println!("{}", super::context(tbl, arg.clone()).to_string());
         return arg;
@@ -427,8 +427,8 @@ sail_fn! {
         coretypck!(strin ; VecStr);
         let strsl = string_get(strin);
 
-        let reg = unsafe { (*_thr).region() };
-        let tbl = unsafe { ((*_thr).context()).symtab() };
+        let reg = unsafe { (*_vsl).region() };
+        let tbl = unsafe { ((*_vsl).context()).symtab() };
 
         return match super::parser::parse(reg, tbl, strsl, false) {
             Ok(head) => head,
@@ -440,8 +440,8 @@ sail_fn! {
         coretypck!(strin ; VecStr);
         let strsl = string_get(strin);
 
-        let reg = unsafe { (*_thr).region() };
-        let tbl = unsafe { ((*_thr).context()).symtab() };
+        let reg = unsafe { (*_vsl).region() };
+        let tbl = unsafe { ((*_vsl).context()).symtab() };
 
         return match super::parser::parse(reg, tbl, strsl, true) {
             Ok(head) => head,
@@ -453,7 +453,7 @@ sail_fn! {
         coretypck!(path ; VecStr);
         let pth = string_get(path);
 
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
         let out = match std::fs::read_to_string(pth) {
             Ok(s) => super::string_init(reg, &s),
@@ -466,7 +466,7 @@ sail_fn! {
     "_itsp_mdbg_id" [obj] {
         let id = obj.memdbg_obj_id();
 
-        let reg = unsafe { (*_thr).region() };
+        let reg = unsafe { (*_vsl).region() };
 
         let out = super::i64_init(reg, id as _);
 

@@ -38,10 +38,10 @@ use std::mem::size_of;
 
 mod text;
 
-/// Sail interpreter loop for the render thread (holds graphics state)
-pub fn render_loop(name: &'static str, frame: FrameHandles, sl_thr_ptr: usize) {
-    let sl_thr_ptr = sl_thr_ptr as *mut sail::thread::ThreadHull;
-    let thread_ref = unsafe { &mut *sl_thr_ptr };
+/// Sail interpreter loop for the render vessel (holds graphics state)
+pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: usize) {
+    let vsl_ptr = vsl_ptr as *mut sail::thread::Vessel;
+    let vessel_ref = unsafe { &mut *vsl_ptr };
 
     let mut engine = Engine::new(frame, name);
 
@@ -55,7 +55,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, sl_thr_ptr: usize) {
 
     let eng_hdl = unsafe {
         SlHndl::from_raw_unchecked(sail::memmgt::alloc(
-            thread_ref.region(),
+            vessel_ref.region(),
             8,
             sail::T_ENG_HDL_ID.0,
         ))
@@ -64,15 +64,15 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, sl_thr_ptr: usize) {
     unsafe { sail::write_field_unchecked(eng_hdl.clone(), 0, (&mut engine as *mut _) as u64) };
 
     sail::env_scope_ins_by_id(
-        thread_ref.region(),
-        thread_ref.top_env(),
+        vessel_ref.region(),
+        vessel_ref.top_env(),
         sail::S_ENGINE.0,
         eng_hdl,
     );
 
     crate::sail_fn! {
         let rndr_fns;
-        _thr _env;
+        _vsl _env;
 
         "redraw" [eng_ptr] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
@@ -164,7 +164,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, sl_thr_ptr: usize) {
 
             // println!("HITTEST: win {win} x {wx} y {wy}");
 
-            let reg = unsafe { (*_thr).region() };
+            let reg = unsafe { (*_vsl).region() };
             let out = sail::i64_init(reg, win);
 
             let coords = sail::arrvec_init(reg, sail::T_F32.0, 2, &[wx, wy]);
@@ -174,7 +174,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, sl_thr_ptr: usize) {
         }
 
         // TODO: issue less-easily-guessed window handles?
-        // TODO: or verify Sail thread ID against provided handle
+        // TODO: or verify vessel ID against provided handle
         "create-window" [eng_ptr] {
             assert_eq!(eng_ptr.cfg_spec(), sail::Cfg::B8Other);
             let engine = unsafe {
@@ -183,7 +183,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, sl_thr_ptr: usize) {
 
             let iid = engine.create_window();
 
-            let reg = unsafe { (*_thr).region() };
+            let reg = unsafe { (*_vsl).region() };
             let out = sail::i64_init(reg, iid as _);
 
             out
@@ -265,9 +265,9 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, sl_thr_ptr: usize) {
     }
 
     sail::insert_native_procs(
-        thread_ref.region(),
-        thread_ref.context().symtab(),
-        thread_ref.top_env(),
+        vessel_ref.region(),
+        vessel_ref.context().symtab(),
+        vessel_ref.top_env(),
         rndr_fns,
     );
 
@@ -276,11 +276,11 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, sl_thr_ptr: usize) {
 
     let prog_txt = &std::fs::read_to_string("scripts/rndr.sl").unwrap();
 
-    thread_ref.load_from_text(prog_txt, true).unwrap();
+    vessel_ref.load_from_text(prog_txt, true).unwrap();
 
-    while thread_ref.advance() {}
+    while vessel_ref.advance() {}
 
-    thread_ref.load_proc_by_sym(sail::S_RNDR.0);
+    vessel_ref.load_proc_by_sym(sail::S_RNDR.0);
 
     loop {
         if engine.need_surface_cfg {
@@ -289,7 +289,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, sl_thr_ptr: usize) {
             engine.need_surface_cfg = false;
         }
 
-        if !thread_ref.advance() {
+        if !vessel_ref.advance() {
             println!("render thread ended");
             break;
         }

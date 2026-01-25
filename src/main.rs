@@ -83,96 +83,95 @@ fn main() {
     let mut global_interact = sail::thread::Tact::create(251);
     sail::global_ctx_setup(&mut global_interact);
 
-    // data structure that accounts for the global interaction
-    // state, as well as all threads, using an array of pointers
-    // to pinned thread hulls
+    // data structure that accounts for the global interaction state,
+    // as well as all threads, using an array of pointers to vessels
     let mut global_weft = sail::thread::Weft::create(global_interact);
 
-    let main_thr = sail::thread::ThreadHull::summon(&mut global_weft, 10000, 1 << 20, None);
-    sail::thread_env_setup(main_thr);
-    let main_thr_ref = unsafe { &mut *main_thr };
+    let main_vsl = sail::thread::Vessel::summon(&mut global_weft, 10000, 1 << 20, None);
+    sail::vessel_env_setup(main_vsl);
+    let main_vsl_ref = unsafe { &mut *main_vsl };
 
-    let main_qin = main_thr_ref.queue_inlet();
+    let main_qin = main_vsl_ref.inlet_hdl();
 
-    let rndr_thr = main_thr_ref.spawn(None, None);
-    let rndr_thr_ref = unsafe { &mut *rndr_thr };
+    let rndr_vsl = main_vsl_ref.spawn(None, None);
+    let rndr_vsl_ref = unsafe { &mut *rndr_vsl };
 
-    let rndr_qin = rndr_thr_ref.queue_inlet();
+    let rndr_qin = rndr_vsl_ref.inlet_hdl();
 
-    global_weft.assign_special(main_thr_ref.id);
-    global_weft.assign_special(rndr_thr_ref.id);
+    global_weft.assign_special(main_vsl_ref.id);
+    global_weft.assign_special(rndr_vsl_ref.id);
 
     // TODO: match available parallelism or setting
     global_weft.add_worker();
     global_weft.add_worker();
 
-    let rdr_tgt_obj = sail::warp_hdl_init(main_thr_ref.region(), rndr_qin);
+    let rdr_tgt_obj = sail::send_hdl_init(main_vsl_ref.region(), rndr_qin.clone());
     sail::env_scope_ins_by_id(
-        main_thr_ref.region(),
-        main_thr_ref.top_env(),
+        main_vsl_ref.region(),
+        main_vsl_ref.top_env(),
         sail::S_RDR_TGT.0,
         rdr_tgt_obj,
     );
 
-    let rdr_id_obj = sail::i64_init(main_thr_ref.region(), rndr_thr_ref.id as _);
+    let rdr_id_obj = sail::i64_init(main_vsl_ref.region(), rndr_vsl_ref.id as _);
     sail::env_scope_ins_by_id(
-        main_thr_ref.region(),
-        main_thr_ref.top_env(),
+        main_vsl_ref.region(),
+        main_vsl_ref.top_env(),
         sail::S_RDR_ID.0,
         rdr_id_obj,
     );
 
-    let mgr_tgt_obj = sail::warp_hdl_init(rndr_thr_ref.region(), main_qin);
+    let mgr_tgt_obj = sail::send_hdl_init(rndr_vsl_ref.region(), main_qin.clone());
     sail::env_scope_ins_by_id(
-        rndr_thr_ref.region(),
-        rndr_thr_ref.top_env(),
+        rndr_vsl_ref.region(),
+        rndr_vsl_ref.top_env(),
         sail::S_MGR_TGT.0,
         mgr_tgt_obj,
     );
 
-    let mgr_id_obj = sail::i64_init(rndr_thr_ref.region(), main_thr_ref.id as _);
+    let mgr_id_obj = sail::i64_init(rndr_vsl_ref.region(), main_vsl_ref.id as _);
     sail::env_scope_ins_by_id(
-        rndr_thr_ref.region(),
-        rndr_thr_ref.top_env(),
+        rndr_vsl_ref.region(),
+        rndr_vsl_ref.top_env(),
         sail::S_MGR_ID.0,
         mgr_id_obj,
     );
 
     let ctxt_region = sail::memmgt::Region::acq(1000);
 
-    let fr_dims = sail::arrvec_init::<u32>(main_thr_ref.region(), sail::T_U32.0, 2, &[0, 0]);
-    let cur_pos = sail::arrvec_init::<f32>(main_thr_ref.region(), sail::T_F32.0, 2, &[0.0, 0.0]);
+    let fr_dims = sail::arrvec_init::<u32>(main_vsl_ref.region(), sail::T_U32.0, 2, &[0, 0]);
+    let cur_pos = sail::arrvec_init::<f32>(main_vsl_ref.region(), sail::T_F32.0, 2, &[0.0, 0.0]);
 
     sail::env_scope_ins_by_id(
-        main_thr_ref.region(),
-        main_thr_ref.top_env(),
+        main_vsl_ref.region(),
+        main_vsl_ref.top_env(),
         sail::S_FR_DIMS.0,
         fr_dims.clone(),
     );
     sail::env_scope_ins_by_id(
-        main_thr_ref.region(),
-        main_thr_ref.top_env(),
+        main_vsl_ref.region(),
+        main_vsl_ref.top_env(),
         sail::S_CUR_POS.0,
         cur_pos.clone(),
     );
 
     let ctxt_region = ctxt_region as usize;
 
-    let (sl_main_thr, sl_rndr_thr) = (main_thr as usize, rndr_thr as usize);
+    let (main_vsl_adr, rndr_vsl_adr) = (main_vsl as usize, rndr_vsl as usize);
 
     // This thread renders to the graphical frame: the output interface
     let render = thread::Builder::new()
         .name("render".to_string())
-        .spawn(move || graphics::render_loop(NAME, handles, sl_rndr_thr))
+        .spawn(move || graphics::render_loop(NAME, handles, rndr_vsl_adr))
         .unwrap();
 
     // This thread manages the program, treating the actual main thread as a source of user input
     let manager = thread::Builder::new()
         .name("manager".to_string())
-        .spawn(move || manager_loop(frame, sl_main_thr))
+        .spawn(move || manager_loop(frame, main_vsl_adr))
         .unwrap();
 
-    let (sl_main_qin, sl_rndr_qin) = (main_qin as usize, rndr_qin as usize);
+    // let (sl_main_qin, sl_rndr_qin) = (main_qin as usize, rndr_qin as usize);
 
     // This loop gets input from the user and detects changes to the context
     // Completely takes over the main thread; no code after this will run
@@ -181,8 +180,8 @@ fn main() {
         vec![manager, render].into_iter(),
         global_weft,
         ctxt_region,
-        sl_main_qin,
-        sl_rndr_qin,
+        main_qin,
+        rndr_qin,
         fr_dims,
         cur_pos,
     );

@@ -37,6 +37,8 @@ use std::fmt;
 use std::mem;
 use std::ptr;
 
+use std::intrinsics::AtomicOrdering as AO;
+
 #[macro_use]
 pub mod core;
 pub use self::core::*;
@@ -62,11 +64,11 @@ impl Styc {
     }
 
     fn get_id(&mut self) -> u32 {
-        unsafe { std::intrinsics::atomic_xadd_acqrel(&mut self.inner, 1) }
+        unsafe { std::intrinsics::atomic_xadd::<_, _, { AO::AcqRel }>(&mut self.inner, 1) }
     }
 
     unsafe fn set_next_id(&mut self, id: u32) {
-        unsafe { std::intrinsics::atomic_store_release(&mut self.inner, id) }
+        unsafe { std::intrinsics::atomic_store::<_, { AO::Release }>(&mut self.inner, id) }
     }
 }
 
@@ -161,7 +163,7 @@ fn warp_hdl_send(mut loc: SlHndl, msg: SlHndl, from: usize) {
     .transmit(from, msg)
 }
 
-fn thread_ref_init(reg: *mut memmgt::Region, tgt: *mut thread::ThreadHull) -> SlHndl {
+fn vessel_ref_init(reg: *mut memmgt::Region, tgt: *mut thread::Vessel) -> SlHndl {
     assert!(!tgt.is_null());
     unsafe {
         let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 8, T_THR_REF_ID.0));
@@ -170,13 +172,13 @@ fn thread_ref_init(reg: *mut memmgt::Region, tgt: *mut thread::ThreadHull) -> Sl
     }
 }
 
-fn thread_ref_join(reg: *mut memmgt::Region, mut loc: SlHndl) -> SlHndl {
+fn vessel_ref_join(reg: *mut memmgt::Region, mut loc: SlHndl) -> SlHndl {
     assert_eq!(loc.type_id(), T_THR_REF_ID.0);
 
     let addrs: u64 = read_field(loc, 0);
 
     let th_ref = unsafe {
-        (addrs as *mut thread::ThreadHull)
+        (addrs as *mut thread::Vessel)
             .as_mut()
             .expect("null thread reference")
     };
@@ -752,9 +754,9 @@ pub fn repl(stream_in: std::io::Stdin) {
 
     global_ctx_setup(weft.ctx_mut());
 
-    let thr = thread::ThreadHull::summon(&mut weft, 10000, 100000, None);
+    let thr = thread::Vessel::summon(&mut weft, 10000, 100000, None);
 
-    thread_env_setup(thr);
+    vessel_env_setup(thr);
 
     // TODO: some kind of thread handle?
     let thread_ref = unsafe { &mut *thr };
@@ -803,8 +805,8 @@ pub fn interpret(code: &str, dolist: bool) -> Result<String, SlErrCode> {
     global_ctx_setup(&mut ctx);
 
     let mut weft = thread::Weft::create(ctx);
-    let thr = thread::ThreadHull::summon(&mut weft, 10000, 100000, None);
-    thread_env_setup(thr);
+    let thr = thread::Vessel::summon(&mut weft, 10000, 100000, None);
+    vessel_env_setup(thr);
 
     let thread_ref = unsafe { &mut *thr };
 
@@ -828,11 +830,11 @@ pub fn global_ctx_setup(tact: &mut thread::Tact) {
     unsafe { tact.typctr().set_next_id(TID_COUNT as u32) };
 }
 
-pub fn thread_env_setup(thr: *mut thread::ThreadHull) {
-    let thr_ref = unsafe { thr.as_mut().unwrap() };
+pub fn vessel_env_setup(thr: *mut thread::Vessel) {
+    let vsl_ref = unsafe { thr.as_mut().unwrap() };
 
-    let reg = thr_ref.region();
-    let env = thr_ref.top_env();
+    let reg = vsl_ref.region();
+    let env = vsl_ref.top_env();
 
     // TODO: interning is temporary, will crash in lists
 
@@ -842,8 +844,9 @@ pub fn thread_env_setup(thr: *mut thread::ThreadHull) {
     let false_intern = bool_init(reg, false);
     env_scope_ins_by_id(reg, env.clone(), S_F_INTERN.0, false_intern);
 
-    insert_native_procs(reg, thr_ref.context().symtab(), env, stdenv::ENVFNS);
+    insert_native_procs(reg, vsl_ref.context().symtab(), env, stdenv::ENVFNS);
 }
+
 
 /// Insert a slice of native procedures into the symbol table and environment
 pub fn insert_native_procs(
