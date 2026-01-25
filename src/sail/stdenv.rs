@@ -471,21 +471,42 @@ sail_fn! {
         out
     }
 
-    "vec-push" [target, item] {
-        coretypck!(target ; VecStd);
+    "str-new" [] {
+        let reg = unsafe { (*_vsl).region() };
+        super::string_make(reg, 0)
+    }
 
-        super::stdvec_push(target.clone(), item);
+    "vec-new" [] {
+        let reg = unsafe { (*_vsl).region() };
+        super::stdvec_make(reg, 0)
+    }
+
+    // TODO: implement type dispatch (separate logic from dispatch)
+    // NOTE: already happening in some of these - is this the right way?
+    "vec-push" [target, item] {
+        if coretypp!(target ; VecStd) {
+            super::stdvec_push(target.clone(), item);
+        } else if coretypp!(target ; VecStr) {
+            super::string_push(target.clone(), u8_get(item));
+        }
 
         return target;
     }
 
     "vec-len" [target] {
-        let reg = unsafe { (*_thr).region() };
-        super::i64_init(reg, super::stdvec_get_len(target) as _)
+        let reg = unsafe { (*_vsl).region() };
+        i64_init(reg, stdvec_get_len(target) as _)
     }
 
     "vec-get" [target, idx] {
-        super::stdvec_idx(target, super::i64_get(idx) as _)
+        stdvec_idx(target, i64_get(idx) as _)
+    }
+
+    "vec-set" [target, idx, val] {
+        let idx = i64_get(idx) as u32;
+        assert!(idx < stdvec_get_len(target.clone()));
+        write_ptr(_env, target.clone(), 8 + (idx * 8), val);
+        target
     }
 
     "tmp-vec-match" [target, item] {

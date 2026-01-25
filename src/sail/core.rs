@@ -1697,16 +1697,10 @@ pub fn stdvec_get_len(mut loc: SlHndl) -> u32 {
 }
 
 #[inline(always)]
-fn stdvec_get_cap(mut loc: SlHndl) -> u32 {
-    coretypck!(loc ; VecStd);
-    read_field(loc, 0)
-}
-
-#[inline(always)]
-pub fn stdvec_idx(mut loc: SlHndl, idx: u32) -> SlHndl {
-    coretypck!(loc ; VecStd);
+pub fn stdvec_idx(loc: SlHndl, idx: u32) -> SlHndl {
     // all slots up to length must be filled
-    read_ptr(loc, 4 + 4 + (idx * 8)).unwrap()
+    assert!(idx < stdvec_get_len(loc.clone()));
+    read_ptr(loc, NUM_32_LEN + NUM_32_LEN + (idx * PTR_LEN)).unwrap()
 }
 
 // TODO: Insert check everywhere we attempt to read from a new object
@@ -1832,32 +1826,45 @@ mod redir_test {
     }
 }
 
+// TODO: allow for strings & other vecs with same structure
 #[inline(always)]
 pub fn stdvec_push(mut loc: SlHndl, item: SlHndl) {
     // ensure that we're pointing at the true object
     unsafe { loc.correct_pos() };
 
-    let (len, cap) = (stdvec_get_len(loc.clone()), stdvec_get_cap(loc.clone()));
+    let (len, cap) = (stdvec_get_len(loc.clone()), vec_get_cap(loc.clone()));
 
     let hdl = if len >= cap {
-        unsafe {
-            let new_cap = (cap * 2).max(2);
-            let new_ptr = memmgt::realloc(loc.get_raw(), vec_size(8, 8, new_cap));
-            ptr::write_unaligned(raw_val_ptr(new_ptr) as *mut u32, new_cap);
-            let new_hdl = SlHndl::from_raw_unchecked(new_ptr);
-            write_field(new_hdl.clone(), 0, new_cap);
-            new_hdl
-        }
+        vec_expand_cap::<{ NUM_32_LEN * 2 }, PTR_LEN>((cap * 2).max(2), loc)
     } else {
         loc
     };
 
     unsafe {
         inc_refc(item.get_raw());
-        write_ptr_unsafe_unchecked(hdl.clone(), 4 + 4 + (len * 8), item);
+        write_ptr_unsafe_unchecked(hdl.clone(), (NUM_32_LEN * 2) + (len * PTR_LEN), item);
     }
 
     stdvec_set_len(hdl, len + 1);
+}
+
+fn vec_get_cap(mut loc: SlHndl) -> u32 {
+    assert!(loc.cfg_byte() >> 5 == 0b110);
+    read_field(loc, 0)
+}
+
+fn vec_expand_cap<const HL: u32, const EL: u32>(new_cap: u32, loc: SlHndl) -> SlHndl {
+    if new_cap <= vec_get_cap(loc.clone()) {
+        return loc;
+    }
+
+    unsafe {
+        let new_ptr = memmgt::realloc(loc.get_raw(), vec_size(HL, EL, new_cap));
+        ptr::write_unaligned(raw_val_ptr(new_ptr) as *mut u32, new_cap);
+        let new_hdl = SlHndl::from_raw_unchecked(new_ptr);
+        write_field(new_hdl.clone(), 0, new_cap);
+        new_hdl
+    }
 }
 
 #[inline(always)]
@@ -1872,32 +1879,41 @@ fn string_set_len(mut loc: SlHndl, len: u32) {
     write_field(loc, NUM_32_LEN, len)
 }
 
-#[inline(always)]
-fn string_get_cap(mut loc: SlHndl) -> u32 {
-    coretypck!(loc ; VecStr);
-    read_field(loc, 0)
+pub fn string_push(loc: SlHndl, point: u8) {
+    let (len, cap) = (string_get_len(loc.clone()), vec_get_cap(loc.clone()));
+
+    let hdl = if len >= cap {
+        vec_expand_cap::<{ NUM_32_LEN * 2 }, NUM_8_LEN>((cap * 2).max(2), loc)
+    } else {
+        loc
+    };
+
+    write_field(hdl.clone(), (NUM_32_LEN * 2) + len, point);
+    string_set_len(hdl, len + 1);
 }
 
 #[inline(always)]
-pub fn string_set(mut loc: SlHndl, val: &str) {
+pub fn string_set(loc: SlHndl, val: &str) {
     assert!(val.len() <= u32::MAX as usize - 8);
 
     // NOTE: if loc is a redirect, there will be two handle rewrites
     // TODO: add a way to assert first that any rewrites are done
 
-    let cap = string_get_cap(loc.clone());
+    let cap = vec_get_cap(loc.clone());
     let len = val.len() as u32;
 
-    if len <= cap {
-        unsafe {
-            std::slice::from_raw_parts_mut(loc.value_ptr().add(2 * NUM_32_LEN as usize), len as _)
-                .copy_from_slice(val.as_bytes())
-        }
-
-        string_set_len(loc, len);
+    let mut hdl = if len <= cap {
+        loc
     } else {
-        panic!("not enough space in string");
+        vec_expand_cap::<{ NUM_32_LEN * 2 }, NUM_8_LEN>(len, loc)
+    };
+
+    unsafe {
+        std::slice::from_raw_parts_mut(hdl.value_ptr().add(2 * NUM_32_LEN as usize), len as _)
+            .copy_from_slice(val.as_bytes())
     }
+
+    string_set_len(hdl, len);
 }
 
 #[inline(always)]
