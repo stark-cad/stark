@@ -424,7 +424,7 @@ fn read_special(
     } {
         let next = chars.next().unwrap();
         match next {
-            b'_' => acc.push(next),
+            b'_' | b'\'' => acc.push(next),
             _ if next.is_ascii_alphanumeric() => acc.push(next),
             _ => {
                 return Err(SlErrCode::ParseInvalidChar);
@@ -440,6 +440,8 @@ fn read_special(
         Ok(bool_init(reg, true))
     } else if acc[0].eq_ignore_ascii_case(&b'f') && acc.len() == 1 {
         Ok(bool_init(reg, false))
+    } else if acc[0].eq(&b'\'') && acc.len() == 2 {
+        Ok(u8_init(reg, acc[1]))
     } else {
         Err(SlErrCode::ParseBadSpecial)
     }
