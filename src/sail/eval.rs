@@ -296,7 +296,7 @@ impl EvalStack {
         if !self.is_empty() {
             false
         } else {
-            self.eval_expr(ret, env, expr);
+            self.eval_expr(ret, env, expr).unwrap();
             true
         }
     }
@@ -377,21 +377,26 @@ impl EvalStack {
     /// Evaluates any Sail expression in object form, using the given
     /// environment and returning to the given location
     #[inline(always)]
-    fn eval_expr(&mut self, ret: *mut *mut SlHead, env: SlHndl, mut expr: SlHndl) {
+    fn eval_expr(
+        &mut self,
+        ret: *mut *mut SlHead,
+        env: SlHndl,
+        mut expr: SlHndl,
+    ) -> Result<(), u32> {
         if expr.nnil_ref_p() {
             self.push_frame_head(ret, Opcode::Eval, env.clone());
             self.push(ref_get(expr).unwrap());
-            return;
+            return Ok(());
         }
 
         if ret.is_null() {
-            return;
+            return Ok(());
         }
 
         let out = if expr.basic_sym_p() {
-            match env_lookup(env.clone(), expr) {
+            match env_lookup(env.clone(), expr.clone()) {
                 Some(obj) => unsafe { obj.get_raw() },
-                None => panic!("symbol not bound in env"),
+                None => return Err(sym_get_id(expr)),
             }
         } else {
             unsafe { expr.get_raw() }
@@ -405,6 +410,8 @@ impl EvalStack {
 
         // guarantee env stays alive until write-out is done
         drop(env);
+
+        Ok(())
     }
 
     /// Writes the address of a Sail object to an aligned position;
@@ -449,7 +456,7 @@ impl EvalStack {
             Opcode::PreEval => {
                 let expr = self.frame_obj(0);
                 self.pop_frame();
-                self.eval_expr(ret, env, expr);
+                self.eval_expr(ret, env, expr).unwrap();
             }
             Opcode::Eval => {
                 let list = self.frame_obj(0);
@@ -471,9 +478,10 @@ impl EvalStack {
                             );
 
                             let pred_ret = self.frame_addr(0);
-                            self.eval_expr(pred_ret, env, predicate);
+                            self.eval_expr(pred_ret, env, predicate).unwrap();
                             return true;
                         }
+                        // TODO: fix insane scope / shadowing behavior
                         id if id == SP_DEF.0 => {
                             // needs: symbol to bind, object to bind to it
                             self.push_frame_head(ret, Opcode::Bind, env.clone());
@@ -483,7 +491,7 @@ impl EvalStack {
                             let value = get_next_list_elt(raw_args.unwrap()).unwrap();
                             let return_to = self.frame_addr(1);
 
-                            self.eval_expr(return_to, env, value);
+                            self.eval_expr(return_to, env, value).unwrap();
                             return true;
                         }
                         id if id == SP_DO.0 => {
@@ -498,7 +506,23 @@ impl EvalStack {
 
                             let return_to = self.frame_addr(0);
 
-                            self.eval_expr(return_to, env, raw_args.unwrap());
+                            match self.eval_expr(return_to, env, raw_args.unwrap()) {
+                                Ok(_) => (),
+                                Err(sym_id) => {
+                                    println!(
+                                        "SYMBOL: {}",
+                                        String::from_utf8_lossy(unsafe {
+                                            (*vessel_ref)
+                                                .context()
+                                                .symtab()
+                                                .lookup_by_id(sym_id)
+                                                .unwrap()
+                                        })
+                                    );
+                                    panic!("symbol not bound in env")
+                                }
+                            }
+
                             return true;
                         }
                         id if id == SP_FN.0 => {
@@ -536,7 +560,7 @@ impl EvalStack {
 
                             let return_to = self.frame_addr(0);
 
-                            self.eval_expr(return_to, env, raw_args.unwrap());
+                            self.eval_expr(return_to, env, raw_args.unwrap()).unwrap();
                             return true;
                         }
                         id if id == SP_QUOTE.0 => {
@@ -554,7 +578,7 @@ impl EvalStack {
                             let value = get_next_list_elt(raw_args.unwrap()).unwrap();
                             let return_to = self.frame_addr(1);
 
-                            self.eval_expr(return_to, env, value);
+                            self.eval_expr(return_to, env, value).unwrap();
                             return true;
                         }
                         id if id == SP_WHILE.0 => {
@@ -565,7 +589,7 @@ impl EvalStack {
 
                             let return_to = self.frame_addr(1);
 
-                            self.eval_expr(return_to, env, raw_args.unwrap());
+                            self.eval_expr(return_to, env, raw_args.unwrap()).unwrap();
                             return true;
                         }
                         _ => {}
@@ -585,7 +609,19 @@ impl EvalStack {
                     let mut proc = if raw_op.basic_sym_p() {
                         match env_lookup(env.clone(), raw_op.clone()) {
                             Some(obj) => obj,
-                            None => panic!("symbol not bound in env"),
+                            None => {
+                                println!(
+                                    "SYMBOL: {}",
+                                    String::from_utf8_lossy(unsafe {
+                                        (*vessel_ref)
+                                            .context()
+                                            .symtab()
+                                            .lookup_by_id(sym_get_id(raw_op.clone()))
+                                            .unwrap()
+                                    })
+                                );
+                                panic!("symbol not bound in env")
+                            }
                         }
                     } else {
                         raw_op.clone()
@@ -608,7 +644,13 @@ impl EvalStack {
                             apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize)
                         } as *mut *mut SlHead;
 
-                        self.eval_expr(return_to, env.clone(), arg.clone().unwrap());
+                        self.eval_expr(
+                            return_to,
+                            env.clone(),
+                            arg.clone()
+                                .unwrap_or_else(|| panic!("arg {i} of {arg_ct} does not exist")),
+                        )
+                        .unwrap();
 
                         arg = get_next_list_elt(arg.unwrap())
                     }
@@ -631,6 +673,16 @@ impl EvalStack {
 
                 self.pop_frame();
                 if !env_scope_mut(env, symbol.clone(), value) {
+                    println!(
+                        "SYMBOL: {}",
+                        String::from_utf8_lossy(unsafe {
+                            (*vessel_ref)
+                                .context()
+                                .symtab()
+                                .lookup_by_id(sym_get_id(symbol.clone()))
+                                .unwrap()
+                        })
+                    );
                     panic!("symbol not in env")
                 }
 
@@ -649,7 +701,7 @@ impl EvalStack {
                     }
                 } else {
                     self.pop_frame();
-                    self.eval_expr(ret, env, remainder);
+                    self.eval_expr(ret, env, remainder).unwrap();
                 }
             }
             Opcode::While => {
@@ -659,7 +711,8 @@ impl EvalStack {
 
                 if result.truthy() {
                     let return_to = self.frame_addr(1);
-                    self.eval_expr(return_to, env.clone(), pred);
+                    self.push_frame_head(return_to, Opcode::PreEval, env.clone());
+                    self.push(pred);
 
                     // TODO: this sort of thing should be a (Rust) macro!
                     unsafe {
@@ -668,7 +721,9 @@ impl EvalStack {
                         }
                     };
 
-                    self.push_frame_head(ptr::null_mut() as _, Opcode::DoSeq, env);
+                    let iteration_env = env_create(reg, Some(env));
+
+                    self.push_frame_head(ptr::null_mut() as _, Opcode::DoSeq, iteration_env);
                     self.push(body);
                 } else {
                     self.pop_frame();
@@ -681,7 +736,7 @@ impl EvalStack {
 
                 if pred_res.truthy() {
                     self.pop_frame();
-                    self.eval_expr(ret, env, consequent);
+                    self.eval_expr(ret, env, consequent).unwrap();
                 } else if let Some(next_pred) = get_next_list_elt(consequent) {
                     let next_cons = get_next_list_elt(next_pred.clone())
                         .expect("cond must have an even number of arguments");
@@ -690,7 +745,7 @@ impl EvalStack {
                     let cons_keep = self.frame_addr(1);
 
                     self.write_addr_to(cons_keep, next_cons);
-                    self.eval_expr(pred_ret, env, next_pred);
+                    self.eval_expr(pred_ret, env, next_pred).unwrap();
                 } else {
                     self.pop_frame();
                     self.write_addr_to(ret, pred_res);
@@ -703,9 +758,9 @@ impl EvalStack {
                 self.pop_frame();
 
                 if pred_res.truthy() {
-                    self.eval_expr(ret, env, true_body);
+                    self.eval_expr(ret, env, true_body).unwrap();
                 } else {
-                    self.eval_expr(ret, env, false_body);
+                    self.eval_expr(ret, env, false_body).unwrap();
                 }
             }
             Opcode::PreApp => {
@@ -730,7 +785,8 @@ impl EvalStack {
                         unsafe { apply_start.add(FrameOffset::ArgZero as usize + 1 + i as usize) }
                             as *mut *mut SlHead;
 
-                    self.eval_expr(return_to, env.clone(), arg.clone().unwrap());
+                    self.eval_expr(return_to, env.clone(), arg.clone().unwrap())
+                        .unwrap();
 
                     arg = get_next_list_elt(arg.unwrap());
                 }
