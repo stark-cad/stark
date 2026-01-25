@@ -278,7 +278,6 @@ impl SlHndl {
         }
     }
 
-    #[inline(always)]
     fn __dbg_head_info(&mut self) {
         unsafe { self.correct_pos() };
 
@@ -422,10 +421,11 @@ enum_and_tryfrom! {
         VecAny = 0b11001100,
         VecHash = 0b11010000,
         VecOther = 0b11011100,
+        // TODO: typechecked variant with same type codes?
         ProcLambda = 0b11100000,
+        // TODO: force type checks inside native procedures
         ProcNative = 0b11100100,
         // ProcLbdaCk = 0b11101000,
-        // ProcNatvCk = 0b11101100,
         TyMfst = 0b11110000,
         EnvScope = 0b11110100,
         EnvLayer = 0b11111000,
@@ -551,7 +551,7 @@ pub type NativeFn = fn(*mut Vessel, SlHndl, &[SlHndl]) -> SlHndl;
 
 // TODO: should the env be provided as part of the argument slice?
 
-/// Creates a nil Sail object
+/// Returns a null pointer
 #[inline(always)]
 pub fn nil() -> *mut SlHead {
     ptr::null_mut()
@@ -715,20 +715,20 @@ pub fn temp_base_sized_p(typ: u32) -> bool {
 /// symbol
 pub fn temp_get_size(typ: u32) -> u32 {
     match typ {
-        t if t == super::T_U8.0 => 1,
-        t if t == super::T_I8.0 => 1,
-        t if t == super::T_U16.0 => 2,
-        t if t == super::T_I16.0 => 2,
-        t if t == super::T_U32.0 => 4,
-        t if t == super::T_I32.0 => 4,
-        t if t == super::T_U64.0 => 8,
-        t if t == super::T_I64.0 => 8,
-        t if t == super::T_U128.0 => 16,
-        t if t == super::T_I128.0 => 16,
-        t if t == super::T_F32.0 => 4,
-        t if t == super::T_F64.0 => 8,
-        t if t == super::T_SYMBOL.0 => 4,
-        t if t == super::T_REF.0 => 8,
+        t if t == super::T_U8.0 => NUM_8_LEN,
+        t if t == super::T_I8.0 => NUM_8_LEN,
+        t if t == super::T_U16.0 => NUM_16_LEN,
+        t if t == super::T_I16.0 => NUM_16_LEN,
+        t if t == super::T_U32.0 => NUM_32_LEN,
+        t if t == super::T_I32.0 => NUM_32_LEN,
+        t if t == super::T_U64.0 => NUM_64_LEN,
+        t if t == super::T_I64.0 => NUM_64_LEN,
+        t if t == super::T_U128.0 => NUM_128_LEN,
+        t if t == super::T_I128.0 => NUM_128_LEN,
+        t if t == super::T_F32.0 => NUM_32_LEN,
+        t if t == super::T_F64.0 => NUM_64_LEN,
+        t if t == super::T_SYMBOL.0 => SYMBOL_LEN,
+        t if t == super::T_REF.0 => PTR_LEN,
         t if t == super::T_ERR.0 => 2,
         _t => {
             panic!("type not allowed")
@@ -775,6 +775,10 @@ pub fn ty_manifest_size(fldct: u32) -> u32 {
         + ((NUM_32_LEN + NUM_32_LEN + SYMBOL_LEN + SYMBOL_LEN) * fldct)
 }
 
+// TODO: multiple-arity procedures (native and lambda)
+
+// TODO: generic / multi procedures (dispatch to methods) (additive complexity)
+
 /// Gives the overall size of a lambda procedure by argument count
 #[inline(always)]
 fn proc_lambda_size(argct: u16) -> u32 {
@@ -783,7 +787,7 @@ fn proc_lambda_size(argct: u16) -> u32 {
 
 /// Gives the overall size of a native procedure
 #[inline(always)]
-fn proc_native_size() -> u32 {
+const fn proc_native_size() -> u32 {
     NUM_16_LEN + PTR_LEN
 }
 
@@ -963,11 +967,11 @@ fn discern_refs_core(loc: *mut SlHead) -> Vec<*mut SlHead> {
 }
 
 /// Return pointers to every object referenced by a given object
-fn discern_refs(env: SlHndl, loc: *mut SlHead) -> Vec<*mut SlHead> {
+fn discern_refs(_env: SlHndl, loc: *mut SlHead) -> Vec<*mut SlHead> {
     let acc = discern_refs_core(loc);
 
     if raw_core_type(loc).is_none() {
-        let tid = raw_type_id(loc);
+        let _tid = raw_type_id(loc);
 
         // TODO: adapt to work with custom types in time
 
@@ -2132,7 +2136,7 @@ fn core_cons_copy(reg: *mut Region, car: SlHndl, cdr: SlHndl) -> SlHndl {
 }
 
 // **********************************************************
-// * `car` and `cdr` CANNOT be provided in the Sail internals
+// * `car` and `cdr` won't be provided in the Sail internals
 // * they do not fit well with the implementation details
 // * use `ref_get` and `get_next_list_elt` instead of these
 // **********************************************************
@@ -2158,7 +2162,6 @@ fn core_cons_copy(reg: *mut Region, car: SlHndl, cdr: SlHndl) -> SlHndl {
 // }
 
 // TODO: deal somewhere with dynamic bindings, lexical bindings, argument bindings
-
 
 // TODO: should there be a small version (maybe an array with length 6
 // to 12) for procedure arguments? note need for modules and types
@@ -2427,7 +2430,7 @@ fn _u8_set(mut loc: SlHndl, val: u8) {
 }
 
 #[inline(always)]
-fn _u8_get(mut loc: SlHndl) -> u8 {
+pub fn u8_get(mut loc: SlHndl) -> u8 {
     coretypck!(loc ; U8);
     read_field(loc, 0)
 }

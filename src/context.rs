@@ -13,9 +13,9 @@
 
 // src/context.rs
 
-// Functions to acquire a window from the desktop environment and get
-// user input. A Sail stack is used to send input information to other
-// threads.
+// Functions to acquire a window from the desktop environment (our
+// frame) and get user input. A Sail queue is used to send input
+// information to other threads.
 
 // <>
 

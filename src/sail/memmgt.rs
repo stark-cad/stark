@@ -604,18 +604,18 @@ unsafe fn void_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
 
         znlck!(zone_ref => 'cs: {
 
-    let ptr = zone_ref.top;
+            let ptr = zone_ref.top;
 
-    if ptr.add(obj_len as _) > zone_ref.end {
-        break 'cs None;
-    }
+            if ptr.add(obj_len as _) > zone_ref.end {
+                break 'cs None;
+            }
 
-    zone_ref.used += obj_len;
-    zone_ref.top = ptr.add(obj_len as _);
+            zone_ref.used += obj_len;
+            zone_ref.top = ptr.add(obj_len as _);
 
-    Some(ptr)
+            Some(ptr)
 
-    } ENDLCK)
+        } ENDLCK)
     }
 }
 
@@ -625,7 +625,8 @@ unsafe fn void_seek(zone_ref: &mut Zone, obj_len: u32) -> Option<*mut u8> {
 /// redirect is left if there is more than one reference
 pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
     unsafe {
-        let cur_size = lblk_get_len(obj);
+        let cur_len = lblk_get_len(obj);
+        let cur_size = super::raw_size(obj);
         if size == cur_size {
             return obj;
         }
@@ -659,15 +660,15 @@ pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
         else if false {
             true
         } else { false }
-    } ENDLCK);
+        } ENDLCK);
 
         // last, find available space in the region, acquire it, and copy into it
         if !qp {
             let old_ptr = obj as *mut u8;
             let new_ptr = acquire_raw(c_regn, new_len);
 
-            ptr::copy_nonoverlapping(old_ptr, new_ptr, cur_size as _);
-            ptr::write_bytes(new_ptr.add(cur_size as _), 0, diff as _);
+            ptr::copy_nonoverlapping(old_ptr, new_ptr, cur_len as _);
+            ptr::write_bytes(new_ptr.add(cur_len as _), 0, diff as _);
 
             // set refct of new loc to 2, for the redir and the return
             ptr::write(new_ptr.add(1), 2);
@@ -682,7 +683,7 @@ pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
             );
 
             // free all space not required for redirect (> 8 bytes)
-            reclaim_raw(old_ptr.add(HEAD_LEN as _), cur_size - HEAD_LEN);
+            reclaim_raw(old_ptr.add(HEAD_LEN as _), cur_len - HEAD_LEN);
         }
 
         if size_fld_p {
@@ -1512,6 +1513,7 @@ impl Drop for Region {
             let mut next = self.head;
             loop {
                 let cur = next;
+                // TODO: fix unaligned zones
                 next = (*cur).next;
                 if next == ptr::null_mut() {
                     break;

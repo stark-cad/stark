@@ -445,8 +445,6 @@ pub struct Vessel {
     /// identifier (index in weft)
     pub id: usize,
 
-    /// symtab and typctr (both shared)
-    tact: *mut Tact,
     /// tracker for all extant vessels
     weft: *mut Weft,
 
@@ -489,8 +487,6 @@ impl Vessel {
 
             unsafe {
                 (&raw mut (*ptr).id).write(weft.get_tid());
-
-                (&raw mut (*ptr).tact).write(weft.ctx_ptr());
                 (&raw mut (*ptr).weft).write(weft);
 
                 (&raw mut (*ptr).reg).write(memmgt::Region::new(r_zone_size));
@@ -518,8 +514,6 @@ impl Vessel {
 
             unsafe {
                 (&raw mut (*ptr).id).write(weft.get_tid());
-
-                (&raw mut (*ptr).tact).write(weft.ctx_ptr());
                 (&raw mut (*ptr).weft).write(weft);
 
                 (&raw mut (*ptr).reg).write(memmgt::Region::new(
@@ -545,11 +539,14 @@ impl Vessel {
         weft.add_vessel(it)
     }
 
+    #[inline(always)]
     pub fn context<'a, 'b>(&'a self) -> &'b mut Tact {
-        // the TAble and CounTer will always outlive all threads
-        unsafe { self.tact.as_mut_unchecked() }
+        // the TAble and CounTer will always outlive all vessels
+        // unsafe { self.tact.as_mut_unchecked() }
+        unsafe { (&raw mut (*self.weft).tact).as_mut_unchecked() }
     }
 
+    // TODO: again, switch to a handle type
     pub fn region(&self) -> *mut memmgt::Region {
         ((&self.reg) as *const memmgt::Region).cast_mut()
     }

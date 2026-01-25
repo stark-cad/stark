@@ -450,7 +450,10 @@ mod tests {
         let mut tab = SymbolTable::new(100000);
 
         fn r#gen(tgt: usize) {
-            let tab = unsafe { mem::transmute::<usize, &mut SymbolTable>(tgt) };
+            // let tab = unsafe { mem::transmute::<usize, &mut SymbolTable>(tgt) };
+            let tab = unsafe {
+                std::ptr::with_exposed_provenance_mut::<SymbolTable>(tgt).as_mut_unchecked()
+            };
 
             // symbols aA00 - zZ99
             let mut acc = vec![];

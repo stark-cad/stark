@@ -29,8 +29,8 @@
 
 // <>
 
-use crate::FrameHandles;
 use crate::sail::{self, SlHndl};
+use crate::FrameHandles;
 
 use ash::vk;
 
@@ -182,6 +182,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: usize) {
             };
 
             let iid = engine.create_window();
+            println!("new window with id {iid}");
 
             let reg = unsafe { (*_vsl).region() };
             let out = sail::i64_init(reg, iid as _);
@@ -355,7 +356,7 @@ pub struct Engine {
     cmd_buffers: Vec<vk::CommandBuffer>,
     fences: Vec<vk::Fence>,
 
-    render_semaphore: vk::Semaphore,
+    render_semaphores: Vec<vk::Semaphore>,
     present_semaphore: vk::Semaphore,
 
     vtx_memory: Vec<vk::DeviceMemory>,
@@ -562,11 +563,6 @@ impl Engine {
         let draw_command_fence = unsafe { device.create_fence(&fence_create_info, None).unwrap() };
 
         let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-        let rendering_complete_semaphore = unsafe {
-            device
-                .create_semaphore(&semaphore_create_info, None)
-                .unwrap()
-        };
         let present_complete_semaphore = unsafe {
             device
                 .create_semaphore(&semaphore_create_info, None)
@@ -582,6 +578,15 @@ impl Engine {
             &surface_format,
             &swapchain_loader,
         );
+
+        let mut rendering_complete_semaphores = vec![];
+        for _ in 0..present_images.len() {
+            rendering_complete_semaphores.push(unsafe {
+                device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .unwrap()
+            })
+        }
 
         Self {
             clear: [0.0, 0.0, 0.0, 1.0],
@@ -628,7 +633,7 @@ impl Engine {
 
             present_queue,
 
-            render_semaphore: rendering_complete_semaphore,
+            render_semaphores: rendering_complete_semaphores,
             present_semaphore: present_complete_semaphore,
 
             vtx_buffers: vec![],
@@ -844,6 +849,18 @@ impl Engine {
             &self.surface_fmt,
             &self.swap_loader,
         );
+
+        let img_diff = self.present_images.len() as isize - self.render_semaphores.len() as isize;
+        if img_diff > 0 {
+            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
+            for _ in 0..img_diff {
+                self.render_semaphores.push(unsafe {
+                    self.device
+                        .create_semaphore(&semaphore_create_info, None)
+                        .unwrap()
+                })
+            }
+        }
     }
 
     /// Acquire memory and create buffer for vertex data
@@ -1138,7 +1155,7 @@ impl Engine {
 
     /// Add a line, with two endpoints and a color
     fn add_line(&mut self, window: u8, points: [f32; 4], color: [f32; 3]) {
-        log::debug!("lend | x: {}, y: {}", points[2], points[3]);
+        // log::debug!("lend | x: {}, y: {}", points[2], points[3]);
 
         self.lines[window as usize].push(points);
         self.colors[window as usize].push(color);
@@ -1381,14 +1398,18 @@ impl Engine {
                 .wait_semaphores(std::slice::from_ref(&self.present_semaphore))
                 .wait_dst_stage_mask(std::slice::from_ref(&vk::PipelineStageFlags::ALL_GRAPHICS))
                 .command_buffers(std::slice::from_ref(&self.cmd_buffers[1]))
-                .signal_semaphores(std::slice::from_ref(&self.render_semaphore));
+                .signal_semaphores(std::slice::from_ref(
+                    &self.render_semaphores[present_index as usize],
+                ));
 
             self.device
                 .queue_submit(self.present_queue, &[submit_info], self.fences[1])
                 .unwrap();
 
             let present_info = vk::PresentInfoKHR::default()
-                .wait_semaphores(std::slice::from_ref(&self.render_semaphore))
+                .wait_semaphores(std::slice::from_ref(
+                    &self.render_semaphores[present_index as usize],
+                ))
                 .swapchains(std::slice::from_ref(&self.swapchain))
                 .image_indices(std::slice::from_ref(&present_index));
 
@@ -1414,7 +1435,9 @@ impl Drop for Engine {
         unsafe {
             self.device.device_wait_idle().unwrap();
             self.device.destroy_semaphore(self.present_semaphore, None);
-            self.device.destroy_semaphore(self.render_semaphore, None);
+            for semaphore in self.render_semaphores.drain(..) {
+                self.device.destroy_semaphore(semaphore, None);
+            }
             for fence in self.fences.drain(..) {
                 self.device.destroy_fence(fence, None);
             }

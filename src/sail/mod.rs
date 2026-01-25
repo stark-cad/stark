@@ -580,7 +580,7 @@ pub struct SlContextVal<'a> {
 }
 
 /// Create a SlContextVal for display
-pub fn context(tbl: &Stab, obj: SlHndl) -> SlContextVal {
+pub fn context(tbl: &Stab, obj: SlHndl) -> SlContextVal<'_> {
     SlContextVal { tbl, obj }
 }
 
