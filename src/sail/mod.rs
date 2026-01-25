@@ -141,26 +141,20 @@ fn make_val_type_mfst(
 // environment tree, and manifests.
 
 // TODO: probably track how many have handles to a queue
-pub fn warp_hdl_init(reg: *mut memmgt::Region, tgt: *mut queue::Inlet) -> SlHndl {
-    assert!(!tgt.is_null());
+pub fn send_hdl_init(reg: *mut memmgt::Region, tgt: queue::InletHdl) -> SlHndl {
     unsafe {
-        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 8, memmgt::cap(Cfg::B8WarpHdl)));
-        write_field_unchecked(out.clone(), 0, tgt as u64);
+        let out =
+            SlHndl::from_raw_unchecked(memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8SendHdl)));
+
+        // TODO: function to write Rust struct directly into Sail object body?
+        write_field_unchecked(out.clone(), 0, mem::transmute::<queue::InletHdl, u64>(tgt));
         out
     }
 }
 
-fn warp_hdl_send(mut loc: SlHndl, msg: SlHndl, from: usize) {
-    coretypck!(loc ; WarpHdl);
-
-    let addrs: u64 = read_field(loc, 0);
-
-    unsafe {
-        (addrs as *mut queue::Inlet)
-            .as_mut()
-            .expect("null warp handle")
-    }
-    .transmit(from, msg)
+fn send_hdl_tx(mut loc: SlHndl, msg: SlHndl, from: usize) {
+    coretypck!(loc ; SendHdl);
+    unsafe { (loc.value_ptr() as *mut queue::InletHdl).as_mut_unchecked() }.transmit(from, msg)
 }
 
 fn vessel_ref_init(reg: *mut memmgt::Region, tgt: *mut thread::Vessel) -> SlHndl {

@@ -62,8 +62,8 @@ pub fn run_loop<Ij: 'static>(
     threads: Ij,
     sl_weft: sail::thread::Weft,
     sl_reg: usize,
-    m_send: usize,
-    r_send: usize,
+    main_tx: sail::queue::InletHdl,
+    rndr_tx: sail::queue::InletHdl,
     fr_dims: sail::SlHndl,
     cur_pos: sail::SlHndl,
 ) where
@@ -74,14 +74,14 @@ pub fn run_loop<Ij: 'static>(
     let dummy_env = sail::env_create(sl_reg as _, None);
     let dm_env_ax = dummy_env.clone();
 
+    let mtx = main_tx.clone();
+
     let _stdin = thread::Builder::new()
         .name("stdin".to_string())
         .spawn(move || {
             let sl_reg = sl_reg as *mut sail::memmgt::Region;
 
             let mut buffer = String::new();
-
-            let mtx = unsafe { &mut *(m_send as *mut sail::queue::Inlet) };
 
             let shell = sail::sym_init(sl_reg, sail::K_CX_SHELL.0);
 
@@ -99,22 +99,15 @@ pub fn run_loop<Ij: 'static>(
 
     let sl_reg = sl_reg as *mut sail::memmgt::Region;
 
-    let (main_tx, rndr_tx) = (
-        m_send as *mut sail::queue::Inlet,
-        r_send as *mut sail::queue::Inlet,
-    );
-
-    let (main_tx, rndr_tx) = unsafe { (&mut *main_tx, &mut *rndr_tx) };
-
     let mut frame_dims: [u32; 2] = [0, 0];
 
     let mut focus = false;
 
-    let redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
-    let destr = sail::sym_init(sl_reg, sail::K_CX_DESTR.0);
-    let resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
-    let recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
-    let moved = sail::sym_init(sl_reg, sail::K_CX_CURMV.0);
+    let ks_redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
+    let ks_destr = sail::sym_init(sl_reg, sail::K_CX_DESTR.0);
+    let ks_resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
+    let ks_recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
+    let ks_moved = sail::sym_init(sl_reg, sail::K_CX_CURMV.0);
 
     // println!("fr_dims is at: {:x}", unsafe { fr_dims.get_raw() as usize });
     // println!("cur_pos is at: {:x}", unsafe { cur_pos.get_raw() as usize });
@@ -128,13 +121,13 @@ pub fn run_loop<Ij: 'static>(
 
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::RedrawRequested => {
-                        rndr_tx.transmit(1, redrw.clone());
+                        rndr_tx.transmit(1, ks_redrw.clone());
                     }
                     WindowEvent::CloseRequested => {
                         elwt.exit();
 
-                        rndr_tx.transmit(1, destr.clone());
-                        main_tx.transmit(1, destr.clone());
+                        rndr_tx.transmit(1, ks_destr.clone());
+                        main_tx.transmit(1, ks_destr.clone());
                     }
                     WindowEvent::Focused(f) => {
                         focus = f;
@@ -143,7 +136,7 @@ pub fn run_loop<Ij: 'static>(
                         frame_dims = [dims.width, dims.height];
                         sail::arrvec_rplc(fr_dims.clone(), &[dims.width, dims.height]);
 
-                        rndr_tx.transmit(1, resiz.clone());
+                        rndr_tx.transmit(1, ks_resiz.clone());
                     }
                     WindowEvent::MouseInput {
                         state, button: _, ..
@@ -152,7 +145,7 @@ pub fn run_loop<Ij: 'static>(
                         // otherwise rely on shared-memory updates
 
                         if state == ElementState::Pressed {
-                            main_tx.transmit(1, recrd.clone());
+                            main_tx.transmit(1, ks_recrd.clone());
                         }
                     }
                     WindowEvent::CursorMoved {
@@ -167,14 +160,14 @@ pub fn run_loop<Ij: 'static>(
 
                         sail::arrvec_rplc(cur_pos.clone(), &[norm_x, norm_y]);
 
-                        log::debug!("curp | x: {}, y: {}", norm_x, norm_y);
+                        // log::debug!("curp | x: {}, y: {}", norm_x, norm_y);
 
                         unsafe {
                             sail::inc_refc(cur_pos.get_raw());
-                            sail::set_next_list_elt_unsafe_unchecked(moved.clone(), cur_pos.clone())
+                            sail::set_next_list_elt_unsafe_unchecked(ks_moved.clone(), cur_pos.clone())
                         };
 
-                        rndr_tx.transmit(1, moved.clone());
+                        rndr_tx.transmit(1, ks_moved.clone());
                     }
                     WindowEvent::KeyboardInput {
                         event:
@@ -239,7 +232,7 @@ pub fn run_loop<Ij: 'static>(
                         Key::Named(n) => match n {
                             NamedKey::Space => {
                                 // enter the point
-                                main_tx.transmit(1, recrd.clone());
+                                main_tx.transmit(1, ks_recrd.clone());
                             }
                             _ => {}
                         },

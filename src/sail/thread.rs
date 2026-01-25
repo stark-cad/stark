@@ -554,8 +554,12 @@ impl Vessel {
         ((&self.reg) as *const memmgt::Region).cast_mut()
     }
 
-    pub fn queue_inlet(&self) -> *mut queue::Inlet {
-        ((&self.qin) as *const queue::Inlet).cast_mut()
+    pub fn inlet_hdl(&mut self) -> queue::InletHdl {
+        queue::InletHdl::new((&raw mut self.reg) as *mut queue::_SendFields)
+    }
+
+    pub fn msg_recv(&mut self) -> (usize, Option<SlHndl>) {
+        self.qin.receive()
     }
 
     pub fn top_env(&self) -> SlHndl {

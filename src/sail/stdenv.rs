@@ -247,7 +247,7 @@ sail_fn! {
 
         let tq = unsafe { (*_vsl).inlet_hdl() };
 
-        super::warp_hdl_init(reg, tq)
+        super::send_hdl_init(reg, tq)
     }
 
     "th-spawn" [fun] {
@@ -265,9 +265,9 @@ sail_fn! {
             panic!()
         }
 
-        let nq = unsafe { (*new).queue_inlet() };
+        let nq = unsafe { (*new).inlet_hdl() };
 
-        let send_tgt = super::warp_hdl_init(reg, nq);
+        let send_tgt = super::send_hdl_init(reg, nq);
         let new_hdl = super::vessel_ref_init(reg, new);
 
         set_next_list_elt(_env, new_hdl.clone(), send_tgt);
@@ -297,16 +297,14 @@ sail_fn! {
     }
 
     "qtx" [sender, item] {
-        super::warp_hdl_send(sender, item, id);
         let id = unsafe { (*_vsl).id };
+        super::send_hdl_tx(sender, item, id);
         env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
     }
 
     "qrx" [] {
-        let inlet = unsafe { (*_thr).queue_inlet() };
-
-        let msg = unsafe { (&mut *inlet).receive() };
         let reg = unsafe { (*_vsl).region() };
+        let msg = unsafe { (*_vsl).msg_recv() };
 
         match msg.1 {
             Some(r) => {
