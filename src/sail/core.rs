@@ -25,6 +25,7 @@ use std::mem;
 use std::ptr;
 
 use super::thread::ThreadHull;
+use std::intrinsics::AtomicOrdering as AO;
 
 use super::memmgt::{self, Region};
 
@@ -807,7 +808,7 @@ pub fn inc_refc(loc: *mut SlHead) -> bool {
     assert!(!nil_p(loc));
 
     let rc_pos = unsafe { (loc as *mut u8).add(1) };
-    let mut cur = unsafe { std::intrinsics::atomic_load_acquire(rc_pos) };
+    let mut cur = unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }>(rc_pos) };
 
     loop {
         match cur {
@@ -824,7 +825,13 @@ pub fn inc_refc(loc: *mut SlHead) -> bool {
         }
 
         let sp;
-        (cur, sp) = unsafe { std::intrinsics::atomic_cxchg_acqrel_acquire(rc_pos, cur, cur + 1) };
+        (cur, sp) = unsafe {
+            std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
+                rc_pos,
+                cur,
+                cur + 1,
+            )
+        };
 
         if sp {
             break;
@@ -851,7 +858,7 @@ pub fn dec_refc(loc: *mut SlHead) -> bool {
     let mut out;
 
     let rc_pos = unsafe { (loc as *mut u8).add(1) };
-    let mut cur = unsafe { std::intrinsics::atomic_load_acquire(rc_pos) };
+    let mut cur = unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }>(rc_pos) };
 
     loop {
         match cur {
@@ -869,7 +876,13 @@ pub fn dec_refc(loc: *mut SlHead) -> bool {
         }
 
         let sp;
-        (cur, sp) = unsafe { std::intrinsics::atomic_cxchg_acqrel_acquire(rc_pos, cur, cur - 1) };
+        (cur, sp) = unsafe {
+            std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
+                rc_pos,
+                cur,
+                cur - 1,
+            )
+        };
 
         if sp {
             break;
@@ -1153,7 +1166,7 @@ fn _write_ptr_atomic(env: SlHndl, mut loc: SlHndl, offset: u32, pto: SlHndl) {
         let dst = loc.value_ptr().add(offset as usize) as *mut _;
 
         let tgt = pto.get_raw();
-        let cur = std::intrinsics::atomic_xchg_acqrel(dst, tgt);
+        let cur = std::intrinsics::atomic_xchg::<_, { AO::AcqRel }>(dst, tgt);
 
         if !nil_p(tgt) {
             inc_refc(tgt);
@@ -1183,7 +1196,8 @@ pub fn write_ptr_cmpxcg(
         };
 
         let tgt = pto.get_raw();
-        let p = std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, tgt).1;
+        let p =
+            std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(dst, old, tgt).1;
 
         if p {
             // if !nil_p(tgt) {
@@ -1221,7 +1235,8 @@ pub fn write_ptr_cmpxcg_may_clr(
             None => nil(),
         };
 
-        let p = std::intrinsics::atomic_cxchg_acqrel_acquire(dst, olp, tgt).1;
+        let p =
+            std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(dst, olp, tgt).1;
 
         if p {
             if !nil_p(tgt) {
@@ -1264,7 +1279,7 @@ pub fn read_ptr_atomic(mut loc: SlHndl, offset: u32) -> Option<SlHndl> {
         // TODO: is it atomic with below? is an atomic ver needed?
         let slot = get_ptr_ptr_unchecked(loc.clone(), offset);
         write_correct_pos_slot(slot);
-        SlHndl::from_raw(std::intrinsics::atomic_load_acquire(slot))
+        SlHndl::from_raw(std::intrinsics::atomic_load::<_, { AO::Acquire }>(slot))
     };
     drop(loc);
     out
@@ -1319,7 +1334,7 @@ pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(
     unsafe {
         debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
         let dst = loc.value_ptr().add(offset as usize) as *mut T;
-        std::intrinsics::atomic_store_release(dst, src);
+        std::intrinsics::atomic_store::<_, { AO::Release }>(dst, src);
     }
 }
 
@@ -1338,7 +1353,7 @@ pub unsafe fn write_field_cmpxcg_unchecked<T: SizedBase + Copy>(
     unsafe {
         debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
         let dst = loc.value_ptr().add(offset as usize) as *mut T;
-        std::intrinsics::atomic_cxchg_acqrel_acquire(dst, old, src).1
+        std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(dst, old, src).1
     }
 }
 
@@ -1370,7 +1385,9 @@ pub unsafe fn read_field_unchecked<T: SizedBase>(loc: SlHndl, offset: u32) -> T 
 /// Read from a field of a Sail object atomically without any checks
 #[inline(always)]
 pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(loc: SlHndl, offset: u32) -> T {
-    unsafe { std::intrinsics::atomic_load_acquire(get_field_ptr_unchecked(loc, offset)) }
+    unsafe {
+        std::intrinsics::atomic_load::<_, { AO::Acquire }>(get_field_ptr_unchecked(loc, offset))
+    }
 }
 
 /// Set the pointer to a list element's next element
@@ -1444,10 +1461,10 @@ pub fn set_next_list_elt_cmpxcg(
         };
         let nwp = new.get_raw();
 
-        let mut cfg = std::intrinsics::atomic_load_acquire(lcp as *mut u16) as u64;
+        let mut cfg = std::intrinsics::atomic_load::<_, { AO::Acquire }>(lcp as *mut u16) as u64;
 
         let p = loop {
-            let (cur, p) = std::intrinsics::atomic_cxchg_acqrel_acquire(
+            let (cur, p) = std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
                 lcp as *mut u64,
                 ((olp as u64) << 16) + cfg,
                 ((nwp as u64) << 16) + cfg,

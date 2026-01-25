@@ -20,8 +20,10 @@
 use std::pin::Pin;
 use std::usize;
 
-use super::{SlHndl, Stab, Styc};
+use std::intrinsics::AtomicOrdering as AO;
+
 use super::{eval, memmgt, parser, queue};
+use super::{SlHndl, Stab, Styc};
 
 /// Global context data for inter-thread and human interaction
 pub struct Tact {
@@ -217,7 +219,12 @@ impl Weft {
     }
 
     fn get_tid(&mut self) -> usize {
-        unsafe { std::intrinsics::atomic_xadd_acqrel(&mut self.nxt_sl_thr_id as *mut usize, 1) }
+        unsafe {
+            std::intrinsics::atomic_xadd::<usize, usize, { AO::AcqRel }>(
+                &mut self.nxt_vsl_id as *mut usize,
+                1,
+            )
+        }
     }
 
     // NOTE: mutation through const pointers might require use of
@@ -226,7 +233,13 @@ impl Weft {
     fn add_thread(&mut self, thread_hull: Pin<Box<ThreadHull>>) -> *mut ThreadHull {
         unsafe {
             let lock: *mut u8 = &mut self.append_lock;
-            while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+            while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
+                lock,
+                false as u8,
+                true as u8,
+            )
+            .1
+            {
                 std::hint::spin_loop();
             }
 
@@ -251,7 +264,7 @@ impl Weft {
 
             assert_eq!(self.sl_threads.len(), self.work_nodes.len());
 
-            std::intrinsics::atomic_store_release(lock, false as u8);
+            std::intrinsics::atomic_store::<_, { AO::Release }>(lock, false as u8);
 
             thr_raw_pos
         }
@@ -269,7 +282,13 @@ impl Weft {
             let this = (self as *const Self).cast_mut().as_mut_unchecked();
 
             let lock: *mut u8 = &mut this.append_lock;
-            while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+            while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
+                lock,
+                false as u8,
+                true as u8,
+            )
+            .1
+            {
                 std::hint::spin_loop();
             }
 
@@ -277,7 +296,7 @@ impl Weft {
 
             // TODO: remove all traces of the thread in the structure
 
-            std::intrinsics::atomic_store_release(lock, false as u8);
+            std::intrinsics::atomic_store::<_, { AO::Release }>(lock, false as u8);
 
             drop(removed);
         }
@@ -351,7 +370,10 @@ impl Weft {
             }
 
             unsafe {
-                std::intrinsics::atomic_store_release(&mut insert_point.next, to_insert);
+                std::intrinsics::atomic_store::<_, { AO::Release }>(
+                    &mut insert_point.next,
+                    to_insert,
+                );
             }
 
             self.worker_os_threads[next_worker].thread().unpark();

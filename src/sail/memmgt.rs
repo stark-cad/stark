@@ -25,6 +25,8 @@ use std::alloc;
 use std::mem;
 use std::ptr;
 
+use std::intrinsics::AtomicOrdering as AO;
+
 static mut OBJECT_ID_CTR: u32 = 0;
 
 static mut ZONE_ID_CTR: u32 = 0;
@@ -79,15 +81,21 @@ impl RegionTable {
     unsafe fn len(tgt: *mut Self) -> usize {
         unsafe {
             let lock: *mut u8 = &raw mut (*tgt).lock;
-            while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+            while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
+                lock,
+                false as u8,
+                true as u8,
+            )
+            .1
+            {
                 std::hint::spin_loop();
             }
 
-            std::intrinsics::atomic_fence_acqrel();
+            std::intrinsics::atomic_fence::<{ AO::AcqRel }>();
 
             let out = (*tgt).len;
 
-            std::intrinsics::atomic_store_release(lock, false as u8);
+            std::intrinsics::atomic_store::<_, { AO::Release }>(lock, false as u8);
 
             out
         }
@@ -155,11 +163,17 @@ impl RegionTable {
     ) {
         unsafe {
             let lock: *mut u8 = &raw mut (*tgt).lock;
-            while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+            while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
+                lock,
+                false as u8,
+                true as u8,
+            )
+            .1
+            {
                 std::hint::spin_loop();
             }
 
-            std::intrinsics::atomic_fence_acqrel();
+            std::intrinsics::atomic_fence::<{ AO::AcqRel }>();
 
             let old_len = (*tgt).len;
 
@@ -175,9 +189,9 @@ impl RegionTable {
             ptr::write((*tgt).zone_array.add(old_len), zone);
             ptr::write((*tgt).region_array.add(old_len), region);
 
-            std::intrinsics::atomic_fence_acqrel();
+            std::intrinsics::atomic_fence::<{ AO::AcqRel }>();
 
-            std::intrinsics::atomic_store_release(lock, false as u8);
+            std::intrinsics::atomic_store::<_, { AO::Release }>(lock, false as u8);
 
             println!("registered {:x} to {:x}", start, end);
 
@@ -206,11 +220,17 @@ impl RegionTable {
     unsafe fn index(tgt: *mut Self, idx: usize) -> (usize, usize, *mut Zone, *mut Region) {
         unsafe {
             let lock: *mut u8 = &raw mut (*tgt).lock;
-            while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+            while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
+                lock,
+                false as u8,
+                true as u8,
+            )
+            .1
+            {
                 std::hint::spin_loop();
             }
 
-            std::intrinsics::atomic_fence_acqrel();
+            std::intrinsics::atomic_fence::<{ AO::AcqRel }>();
 
             assert!(idx < (*tgt).len);
 
@@ -220,7 +240,7 @@ impl RegionTable {
             let zone = ptr::read((*tgt).zone_array.add(idx));
             let region = ptr::read((*tgt).region_array.add(idx));
 
-            std::intrinsics::atomic_store_release(lock, false as u8);
+            std::intrinsics::atomic_store::<_, { AO::Release }>(lock, false as u8);
 
             (start, end, zone, region)
         }
@@ -394,7 +414,8 @@ pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead 
         }
 
         if cfg!(feature = "memdbg") {
-            let obj_id = std::intrinsics::atomic_xadd_acqrel(&raw mut OBJECT_ID_CTR, 1);
+            let obj_id =
+                std::intrinsics::atomic_xadd::<_, _, { AO::AcqRel }>(&raw mut OBJECT_ID_CTR, 1);
             ptr::write_unaligned((ptr as *mut u32).add(2), obj_id);
 
             let ty = if type_fld_p {
@@ -415,7 +436,11 @@ macro_rules! znlck {
         let _zn_id = ($zone).id;
 
         let lock: *mut u8 = &mut ($zone).lock;
-        while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
+        while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
+            lock,
+            false as u8,
+            true as u8).1
+        {
             std::hint::spin_loop();
         }
 
@@ -426,7 +451,7 @@ macro_rules! znlck {
 
         let p = $($labl :)? {$body};
 
-        std::intrinsics::atomic_store_release(lock, false as u8);
+        std::intrinsics::atomic_store::<_, { AO::Release }>(lock, false as u8);
 
         // println!("Z {zn_id} OPEN (l {})", line!());
 
@@ -718,7 +743,7 @@ unsafe fn reclaim_raw(ptr: *mut u8, sz: u32) {
 
             // TODO: more clearly specify concurrency needs for zones
 
-            let (chkt, done) = std::intrinsics::atomic_cxchg_acqrel_acquire(
+            let (chkt, done) = std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
                 &mut (*zone).free,
                 ptr::null_mut(),
                 newblk,
@@ -964,7 +989,7 @@ unsafe fn reclaim_raw(ptr: *mut u8, sz: u32) {
         }
     };
 
-    std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, sz);
+            std::intrinsics::atomic_xsub::<_, _, { AO::AcqRel }>(&mut (*zone).used, sz);
 
     if cfg!(feature = "memdbg") {
         // __dbg_visualize_zone(zone)
@@ -1591,7 +1616,8 @@ unsafe fn new_mem_zone(region: *mut Region) {
             region,
         );
 
-        let zn_id = std::intrinsics::atomic_xadd_acqrel(&raw mut ZONE_ID_CTR, 1);
+        let zn_id =
+            std::intrinsics::atomic_xadd::<u32, u32, { AO::AcqRel }>(&raw mut ZONE_ID_CTR, 1);
 
         let new_head = Zone {
             used: 0,

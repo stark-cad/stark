@@ -28,6 +28,8 @@
 
 use std::{alloc, mem, ptr, slice};
 
+use std::intrinsics::AtomicOrdering as AO;
+
 /// A symbol table, to map symbol strings to symbol IDs and vice versa
 ///
 /// This is a bimap, a 1 to 1 association between strings and IDs.
@@ -132,7 +134,7 @@ impl SymbolTable {
     fn resize(&mut self, factor: usize) {
         // acquire insertion lock
         unsafe {
-            while !std::intrinsics::atomic_cxchg_acquire_acquire(
+            while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
                 &mut self.ins_lock,
                 false as u8,
                 true as u8,
@@ -183,7 +185,7 @@ impl SymbolTable {
 
         // acquire resize lock
         unsafe {
-            while !std::intrinsics::atomic_cxchg_acquire_acquire(
+            while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
                 &mut self.rsz_lock,
                 false as u8,
                 true as u8,
@@ -202,10 +204,14 @@ impl SymbolTable {
         self.map_len = new_len;
 
         // release resize lock
-        unsafe { std::intrinsics::atomic_store_release(&mut self.rsz_lock, false as u8) };
+        unsafe {
+            std::intrinsics::atomic_store::<_, { AO::Release }>(&mut self.rsz_lock, false as u8)
+        };
 
         // release insertion lock
-        unsafe { std::intrinsics::atomic_store_release(&mut self.ins_lock, false as u8) };
+        unsafe {
+            std::intrinsics::atomic_store::<_, { AO::Release }>(&mut self.ins_lock, false as u8)
+        };
     }
 
     pub fn get_id(&mut self, name: &[u8]) -> u32 {
@@ -219,7 +225,7 @@ impl SymbolTable {
 
         // acquire lock
         unsafe {
-            while !std::intrinsics::atomic_cxchg_acquire_acquire(
+            while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
                 &mut self.ins_lock,
                 false as u8,
                 true as u8,
@@ -242,7 +248,9 @@ impl SymbolTable {
         };
 
         // release lock
-        unsafe { std::intrinsics::atomic_store_release(&mut self.ins_lock, false as u8) };
+        unsafe {
+            std::intrinsics::atomic_store::<_, { AO::Release }>(&mut self.ins_lock, false as u8)
+        };
 
         assert!(self.next_id < (1u32 << 31));
 
@@ -256,7 +264,7 @@ impl SymbolTable {
         // entry or zero found
 
         // NOTE: watch for issues caused by resize during lookup
-        while unsafe { std::intrinsics::atomic_load_acquire(&self.rsz_lock) } != 0 {}
+        while unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }>(&self.rsz_lock) } != 0 {}
 
         let tgt = Self::hash_name(name) % self.map_len;
 
@@ -271,7 +279,7 @@ impl SymbolTable {
         // entry or zero found
 
         // NOTE: would like to keep as an immutable reference though
-        while unsafe { std::intrinsics::atomic_load_acquire(&self.rsz_lock) } != 0 {}
+        while unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }>(&self.rsz_lock) } != 0 {}
 
         let tgt = Self::hash_id(id) % self.map_len;
 

@@ -192,14 +192,20 @@ impl Inlet {
 mod atom_ops {
     use super::Qptr;
 
+    use std::intrinsics::AtomicOrdering as AO;
+
     #[inline(always)]
     pub unsafe fn load(from: *const Qptr) -> Qptr {
-        unsafe { Qptr(std::intrinsics::atomic_load_acquire(from as *const usize)) }
+        unsafe {
+            Qptr(std::intrinsics::atomic_load::<_, { AO::Acquire }>(
+                from as *const usize,
+            ))
+        }
     }
     #[inline(always)]
     pub unsafe fn cxcg(tgt: *mut Qptr, old: Qptr, new: Qptr) -> (Qptr, bool) {
         unsafe {
-            let out = std::intrinsics::atomic_cxchg_acqrel_acquire(
+            let out = std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
                 tgt as *mut usize,
                 std::mem::transmute::<Qptr, usize>(old),
                 std::mem::transmute::<Qptr, usize>(new),
