@@ -31,7 +31,6 @@
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
 #![feature(box_as_ptr)]
-#![feature(const_heap)]
 #![feature(macro_metavar_expr)]
 #![feature(ptr_as_ref_unchecked)]
 

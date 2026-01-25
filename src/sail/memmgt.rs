@@ -36,6 +36,10 @@ static mut ZONE_ID_CTR: u32 = 0;
 
 static mut REGION_TABLE: RegionTable = RegionTable::new(64);
 
+pub fn init() {
+    unsafe { RegionTable::init(&raw mut REGION_TABLE) }
+}
+
 /// Keeps track of memory zones and which regions they belong to using
 /// parallel arrays
 struct RegionTable {
@@ -51,8 +55,6 @@ struct RegionTable {
     len: usize,
     /// Capacity of all arrays above
     cap: usize,
-    /// High if the table has been resized during runtime
-    resized: bool,
     /// Modification lock for region table
     lock: u8,
 }
@@ -63,17 +65,35 @@ struct RegionTable {
 impl RegionTable {
     /// Create a new region table
     const fn new(cap: usize) -> Self {
-        // NOTE: could also set up in main
+        Self {
+            low_array: ptr::null_mut(),
+            high_array: ptr::null_mut(),
+            zone_array: ptr::null_mut(),
+            region_array: ptr::null_mut(),
+            len: 0,
+            cap,
+            lock: false as u8,
+        }
+    }
+
+    unsafe fn init(tgt: *mut Self) {
         unsafe {
-            Self {
-                low_array: std::intrinsics::const_allocate(cap * 8, 8) as _,
-                high_array: std::intrinsics::const_allocate(cap * 8, 8) as _,
-                zone_array: std::intrinsics::const_allocate(cap * 8, 8) as _,
-                region_array: std::intrinsics::const_allocate(cap * 8, 8) as _,
-                len: 0,
-                cap,
-                resized: false,
-                lock: false as u8,
+            let this = tgt.as_mut().unwrap();
+
+            if this.low_array.is_null() {
+                assert!(
+                    this.low_array.is_null()
+                        && this.high_array.is_null()
+                        && this.zone_array.is_null()
+                        && this.region_array.is_null()
+                );
+
+                let layout = alloc::Layout::from_size_align_unchecked(this.cap * 8, 8);
+
+                this.low_array = alloc::alloc(layout) as *mut usize;
+                this.high_array = alloc::alloc(layout) as *mut usize;
+                this.zone_array = alloc::alloc(layout) as *mut *mut Zone;
+                this.region_array = alloc::alloc(layout) as *mut *mut Region;
             }
         }
     }
@@ -110,41 +130,19 @@ impl RegionTable {
             // }
 
             if self.cap != cap {
-                if self.resized {
-                    let current_layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
+                let current_layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
 
-                    self.low_array =
-                        alloc::realloc(self.low_array as *mut u8, current_layout, cap * 8)
-                            as *mut usize;
-                    self.high_array =
-                        alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8)
-                            as *mut usize;
-                    self.zone_array =
-                        alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8)
-                            as *mut *mut Zone;
-                    self.region_array =
-                        alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8)
-                            as *mut *mut Region;
-                } else {
-                    let layout = alloc::Layout::from_size_align_unchecked(cap * 8, 8);
-
-                    let old_low = self.low_array;
-                    let old_high = self.high_array;
-                    let old_zone = self.zone_array;
-                    let old_reg = self.region_array;
-
-                    self.low_array = alloc::alloc(layout) as *mut usize;
-                    self.high_array = alloc::alloc(layout) as *mut usize;
-                    self.zone_array = alloc::alloc(layout) as *mut *mut Zone;
-                    self.region_array = alloc::alloc(layout) as *mut *mut Region;
-
-                    ptr::copy_nonoverlapping(old_low, self.low_array, self.cap);
-                    ptr::copy_nonoverlapping(old_high, self.high_array, self.cap);
-                    ptr::copy_nonoverlapping(old_zone, self.zone_array, self.cap);
-                    ptr::copy_nonoverlapping(old_reg, self.region_array, self.cap);
-
-                    self.resized = true;
-                }
+                self.low_array = alloc::realloc(self.low_array as *mut u8, current_layout, cap * 8)
+                    as *mut usize;
+                self.high_array =
+                    alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8)
+                        as *mut usize;
+                self.zone_array =
+                    alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8)
+                        as *mut *mut Zone;
+                self.region_array =
+                    alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8)
+                        as *mut *mut Region;
 
                 self.cap = cap;
             }
@@ -174,6 +172,10 @@ impl RegionTable {
             }
 
             std::intrinsics::atomic_fence::<{ AO::AcqRel }>();
+
+            if (*tgt).low_array.is_null() {
+                Self::init(tgt)
+            }
 
             let old_len = (*tgt).len;
 
@@ -280,6 +282,8 @@ mod table_tests {
         static mut TABLE: RegionTable = RegionTable::new(8);
 
         unsafe {
+            RegionTable::init(&raw mut TABLE);
+
             for i in 1..13 {
                 RegionTable::append(
                     &raw mut TABLE,

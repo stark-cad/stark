@@ -29,7 +29,7 @@
 
 // <>
 
-use stark::{FrameHandles, context, graphics, manager_loop, sail};
+use stark::{context, graphics, manager_loop, sail, FrameHandles};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -59,6 +59,8 @@ fn main() {
         .with_level(log::LevelFilter::Debug)
         .init()
         .unwrap();
+
+    sail::memmgt::init();
 
     // cargo run file <filename> to run a Sail file
     // cargo run repl for Sail REPL
