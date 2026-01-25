@@ -1,21 +1,21 @@
-; STARK, a system for computer augmented design.
+;; STARK, a system for computer augmented design.
 
-; SPDX-FileCopyrightText: © 2021 Matthew Rothlisberger
-; SPDX-License-Identifier: AGPL-3.0-only
+;; SPDX-FileCopyrightText: © 2021 Matthew Rothlisberger
+;; SPDX-License-Identifier: AGPL-3.0-only
 
-; STARK is licensed under the terms of the GNU Affero General Public
-; License version 3. See the top-level LICENSES directory for the
-; license text.
+;; STARK is licensed under the terms of the GNU Affero General Public
+;; License version 3. See the top-level LICENSES directory for the
+;; license text.
 
-; Find full copyright information in the top-level COPYRIGHT file.
+;; Find full copyright information in the top-level COPYRIGHT file.
 
-; <>
+;; <>
 
-; scripts/main.sl
+;; scripts/main.sl
 
-; Main loop for the manager thread of STARK's full graphical mode.
+;; Main loop for the governor vessel of STARK's full graphical mode.
 
-; <>
+;; <>
 
 (def drawing #F)
 (def point (arr-vec-make $f32 2 (as-f32 0.0)))
@@ -25,8 +25,8 @@
 (def input ())
 (def alive #T)
 
-; (def drawing #F)
-; (def point (arr-vec-make $f32 2 (as-f32 0.0)))
+;; (def drawing #F)
+;; (def point (arr-vec-make $f32 2 (as-f32 0.0)))
 
 (def get-q-next (fn [] (def out ()) (while (eq out ()) (set out (rest (qrx)))) out))
 
@@ -74,10 +74,12 @@
 (def child-records [])
 (def cur-child ())
 
+(def gw-sig :get-win)
+
 (def inst-window (fn []
      (def new-thr (th-spawn prot-rec-proc))
      (vec-push child-records new-thr)
-     (qtx rdr-tgt (link :get-win (link (th-id new-thr) (rest new-thr))))
+     (qtx rdr-tgt (link gw-sig (link (th-id new-thr) (rest new-thr))))
      (qtx (rest new-thr) (link :ini-rdt rdr-tgt))
      (qtx (rest new-thr) (link :ini-cxt (own-tx-hdl)))
 ))
@@ -100,9 +102,14 @@
 (def last-ht-pt ())
 
 (def cm-sig :cx-crmv)
+(def iw-sig :ini-whd)
+
+(def wh 0)
+(def id 0)
+(def slot ())
 
 (while alive
-       ; TODO: blocking queue receive which parks the thread / strand
+       ; TODO: blocking queue receive which parks the vessel
        (set input (qrx))
 
        (cond
@@ -111,16 +118,18 @@
            (= input rdr-id) (do
               (set input (rest input))
               (cond (eq input :win-ret) (do
-                 (def wh (rest input))
-                 (def id (rest wh))
-                 (def slot (vec-find child-records (fn [e] (= id (th-id e)))))
+                 (set wh (rest input))
+                 (print wh)
+                 (set id (rest wh))
+                 (set slot (vec-find child-records (fn [e] (= id (th-id e)))))
                  (if (not (eq slot ())) (do
                      (link (rest slot) wh)
-                     (qtx (rest slot) (link :ini-whd wh))) ()))
+                     (qtx (rest slot) (link iw-sig wh))) ()))
 
            ; TODO: in most cases, first use of def in a loop shadows all to follow!!
                  (eq input :win-hit) (do
                      (set cur-win (rest input))
+                     (print cur-win)
                      (set last-ht-pt (rest cur-win))
                      (set cur-child (vec-find child-records (fn [e] (= cur-win (rest (rest e)))))))
            ))

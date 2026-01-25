@@ -1,29 +1,28 @@
-; STARK, a system for computer augmented design.
+;; STARK, a system for computer augmented design.
 
-; SPDX-FileCopyrightText: © 2024 Matthew Rothlisberger
-; SPDX-License-Identifier: AGPL-3.0-only
+;; SPDX-FileCopyrightText: © 2024 Matthew Rothlisberger
+;; SPDX-License-Identifier: AGPL-3.0-only
 
-; STARK is licensed under the terms of the GNU Affero General Public
-; License version 3. See the top-level LICENSES directory for the
-; license text.
+;; STARK is licensed under the terms of the GNU Affero General Public
+;; License version 3. See the top-level LICENSES directory for the
+;; license text.
 
-; Find full copyright information in the top-level COPYRIGHT file.
+;; Find full copyright information in the top-level COPYRIGHT file.
 
-; <>
+;; <>
 
-; scripts/prot_line_rec.sl
+;; scripts/prot_line_rec.sl
 
-; Controlling logic for a live instance of the prototype line record.
+;; Controlling logic for a live instance of the prototype line record.
 
-; <>
-
-;; input comes from common manager thread (initialization, human interaction)
-
-;; at least for now, EVERYTHING comes over the queue. no shared state!
-
-;; output as dispatches to common render thread (draw commands)
+;; <>
 
 (fn []
+    ;; input comes from common manager thread (initialization, human interaction)
+
+    ;; at least for now, EVERYTHING comes over the queue. no shared state!
+
+    ;; output as dispatches to common render thread (draw commands)
 
 (def line-f32 (fn [wh x1 y1 x2 y2]
                   (def out (arr-vec-make $f32 4 (as-f32 0.0)))
@@ -84,13 +83,13 @@
 
 ; main loop
 (while alive
-       ;; TODO: Sail equivalents to cond and match
+       ;; TODO: Sail equivalent to match
        (set input (rest (qrx)))
 
        (cond
          (eq input :cx-crmv) (do
            (set curp (rest input))
-           (tmp-coord-log curp)
+;           (tmp-coord-log curp)
            (if drawing (do
                (qtx rdr-tgt (link :line-pop wnd-hdl))
                (line-f32 wnd-hdl
@@ -99,6 +98,7 @@
 
        ; TODO: drawing very slow, reduce computation / communication per op
          (eq input :cx-rcrd) (do
+           (print wnd-hdl)
            (print "click received")
            (if drawing
              (do

@@ -1,21 +1,21 @@
-; STARK, a system for computer augmented design.
+;; STARK, a system for computer augmented design.
 
-; SPDX-FileCopyrightText: © 2021 Matthew Rothlisberger
-; SPDX-License-Identifier: AGPL-3.0-only
+;; SPDX-FileCopyrightText: © 2021 Matthew Rothlisberger
+;; SPDX-License-Identifier: AGPL-3.0-only
 
-; STARK is licensed under the terms of the GNU Affero General Public
-; License version 3. See the top-level LICENSES directory for the
-; license text.
+;; STARK is licensed under the terms of the GNU Affero General Public
+;; License version 3. See the top-level LICENSES directory for the
+;; license text.
 
-; Find full copyright information in the top-level COPYRIGHT file.
+;; Find full copyright information in the top-level COPYRIGHT file.
 
-; <>
+;; <>
 
-; scripts/rndr.sl
+;; scripts/rndr.sl
 
-; Main loop for the rendering thread of STARK's full graphical mode.
+;; Main loop for the rendering vessel of STARK's full graphical mode.
 
-; <>
+;; <>
 
 (def rndr (fn []
 
@@ -42,6 +42,12 @@
             (set idx (+ 1 idx)))
      (if found entry ())))
 
+(def for-each (fn [coll f]
+     (def idx 0)
+     (while (not (= idx (vec-len coll)))
+            (f (vec-get coll idx))
+            (set idx (+ 1 idx)))))
+
 (def windows [])
 
 ;(bg-col engine (as-f32 0.0) (as-f32 0.0) (as-f32 0.0))
@@ -56,8 +62,10 @@
 
 (def ht-last 0) ; temp
 
+; TODO: =let= is probably just better than =def=, replace
 (def cm-sig :cx-crmv)
 (def ht-sig :win-hit)
+(def wr-sig :win-ret)
 
 ; TODO: fix insane variable shadowing
 (while alive
@@ -69,10 +77,18 @@
 
          (and (= source mgr-id) (eq input :get-win)) (do
            (def for-id (rest input))
+           (print (rest input))
+           (print for-id)
            (def new-win (create-window engine))
-           ; (modify-window engine new-win (as-f32 -1.0) (as-f32 -1.0) (as-f32 0.0) (as-f32 1.0))
+           (def acc (as-f32 -1.0))
+           (def hgt (/ (as-f32 2.0) (as-f32 (vec-len windows))))
+           (for-each windows (fn [w] (modify-window engine w (as-f32 0.0) acc (as-f32 1.0) (+ acc hgt))
+                                     (set acc (+ acc hgt))))
+
+           (modify-window engine new-win (as-f32 -1.0) (as-f32 -1.0) (as-f32 0.0) (as-f32 1.0))
            (vec-push windows (link new-win for-id))
-           (qtx mgr-tgt (link :win-ret new-win)))
+           (qtx mgr-tgt (link wr-sig new-win))
+           (redraw engine))
 
          (and (= source mgr-id) (eq input :hit-win)) (do
            (set reported-pt (rest input))
@@ -127,7 +143,7 @@
 
        ; TODO: modify shared state indicating the current window and cursor position?
          (eq input :cx-crmv) (do
-           (set ht-result (hit-test engine (tmp-coord-log (rest input))))
+           (set ht-result (hit-test engine (rest input)))
            (if (not (= ht-last ht-result)) (do
                (qtx mgr-tgt (link ht-sig ht-result))
                (set ht-cur (vec-find windows (fn [e] (= e ht-result))))) ())
