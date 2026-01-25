@@ -211,6 +211,26 @@ sail_fn! {
         // return bool_init(_reg, result);
     }
 
+    ">=" [fst, snd] {
+        let result = i64_get(fst) >= i64_get(snd);
+        if result {
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
+        }
+        // return bool_init(_reg, result);
+    }
+
+    "<=" [fst, snd] {
+        let result = i64_get(fst) <= i64_get(snd);
+        if result {
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
+        }
+        // return bool_init(_reg, result);
+    }
+
     "eq" [fst, snd] {
         let result = core_eq(fst, snd);
         if result {
@@ -236,6 +256,14 @@ sail_fn! {
     // TODO: and and or as macros or, more easily, special forms
     "and" [lhs, rhs] {
         if lhs.truthy() && rhs.truthy() {
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
+        }
+    }
+
+    "or" [lhs, rhs] {
+        if lhs.truthy() || rhs.truthy() {
             env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
         } else {
             env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
@@ -316,21 +344,62 @@ sail_fn! {
         }
     }
 
+    // TODO: adjust memmgt so we can efficiently get new bool objects
+    // NOTE: 'empty list predicate'
+    "elp" [loc] {
+        if coretypp!(loc ; Ref) && !loc.nnil_ref_p() {
+            env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
+        }
+    }
+
+    "push" [loc, item] {
+        if coretypp!(loc ; Ref) {
+            if let Some(tgt) = ref_get(loc.clone()) {
+                set_next_list_elt(_env.clone(), item.clone(), tgt)
+            }
+            ref_set(_env, loc.clone(), item);
+            loc
+        } else {
+            set_next_list_elt(_env, item.clone(), loc);
+            item
+        }
+    }
+
+    // TODO: automatic dereference? avoid handling first elt differently
+    "fst" [loc] {
+        if coretypp!(loc ; Ref) {
+            ref_get(loc).expect("null ref!")
+        } else {
+            loc
+        }
+    }
+
     "rest" [loc] {
+        let loc = if coretypp!(loc ; Ref) {
+            ref_get(loc).expect("null ref!")
+        } else { loc };
+
         match get_next_list_elt(loc) {
             Some(h) => h,
             None => env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap(),
         }
     }
 
+    // TODO: automatically link following item
     "link" [fst, nxt] {
         set_next_list_elt(_env, fst.clone(), nxt);
         fst
     }
 
     "as-f32" [val] {
-        return f32_init(reg, f64_get(val) as f32);
         let reg = unsafe { (*_vsl).region() };
+        match val.core_type().expect("type invalid") {
+            CoreType::F64 => return f32_init(reg, f64_get(val) as f32),
+            CoreType::I64 => return f32_init(reg, i64_get(val) as f32),
+            _ => panic!("type invalid for cast"),
+        }
     }
 
     "arr-vec-make" [typ, len, init] {
@@ -416,10 +485,67 @@ sail_fn! {
         return arg;
     }
 
-    // "printenv" 0 [] {
-    //     println!("{}", super::context(_tbl, _env).to_string());
-    //     return bool_init(_reg, false);
-    // }
+    // TODO: move traversal code elsewhere (into env module?)
+    "printenv" [] {
+        let mut acc: Vec<Vec<(u32, SlHndl)>> = vec![];
+        let mut scope_ptr: Option<SlHndl> = Some(_env.clone());
+        let mut layer_ptr: Option<SlHndl>;
+
+        'scope: loop {
+            if scope_ptr.is_none() {
+                break 'scope;
+            }
+
+            acc.push(vec![]);
+
+            let scope = scope_ptr.as_mut().unwrap();
+            coretypck!(scope ; EnvScope);
+
+            // currently only works for basic symbols
+            layer_ptr = unsafe { read_ptr_unchecked(scope_ptr.clone().unwrap(), 0) };
+
+            'layer: loop {
+                if layer_ptr.is_none() {
+                    break 'layer;
+                }
+
+                let layer = layer_ptr.as_mut().unwrap();
+                coretypck!(layer ; EnvLayer);
+
+                'entry: for o in 0..41 {
+                    let byte_offset = o * (SYMBOL_LEN + PTR_LEN);
+
+                    let slot_id: u32 =
+                        unsafe { read_field_unchecked(layer_ptr.clone().unwrap(), byte_offset) };
+
+                    if slot_id >> 30 == SymbolMode::Keyword as u32 {
+                        continue 'entry;
+                    }
+
+                    acc.last_mut().unwrap().push((slot_id, unsafe {
+                        read_ptr_unchecked(layer_ptr.clone().unwrap(), byte_offset + SYMBOL_LEN)
+                            .unwrap() }));
+                }
+
+                layer_ptr = get_next_list_elt(layer_ptr.unwrap());
+            }
+
+            scope_ptr = get_next_list_elt(scope_ptr.unwrap());
+        }
+
+        let tbl = unsafe { ((*_vsl).context()).symtab() };
+
+        for (i, scope) in acc.iter().enumerate() {
+            println!("\nSCOPE {i}\n--------");
+            for entry in scope {
+                let symn = unsafe { std::str::from_utf8_unchecked(tbl.lookup_by_id(entry.0).unwrap()) };
+                let spac = if symn.len() > 6 { "\t" } else { "\t\t"};
+                let valt = super::context(tbl, entry.1.clone()).to_string();
+                println!("{symn} {spac}| {valt}");
+            }
+        }
+        return env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
+    }
 
     "parse" [strin] {
         coretypck!(strin ; VecStr);
