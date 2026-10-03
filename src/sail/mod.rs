@@ -143,10 +143,10 @@ fn make_val_type_mfst(
 // TODO: probably track how many have handles to a queue
 pub fn send_hdl_init(reg: *mut memmgt::Region, tgt: queue::InletHdl) -> SlHndl {
     unsafe {
+        crate::report_site!("send handle alloc");
         let out =
             SlHndl::from_raw_unchecked(memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8SendHdl)));
 
-        // TODO: function to write Rust struct directly into Sail object body?
         write_field_unchecked(out.clone(), 0, mem::transmute::<queue::InletHdl, u64>(tgt));
         out
     }
@@ -162,6 +162,7 @@ fn vessel_ref_init(reg: *mut memmgt::Region, tgt: *mut thread::Vessel) -> SlHndl
     unsafe {
         let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 8, T_THR_REF_ID.0));
         write_field_unchecked(out.clone(), 0, tgt as u64);
+        crate::report_site!("vessel reference alloc");
         out
     }
 }
@@ -254,6 +255,7 @@ fn arrvec_make<T: SizedBase + Copy>(
     assert_eq!(temp_get_size(typ) as usize, mem::size_of::<T>());
     unsafe {
         let size = vec_size(8, temp_get_size(typ), len);
+        crate::report_site!("array vector alloc");
         let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::VecArr)));
 
         write_field_unchecked::<u32>(out.clone(), 0, typ);
@@ -278,6 +280,7 @@ pub fn arrvec_init<T: SizedBase + Copy>(
 
     unsafe {
         let size = vec_size(8, temp_get_size(typ), len);
+        crate::report_site!("array vector alloc");
         let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::VecArr)));
 
         write_field_unchecked::<u32>(out.clone(), 0, typ);

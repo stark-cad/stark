@@ -1519,12 +1519,14 @@ pub fn get_next_list_elt(loc: SlHndl) -> Option<SlHndl> {
 
 #[inline(always)]
 pub fn ref_make(reg: *mut Region) -> SlHndl {
+    crate::report_site!("reference obj alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr))) }
 }
 
 #[inline(always)]
 pub fn ref_init(reg: *mut Region, val: SlHndl) -> SlHndl {
     unsafe {
+        crate::report_site!("reference obj alloc");
         let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr)));
 
         inc_refc(val.get_raw());
@@ -1536,6 +1538,7 @@ pub fn ref_init(reg: *mut Region, val: SlHndl) -> SlHndl {
 
 #[inline(always)]
 pub fn sym_make(reg: *mut Region) -> SlHndl {
+    crate::report_site!("symbol obj alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, SYMBOL_LEN, memmgt::cap(Cfg::B4Sym))) }
 }
 
@@ -1551,6 +1554,7 @@ pub fn stdvec_make(reg: *mut Region, cap: u32) -> SlHndl {
     // cap, len, (pointer * cap)
     unsafe {
         let size = vec_size(NUM_32_LEN * 2, PTR_LEN, cap);
+        crate::report_site!("standard vector alloc");
         let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::VecStd)));
 
         write_field_unchecked::<u32>(out.clone(), 0, cap);
@@ -1581,6 +1585,7 @@ pub fn string_make(reg: *mut Region, cap: u32) -> SlHndl {
     // cap, len, (byte * cap)
     unsafe {
         let size = vec_size(NUM_32_LEN * 2, NUM_8_LEN, cap);
+        crate::report_site!("string vector alloc");
         let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::VecStr)));
 
         write_field_unchecked::<u32>(out.clone(), 0, cap);
@@ -1613,6 +1618,7 @@ pub fn hashvec_make(reg: *mut Region, size: u32) -> SlHndl {
     // size, fill, (pointer * size)
     unsafe {
         let top_size = vec_size(NUM_32_LEN * 2, PTR_LEN, size);
+        crate::report_site!("hash vector alloc");
         let out =
             SlHndl::from_raw_unchecked(memmgt::alloc(reg, top_size, memmgt::cap(Cfg::VecHash)));
 
@@ -1633,6 +1639,7 @@ pub fn proc_lambda_make(reg: *mut Region, argct: u16) -> SlHndl {
     // argct, pointer, (symbol * argct)
     unsafe {
         let size = proc_lambda_size(argct);
+        crate::report_site!("lambda proc alloc");
         let out =
             SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::ProcLambda)));
 
@@ -1648,6 +1655,7 @@ pub fn proc_native_make(reg: *mut Region, argct: u16) -> SlHndl {
     // argct, pointer
     unsafe {
         let size = proc_native_size();
+        crate::report_site!("native proc alloc");
         let out =
             SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::ProcNative)));
 
@@ -2108,6 +2116,7 @@ pub fn core_copy_val(reg: *mut Region, mut src: SlHndl) -> SlHndl {
     let (siz, cfg) = (src.size(), src.cfg_byte());
 
     unsafe {
+        crate::report_site!("core copy alloc");
         // NOTE: another example; dst created here so can't be a redir
         let mut dst = SlHndl::from_raw_unchecked(memmgt::alloc(
             reg,
@@ -2200,6 +2209,7 @@ pub fn env_create(reg: *mut Region, parent: Option<SlHndl>) -> SlHndl {
 }
 
 pub fn env_layer_make(reg: *mut Region) -> SlHndl {
+    crate::report_site!("env layer alloc");
     // TODO: prevent the technically unnecessary `mut`
     let mut layer = unsafe {
         SlHndl::from_raw_unchecked(memmgt::alloc(
@@ -2413,6 +2423,7 @@ fn env_get_binding_loc(mut env: SlHndl, sym_id: u32) -> Option<*mut *mut SlHead>
 
 #[inline(always)]
 fn u8_make(reg: *mut Region) -> SlHndl {
+    crate::report_site!("u8 alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_8_LEN, memmgt::cap(Cfg::B1U8))) }
 }
 
@@ -2461,6 +2472,7 @@ fn _u16_get(mut loc: SlHndl) -> u16 {
 
 #[inline(always)]
 pub fn u32_make(reg: *mut Region) -> SlHndl {
+    crate::report_site!("u32 alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4U32))) }
 }
 
@@ -2607,6 +2619,7 @@ fn _i32_get(mut loc: SlHndl) -> i32 {
 
 #[inline(always)]
 pub fn i64_make(reg: *mut Region) -> SlHndl {
+    crate::report_site!("i64 alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8I64))) }
 }
 
@@ -2657,6 +2670,7 @@ fn _i128_get(mut loc: SlHndl) -> i128 {
 
 #[inline(always)]
 pub fn f32_make(reg: *mut Region) -> SlHndl {
+    crate::report_site!("f32 alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4F32))) }
 }
 
@@ -2681,6 +2695,7 @@ pub fn f32_get(mut loc: SlHndl) -> f32 {
 
 #[inline(always)]
 pub fn f64_make(reg: *mut Region) -> SlHndl {
+    crate::report_site!("f64 alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8F64))) }
 }
 
@@ -2705,11 +2720,13 @@ pub fn f64_get(mut loc: SlHndl) -> f64 {
 
 #[inline(always)]
 pub fn bool_make(reg: *mut Region) -> SlHndl {
+    crate::report_site!("bool alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0BoolF))) }
 }
 
 #[inline(always)]
 pub fn bool_init(reg: *mut Region, val: bool) -> SlHndl {
+    crate::report_site!("bool alloc");
     unsafe {
         SlHndl::from_raw_unchecked(memmgt::alloc(
             reg,

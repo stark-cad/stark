@@ -54,6 +54,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: usize) {
     engine.lines[0].append(&mut test_glyph);
 
     let eng_hdl = unsafe {
+        crate::report_site!("render loop engine handle alloc");
         SlHndl::from_raw_unchecked(sail::memmgt::alloc(
             vessel_ref.region(),
             8,

@@ -60,6 +60,7 @@ pub fn manager_loop(frame: Frame, vsl_ptr: usize) {
 
     frame.set_cursor(winit::window::CursorIcon::Crosshair);
 
+    crate::report_site!("manager loop frame handle alloc");
     let frm_hdl = unsafe {
         SlHndl::from_raw_unchecked(sail::memmgt::alloc(
             vessel_ref.region(),

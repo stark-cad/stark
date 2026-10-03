@@ -27,6 +27,15 @@ use std::ptr;
 
 use std::intrinsics::AtomicOrdering as AO;
 
+#[macro_export]
+macro_rules! report_site {
+    ( $msg:literal ) => {
+        if cfg!(feature = "memdbg") {
+            println!("Report from {} at {}: {}", std::file!(), std::line!(), $msg);
+        }
+    };
+}
+
 static mut OBJECT_ID_CTR: u32 = 0;
 
 static mut ZONE_ID_CTR: u32 = 0;

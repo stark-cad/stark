@@ -416,6 +416,8 @@ sail_fn! {
 
         unsafe {
             let size = vec_size(8, temp_get_size(typ), len);
+
+            crate::report_site!("arr-vec-make alloc");
             let mut out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::VecArr)));
 
             write_field_unchecked::<u32>(out.clone(), 0, typ);
