@@ -227,7 +227,7 @@ mod atom_ops {
     #[inline(always)]
     pub unsafe fn load(from: *const Qptr) -> Qptr {
         unsafe {
-            Qptr(std::intrinsics::atomic_load::<_, { AO::Acquire }>(
+            Qptr(std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(
                 from as *const usize,
             ))
         }

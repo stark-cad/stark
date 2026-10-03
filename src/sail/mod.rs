@@ -64,11 +64,15 @@ impl Styc {
     }
 
     fn get_id(&mut self) -> u32 {
-        unsafe { std::intrinsics::atomic_xadd::<_, _, { AO::AcqRel }>(&mut self.inner, 1) }
+        unsafe {
+            std::intrinsics::atomic_xadd::<_, _, { AO::AcqRel }>(&raw mut (*self.raw()).inner, 1)
+        }
     }
 
     unsafe fn set_next_id(&mut self, id: u32) {
-        unsafe { std::intrinsics::atomic_store::<_, { AO::Release }>(&mut self.inner, id) }
+        unsafe {
+            std::intrinsics::atomic_store::<_, { AO::Release }, false>(&mut (*self.raw()).inner, id)
+        }
     }
 }
 

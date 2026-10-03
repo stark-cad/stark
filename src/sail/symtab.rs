@@ -183,10 +183,10 @@ impl SymbolTable {
 
         assert_eq!(zcur, self.btop);
 
-        // acquire resize lock
         unsafe {
-            while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
-                &mut self.rsz_lock,
+            // acquire resize lock
+            while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
+                &raw mut (*self.raw()).rsz_lock,
                 false as u8,
                 true as u8,
             )
@@ -203,14 +203,20 @@ impl SymbolTable {
 
         self.map_len = new_len;
 
-        // release resize lock
-        unsafe {
-            std::intrinsics::atomic_store::<_, { AO::Release }>(&mut self.rsz_lock, false as u8)
+            // release resize lock
+            std::intrinsics::atomic_store::<_, { AO::Release }, false>(
+                &raw mut (*self.raw()).rsz_lock,
+                false as u8,
+            )
         };
 
         // release insertion lock
         unsafe {
-            std::intrinsics::atomic_store::<_, { AO::Release }>(&mut self.ins_lock, false as u8)
+            // std::intrinsics::atomic_store::<_, { AO::Release }, false>(
+            //     &raw mut (*self.raw()).ins_lock,
+            //     false as u8,
+            // );
+
         };
     }
 
@@ -249,10 +255,13 @@ impl SymbolTable {
 
         // release lock
         unsafe {
-            std::intrinsics::atomic_store::<_, { AO::Release }>(&mut self.ins_lock, false as u8)
-        };
+            assert!((*self.raw()).next_id <= !(0b11_u32.reverse_bits()));
 
-        assert!(self.next_id < (1u32 << 31));
+            std::intrinsics::atomic_store::<_, { AO::Release }, false>(
+                &raw mut (*self.raw()).ins_lock,
+                false as u8,
+            );
+        };
 
         out_id
     }
@@ -264,7 +273,13 @@ impl SymbolTable {
         // entry or zero found
 
         // NOTE: watch for issues caused by resize during lookup
-        while unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }>(&self.rsz_lock) } != 0 {}
+        // TODO: actually take the resize lock here?
+        while unsafe {
+            std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(
+                &raw const (*self.raw()).rsz_lock,
+            )
+        } != 0
+        {}
 
         let tgt = Self::hash_name(name) % self.map_len;
 
@@ -279,7 +294,12 @@ impl SymbolTable {
         // entry or zero found
 
         // NOTE: would like to keep as an immutable reference though
-        while unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }>(&self.rsz_lock) } != 0 {}
+        while unsafe {
+            std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(
+                &raw const (*self.raw()).rsz_lock,
+            )
+        } != 0
+        {}
 
         let tgt = Self::hash_id(id) % self.map_len;
 

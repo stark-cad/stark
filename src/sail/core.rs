@@ -813,7 +813,7 @@ pub fn inc_refc(loc: *mut SlHead) -> bool {
     assert!(!nil_p(loc));
 
     let rc_pos = unsafe { (loc as *mut u8).add(1) };
-    let mut cur = unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }>(rc_pos) };
+    let mut cur = unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(rc_pos) };
 
     loop {
         match cur {
@@ -863,7 +863,7 @@ pub fn dec_refc(loc: *mut SlHead) -> bool {
     let mut out;
 
     let rc_pos = unsafe { (loc as *mut u8).add(1) };
-    let mut cur = unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }>(rc_pos) };
+    let mut cur = unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(rc_pos) };
 
     loop {
         match cur {
@@ -1284,7 +1284,9 @@ pub fn read_ptr_atomic(mut loc: SlHndl, offset: u32) -> Option<SlHndl> {
         // TODO: is it atomic with below? is an atomic ver needed?
         let slot = get_ptr_ptr_unchecked(loc.clone(), offset);
         write_correct_pos_slot(slot);
-        SlHndl::from_raw(std::intrinsics::atomic_load::<_, { AO::Acquire }>(slot))
+        SlHndl::from_raw(std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(
+            slot,
+        ))
     };
     drop(loc);
     out
@@ -1339,7 +1341,7 @@ pub unsafe fn write_field_atomic_unchecked<T: SizedBase + Copy>(
     unsafe {
         debug_assert!(offset + mem::size_of::<T>() as u32 <= loc.size());
         let dst = loc.value_ptr().add(offset as usize) as *mut T;
-        std::intrinsics::atomic_store::<_, { AO::Release }>(dst, src);
+        std::intrinsics::atomic_store::<_, { AO::Release }, false>(dst, src);
     }
 }
 
@@ -1391,7 +1393,9 @@ pub unsafe fn read_field_unchecked<T: SizedBase>(loc: SlHndl, offset: u32) -> T 
 #[inline(always)]
 pub unsafe fn read_field_atomic_unchecked<T: SizedBase + Copy>(loc: SlHndl, offset: u32) -> T {
     unsafe {
-        std::intrinsics::atomic_load::<_, { AO::Acquire }>(get_field_ptr_unchecked(loc, offset))
+        std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(get_field_ptr_unchecked(
+            loc, offset,
+        ))
     }
 }
 
@@ -1445,8 +1449,6 @@ pub fn clr_next_list_elt(env: SlHndl, mut loc: SlHndl) {
     }
 }
 
-// TODO: set_next_list_elt_atomic (?)
-
 /// Set the pointer to a list element's next element only if the
 /// current pointer is equivalent to `old`
 #[inline(always)]
@@ -1466,7 +1468,8 @@ pub fn set_next_list_elt_cmpxcg(
         };
         let nwp = new.get_raw();
 
-        let mut cfg = std::intrinsics::atomic_load::<_, { AO::Acquire }>(lcp as *mut u16) as u64;
+        let mut cfg =
+            std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(lcp as *mut u16) as u64;
 
         let p = loop {
             let (cur, p) = std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(

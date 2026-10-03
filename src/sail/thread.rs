@@ -296,7 +296,7 @@ impl Weft {
 
             // TODO: remove all traces of the vessel in the structure
 
-            std::intrinsics::atomic_store::<_, { AO::Release }>(lock, false as u8);
+            std::intrinsics::atomic_store::<_, { AO::Release }, false>(lock, false as u8);
 
             drop(removed);
         }
