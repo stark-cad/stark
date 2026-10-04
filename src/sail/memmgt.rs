@@ -260,7 +260,7 @@ impl RegionTable {
 
 impl Drop for RegionTable {
     fn drop(&mut self) {
-        println!("dropping region table");
+        eprintln!("DROP Region Table");
         let mut last_reg = ptr::null_mut();
         unsafe {
             for i in 0..self.len {
@@ -1982,20 +1982,51 @@ impl Region {
 
 impl Drop for Region {
     fn drop(&mut self) {
+        eprintln!("DROP memmgt Region");
+
+        // (self as *const Self).depict_tree();
+
         unsafe {
-            let z_layout = alloc::Layout::from_size_align_unchecked(
-                self.zone_size as usize + MEM_ZONE_HEAD_SIZE,
-                1,
-            );
-            let mut next = self.head;
+            // free the zones
+            let (cur_top_zone, zone_order) = (Self::get_list_head(self), Self::zn_ord(self));
+            let size = 1usize << zone_order as usize;
+
+            let z_layout = alloc::Layout::from_size_align_unchecked(size, size);
+            let mut next = cur_top_zone;
             loop {
-                let cur = next;
-                // TODO: fix unaligned zones
-                next = (*cur).next;
                 if next == ptr::null_mut() {
                     break;
                 }
+
+                let cur = next;
+                next = (*cur).next;
+
                 alloc::dealloc(cur as *mut u8, z_layout);
+            }
+
+            // free the residence tree
+            let mut nodes = vec![];
+            let fst_node = (self as *const Self).get_tree_root();
+            if !fst_node.is_none() {
+                nodes.push(fst_node.unwrap());
+            }
+
+            let mut idx = 0;
+            while nodes.len() > idx {
+                let (_, _, s0zp, s1zp) = (*nodes[idx].as_ptr()).pfx.breakout();
+                if !s0zp {
+                    let s0n = (*nodes[idx].as_ptr()).slots[0].node;
+                    nodes.push(s0n)
+                }
+                if !s1zp {
+                    let s1n = (*nodes[idx].as_ptr()).slots[1].node;
+                    nodes.push(s1n)
+                }
+                idx += 1;
+            }
+            for nn in nodes {
+                let p = nn.as_ptr();
+                alloc::dealloc(p as _, alloc::Layout::for_value_raw(p));
             }
         }
     }
@@ -2027,6 +2058,10 @@ pub struct Zone {
     /// Zone allocation lock
     lock: u8,
 }
+
+// impl Drop for Zone {
+//     fn drop(&mut self) {}
+// }
 
 #[repr(C)]
 struct FreeBlock {

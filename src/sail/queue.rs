@@ -55,10 +55,12 @@ pub struct Inlet {
 
 impl Drop for Inlet {
     fn drop(&mut self) {
-        while self.receive().1.is_some() {}
+        eprintln!("DROP queue Inlet");
+
+        while (self as *mut Self).receive().1.is_some() {}
 
         unsafe {
-            let _dummy_node = Box::from_raw(self.head.get().0);
+            drop(Box::from_raw(self.head.get().0));
         }
     }
 }

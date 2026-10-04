@@ -287,7 +287,6 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: Hdl<Vessel>
         }
     }
 
-    // TODO: dispose of Sail stack, region, etc
     drop(engine);
 }
 

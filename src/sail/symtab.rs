@@ -83,12 +83,14 @@ struct _SymEntry {
 
 impl Drop for SymbolTable {
     fn drop(&mut self) {
+        eprintln!("DROP Symbol Table");
         unsafe {
-            let layout = alloc::Layout::from_size_align_unchecked(self.map_len * 8, 8);
+            let tab_layout = alloc::Layout::from_size_align_unchecked(self.map_len * USA, USA);
+            let zone_layout = alloc::Layout::from_size_align_unchecked(self.espace, USA);
 
-            alloc::dealloc(self.id_to_nm as *mut u8, layout);
-            alloc::dealloc(self.nm_to_id as *mut u8, layout);
-            alloc::dealloc(self.entries, layout);
+            alloc::dealloc(self.id_to_nm as *mut u8, tab_layout);
+            alloc::dealloc(self.nm_to_id as *mut u8, tab_layout);
+            alloc::dealloc(self.entries, zone_layout);
         }
     }
 }

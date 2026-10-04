@@ -1348,12 +1348,11 @@ impl EvalStack {
 
 impl Drop for EvalStack {
     fn drop(&mut self) {
+        eprintln!("DROP Eval Stack");
+
         unsafe {
-            let layout = alloc::Layout::from_size_align_unchecked(
-                (self.stack_max as usize - self.stack_start as usize) + 8,
-                8,
-            );
-            alloc::dealloc(self.stack_start as *mut u8, layout);
+            let layout = alloc::Layout::from_size_align_unchecked(self.stack_ext as usize, 8);
+            alloc::dealloc(self.start as *mut u8, layout);
         }
     }
 }

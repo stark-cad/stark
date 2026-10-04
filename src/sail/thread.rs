@@ -184,21 +184,28 @@ pub struct Weft {
     temp_debug: Option<debug::SrcInfo>,
 }
 
-impl Drop for Weft {
 /// Weft-specific owning Vessel entry
 struct ExecItems {
     vessel: ptr::NonNull<Vessel>,
     node: ptr::NonNull<WorkTgtNode>,
+    /// if true, not to be assigned
     ignore: bool,
 }
-    fn drop(&mut self) {
-        for mut s in self.sentinels.drain(..) {
-            unsafe { Pin::into_inner_unchecked(s.as_mut()) }.vsl = usize::MAX as *mut Vessel;
-        }
 
-        for t in self.warp.iter() {
-            t.thread().unpark()
+impl Drop for ExecItems {
+    fn drop(&mut self) {
+        // the weft owns these structures
+        unsafe {
+            drop(Box::from_raw(self.vessel.as_ptr()));
+
+            alloc::dealloc(
+                self.node.as_ptr() as _,
+                alloc::Layout::for_value_raw(self.node.as_ptr()),
+            );
         }
+    }
+}
+
 /// Weft-specific owning OS thread entry
 struct ThreadItems {
     os_thr_hdl: Option<std::thread::JoinHandle<()>>,
@@ -206,9 +213,33 @@ struct ThreadItems {
     semaphore: ptr::NonNull<WorkSemaphore>,
 }
 
+impl Drop for ThreadItems {
+    fn drop(&mut self) {
+        // the weft owns these structures
+        unsafe {
+            std::intrinsics::atomic_store::<_, { AO::Release }, false>(
+                &raw mut (*self.semaphore.as_ptr()).halt as *mut u8,
+                true as u8,
+            );
 
-        for t in self.warp.drain(..) {
-            t.join().unwrap()
+            let thr_hdl = self.os_thr_hdl.take().unwrap();
+            thr_hdl.thread().unpark();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            // if thr_hdl.is_finished() {
+            thr_hdl.join().unwrap();
+            // } else {
+            // eprintln!("abandoning thread {:?}", thr_hdl.thread().name());
+            // }
+
+            alloc::dealloc(
+                self.sentinel.as_ptr() as _,
+                alloc::Layout::for_value_raw(self.sentinel.as_ptr()),
+            );
+
+            alloc::dealloc(
+                self.semaphore.as_ptr() as _,
+                alloc::Layout::for_value_raw(self.semaphore.as_ptr()),
+            );
         }
     }
 }
@@ -292,21 +323,32 @@ impl<T> RawVec<T> {
     }
 }
 
-    fn add_vessel(&mut self, vsl: Pin<Box<Vessel>>) -> *mut Vessel {
-        unsafe {
-            let lock: *mut u8 = &mut self.append_lock;
-            while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
-                lock,
-                false as u8,
-                true as u8,
-            )
-            .1
-            {
-                std::hint::spin_loop();
-            }
+impl<T> Drop for RawVec<T> {
+    fn drop(&mut self) {
+        let layout = std::alloc::Layout::from_size_align(
+            self.cap * std::mem::size_of::<T>(),
+            std::mem::align_of::<T>(),
+        )
+        .unwrap();
 
-            let vsl_raw_pos =
-                (Pin::into_inner_unchecked(Pin::as_ref(&vsl)) as *const Vessel).cast_mut();
+        // Drop contents
+        for i in 0..self.len {
+            unsafe { std::ptr::drop_in_place(self.ptr.add(i)) }
+        }
+
+        unsafe {
+            std::alloc::dealloc(self.ptr as *mut _, layout);
+        }
+    }
+}
+
+impl Drop for Weft {
+    // invoked when WeftHandle gets dropped
+    fn drop(&mut self) {
+        eprintln!("DROP Weft");
+        // anything special to do here?
+    }
+}
 
 /// Methods to be received by *mut Self exclusively
 impl Weft {
@@ -645,6 +687,13 @@ pub struct Vessel {
 }
 
 unsafe impl Send for Vessel {}
+
+impl Drop for Vessel {
+    fn drop(&mut self) {
+        eprintln!("DROP Vessel");
+        Hdl::new(self).clr_res();
+    }
+}
 
 // TODO: implement vessels and queues to cleanly support governor,
 // codex managers, record keepers, and render thread
