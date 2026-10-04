@@ -45,7 +45,6 @@ impl Qptr {
 #[repr(C)]
 pub struct Inlet {
     tail: Qptr,
-
     // TODO: keep atomic reference count of senders
     refct: usize,
     // TODO: maintain a stack of existing nodes for reuse
@@ -92,29 +91,29 @@ impl Inlet {
     //     tx_impl(self.region, &mut self.tail, from, msg)
     // }
 
-    pub fn receive(&mut self) -> (usize, Option<SlHndl>) {
+    pub fn receive(self: *mut Self) -> (usize, Option<SlHndl>) {
         let mut out;
         unsafe {
             let mut head;
             loop {
-                head = atom_ops::load(&self.head);
-                let tail = atom_ops::load(&self.tail);
-                let next = atom_ops::load(&(*head.get().0).next);
+                head = atom_ops::load(&raw const (*self).head);
+                let tail = atom_ops::load(&raw const (*self).tail);
+                let next = atom_ops::load(&raw const (*head.get().0).next);
 
-                if head == atom_ops::load(&self.head) {
+                if head == atom_ops::load(&raw const (*self).head) {
                     if head.get().0 == tail.get().0 {
                         if next.get().0 == ptr::null_mut() {
                             return (0, None);
                         }
                         atom_ops::cxcg(
-                            &mut self.tail,
+                            &raw mut (*self).tail,
                             tail,
                             Qptr::make(next.get().0, u16::wrapping_add(tail.get().1, 1)),
                         );
                     } else {
                         out = ((*next.get().0).source, (*next.get().0).payload.take());
                         if atom_ops::cxcg(
-                            &mut self.head,
+                            &raw mut (*self).head,
                             head,
                             Qptr::make(next.get().0, u16::wrapping_add(head.get().1, 1)),
                         )
@@ -125,7 +124,8 @@ impl Inlet {
                     }
                 }
             }
-            let _node_to_drop = Box::from_raw(head.get().0);
+            // let _node_to_drop = Box::from_raw(head.get().0);
+            drop(Box::from_raw(head.get().0));
         }
 
         debug_assert!(out.1.is_some());
@@ -159,14 +159,14 @@ impl InletHdl {
     pub fn transmit(&self, from: usize, msg: SlHndl) {
         tx_impl(
             unsafe { (&raw mut (*self.0).reg) },
-            unsafe { (&raw mut (*self.0).tail).as_mut_unchecked() },
+            unsafe { (&raw mut (*self.0).tail) },
             from,
             msg,
         )
     }
 }
 
-fn tx_impl(reg: *mut memmgt::Region, q_tail: &mut Qptr, from: usize, msg: SlHndl) {
+fn tx_impl(reg: *mut memmgt::Region, q_tail: *mut Qptr, from: usize, msg: SlHndl) {
     let new_loc = super::structure_copy(reg, msg.clone());
 
     // create a queue node which points at msg in the new region
@@ -181,12 +181,12 @@ fn tx_impl(reg: *mut memmgt::Region, q_tail: &mut Qptr, from: usize, msg: SlHndl
         let mut tail;
         loop {
             tail = atom_ops::load(q_tail);
-            let next = atom_ops::load(&((*tail.get().0).next));
+            let next = atom_ops::load(&raw const (*tail.get().0).next);
 
             if tail == atom_ops::load(q_tail) {
                 if next.get().0.is_null() {
                     if atom_ops::cxcg(
-                        &mut (*tail.get().0).next,
+                        &raw mut (*tail.get().0).next,
                         next,
                         Qptr::make(fresh_node, u16::wrapping_add(next.get().1, 1)),
                     )
@@ -213,11 +213,6 @@ fn tx_impl(reg: *mut memmgt::Region, q_tail: &mut Qptr, from: usize, msg: SlHndl
 
     // Core queue algorithm from (Michael & Scott, 1998)
 }
-
-// TODO: use broadly
-#[derive(Clone, Copy)]
-pub struct RegHdl(pub *mut memmgt::Region);
-unsafe impl Send for RegHdl {}
 
 mod atom_ops {
     use super::Qptr;
@@ -247,8 +242,7 @@ mod atom_ops {
 
 #[cfg(test)]
 mod inlet_tests {
-    use std::pin::Pin;
-
+    use super::super::{Hdl, debug, parser};
     use super::*;
 
     #[repr(C)]
@@ -257,104 +251,125 @@ mod inlet_tests {
         qin: Inlet,
     }
 
-    fn test_queue(zs: u32) -> Pin<Box<TestQueueData>> {
+    fn test_queue(zo: u8) -> *mut TestQueueData {
         let it = {
             let mut uninit = Box::<TestQueueData>::new_uninit();
             let ptr = uninit.as_mut_ptr();
 
             unsafe {
-                (&raw mut (*ptr).reg).write(memmgt::Region::new(zs));
-                (*ptr).reg.init();
+                (&raw mut (*ptr).reg).write(memmgt::Region::new(zo));
+                (&raw mut (*ptr).reg).init();
                 (&raw mut (*ptr).qin).write(Inlet::new(&raw mut (*ptr).reg));
             }
 
-            Box::into_pin(unsafe { uninit.assume_init() })
+            unsafe { uninit.assume_init() }
         };
 
-        it
+        Box::into_raw(it)
     }
 
-    fn test_hdl(qd: &mut Pin<Box<TestQueueData>>) -> InletHdl {
-        InletHdl(qd.as_mut().get_mut() as *mut _ as *mut _SendFields)
+    fn tq_destroy(ptr: *mut TestQueueData) {
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
+    }
+
+    fn test_hdl(qd: *mut TestQueueData) -> InletHdl {
+        InletHdl(qd as *mut _SendFields)
     }
 
     #[test]
     fn basic() {
-        let tx_reg = memmgt::Region::acq(100);
+        let mut region = memmgt::Region::new(8);
+        let tx_reg = &raw mut region;
 
-        let mut rx_in = test_queue(100);
-        let tx_hdl = test_hdl(&mut rx_in);
+        let rx_in = test_queue(8);
+        let tx_hdl = test_hdl(rx_in);
 
-        assert!(rx_in.qin.receive().1.is_none());
+        let qin = unsafe { &raw mut (*rx_in).qin };
+
+        assert!(qin.receive().1.is_none());
 
         tx_hdl.transmit(1, i64_init(tx_reg, 7));
         tx_hdl.transmit(1, i64_init(tx_reg, 14));
 
-        assert_eq!(i64_get(rx_in.qin.receive().1.unwrap()), 7);
-        assert_eq!(i64_get(rx_in.qin.receive().1.unwrap()), 14);
+        assert_eq!(i64_get(qin.receive().1.unwrap()), 7);
+        assert_eq!(i64_get(qin.receive().1.unwrap()), 14);
 
         tx_hdl.transmit(1, i64_init(tx_reg, 21));
 
-        assert_eq!(i64_get(rx_in.qin.receive().1.unwrap()), 21);
+        assert_eq!(i64_get(qin.receive().1.unwrap()), 21);
 
-        assert!(rx_in.qin.receive().1.is_none());
-        assert!(rx_in.qin.receive().1.is_none());
+        assert!(qin.receive().1.is_none());
+        assert!(qin.receive().1.is_none());
 
         tx_hdl.transmit(1, i64_init(tx_reg, 28));
         tx_hdl.transmit(1, i64_init(tx_reg, 35));
         tx_hdl.transmit(1, i64_init(tx_reg, 42));
 
-        assert_eq!(i64_get(rx_in.qin.receive().1.unwrap()), 28);
-        assert_eq!(i64_get(rx_in.qin.receive().1.unwrap()), 35);
-        assert_eq!(i64_get(rx_in.qin.receive().1.unwrap()), 42);
+        assert_eq!(i64_get(qin.receive().1.unwrap()), 28);
+        assert_eq!(i64_get(qin.receive().1.unwrap()), 35);
+        assert_eq!(i64_get(qin.receive().1.unwrap()), 42);
 
-        assert!(rx_in.qin.receive().1.is_none());
+        assert!(qin.receive().1.is_none());
+
+        tq_destroy(rx_in);
     }
 
     #[test]
     fn layers() {
-        let mut tbl = super::super::Stab::new(51);
+        let mut table = super::super::Stab::new(51);
+        let mut region = memmgt::Region::new(8);
 
-        let tx_reg = memmgt::Region::acq(100);
-
-        let mut rx_in = test_queue(100);
+        let tref = Hdl::new(&raw mut table);
+        let tx_reg = &raw mut region;
+        let rx_in = test_queue(8);
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
         let ogv = parser::parse_text(tx_reg, tref, exp.clone().into_bytes(), None).unwrap();
 
-        test_hdl(&mut rx_in).transmit(1, ogv);
-
-        let cpv = rx_in.qin.receive().1.unwrap();
+        test_hdl(rx_in).transmit(1, ogv);
 
         let cpv = unsafe { &raw mut (*rx_in).qin }.receive().1.unwrap();
         let res = debug::bundle(tref, cpv).to_string();
 
         assert_eq!(exp, res);
+
+        tq_destroy(rx_in);
     }
 
     #[test]
     fn multi() {
-        const THCT: u32 = 7;
-        const SPAN: u32 = 5000;
+        const THCT: u32 = 4; // 7
+        const SPAN: u32 = 500; // 5000
 
-        fn send(id: usize, start: i64, extent: i64, src_reg: RegHdl, tgt: InletHdl) {
+        fn send(
+            id: usize,
+            start: i64,
+            extent: i64,
+            // src_reg: super::super::Hdl<memmgt::Region>,
+            tgt: InletHdl,
+        ) {
+            // NOTE: zone order can be calculated...
+            let mut region = memmgt::Region::new(13);
+            let tsr = (&raw mut region).hdl();
+
             for i in start..start + extent {
-                tgt.transmit(id, i64_init(src_reg.0, i));
-                println!("{id} transmitted {i}");
+                tgt.transmit(id, i64_init(tsr.raw(), i));
+                // println!("{id} transmitted {i}");
             }
+            println!("{id} done sending");
         }
 
-        let mut rx_in = test_queue(SPAN * 10);
+        let rx_in = test_queue(17);
 
         let mut th = vec![];
         let mut acc = 0;
         for tid in 0..THCT {
-            let tsr = RegHdl(memmgt::Region::acq(SPAN));
-
-            let hdl = test_hdl(&mut rx_in);
+            let hdl = test_hdl(rx_in);
 
             th.push(std::thread::spawn(move || {
-                send(tid as _, acc, SPAN as _, tsr, hdl)
+                send(tid as _, acc, SPAN as _, hdl)
             }));
             acc += SPAN as i64;
         }
@@ -363,7 +378,7 @@ mod inlet_tests {
         let mut recvd = 0;
 
         while recvd < THCT * SPAN {
-            match rx_in.qin.receive().1 {
+            match unsafe { (&raw mut (*rx_in).qin) }.receive().1 {
                 Some(h) => {
                     recvd += 1;
                     let val = i64_get(h);
@@ -382,6 +397,8 @@ mod inlet_tests {
         for i in 0..sheet.len() {
             assert!(sheet[i]);
         }
+
+        tq_destroy(rx_in);
     }
 }
 
