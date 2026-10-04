@@ -476,77 +476,15 @@ sail_fn! {
     "print" [arg] {
         let tbl = unsafe { ((*_vsl).context()).symtab() };
 
-        println!("{}", super::context(tbl, arg.clone()).to_string());
+        println!("{}", debug::bundle(tbl, arg.clone()).to_string());
         return arg;
     }
 
     "dbg" [arg] {
         let tbl = unsafe { ((*_vsl).context()).symtab() };
 
-        println!("{}", super::context(tbl, arg.clone()).to_string());
+        println!("{}", debug::bundle(tbl, arg.clone()).to_string());
         return arg;
-    }
-
-    // TODO: move traversal code elsewhere (into env module?)
-    "printenv" [] {
-        let mut acc: Vec<Vec<(u32, SlHndl)>> = vec![];
-        let mut scope_ptr: Option<SlHndl> = Some(_env.clone());
-        let mut layer_ptr: Option<SlHndl>;
-
-        'scope: loop {
-            if scope_ptr.is_none() {
-                break 'scope;
-            }
-
-            acc.push(vec![]);
-
-            let scope = scope_ptr.as_mut().unwrap();
-            coretypck!(scope ; EnvScope);
-
-            // currently only works for basic symbols
-            layer_ptr = unsafe { read_ptr_unchecked(scope_ptr.clone().unwrap(), 0) };
-
-            'layer: loop {
-                if layer_ptr.is_none() {
-                    break 'layer;
-                }
-
-                let layer = layer_ptr.as_mut().unwrap();
-                coretypck!(layer ; EnvLayer);
-
-                'entry: for o in 0..41 {
-                    let byte_offset = o * (SYMBOL_LEN + PTR_LEN);
-
-                    let slot_id: u32 =
-                        unsafe { read_field_unchecked(layer_ptr.clone().unwrap(), byte_offset) };
-
-                    if slot_id >> 30 == SymbolMode::Keyword as u32 {
-                        continue 'entry;
-                    }
-
-                    acc.last_mut().unwrap().push((slot_id, unsafe {
-                        read_ptr_unchecked(layer_ptr.clone().unwrap(), byte_offset + SYMBOL_LEN)
-                            .unwrap() }));
-                }
-
-                layer_ptr = get_next_list_elt(layer_ptr.unwrap());
-            }
-
-            scope_ptr = get_next_list_elt(scope_ptr.unwrap());
-        }
-
-        let tbl = unsafe { ((*_vsl).context()).symtab() };
-
-        for (i, scope) in acc.iter().enumerate() {
-            println!("\nSCOPE {i}\n--------");
-            for entry in scope {
-                let symn = unsafe { std::str::from_utf8_unchecked(tbl.lookup_by_id(entry.0).unwrap()) };
-                let spac = if symn.len() > 6 { "\t" } else { "\t\t"};
-                let valt = super::context(tbl, entry.1.clone()).to_string();
-                println!("{symn} {spac}| {valt}");
-            }
-        }
-        return env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
     }
 
     "parse" [strin] {

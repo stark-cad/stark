@@ -327,7 +327,8 @@ mod inlet_tests {
 
         let cpv = rx_in.qin.receive().1.unwrap();
 
-        let res = super::super::context(&tbl, cpv).to_string();
+        let cpv = unsafe { &raw mut (*rx_in).qin }.receive().1.unwrap();
+        let res = debug::bundle(tref, cpv).to_string();
 
         assert_eq!(exp, res);
     }

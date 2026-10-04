@@ -41,8 +41,9 @@ use std::intrinsics::AtomicOrdering as AO;
 
 #[macro_use]
 pub mod core;
-pub use self::core::*;
+pub use core::*;
 
+pub mod debug;
 pub mod eval;
 pub mod memmgt;
 pub mod parser;
@@ -50,8 +51,10 @@ pub mod queue;
 pub mod stdenv;
 pub mod symtab;
 pub mod thread;
+pub mod util;
 
 pub use symtab::SymbolTable as Stab;
+pub use util::Hdl;
 
 // monotonic counter for type layout identifiers
 pub struct Styc {
@@ -580,170 +583,6 @@ pub fn structure_copy(tgt: *mut memmgt::Region, root: SlHndl) -> *mut SlHead {
     new_ptrs[0]
 }
 
-/// Bundles together an object and associated symbol table for display
-pub struct SlContextVal<'a> {
-    tbl: &'a Stab,
-    obj: SlHndl,
-}
-
-/// Create a SlContextVal for display
-pub fn context(tbl: &Stab, obj: SlHndl) -> SlContextVal<'_> {
-    SlContextVal { tbl, obj }
-}
-
-// TODO: this is a mess; write Sail native display functions
-// TODO: just push characters into a byte vector (string) for display
-impl fmt::Display for SlContextVal<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut value = self.obj.clone();
-
-        use CoreType::*;
-        match value.core_type() {
-            Some(t) => match t {
-                Nil => write!(f, "()"),
-                Bool => write!(f, "{}", if bool_get(value) { "#T" } else { "#F" }),
-                I64 => write!(f, "{}", i64_get(value)),
-                U32 => write!(f, "{}", u32_get(value)),
-                F64 => write!(f, "{}", f64_get(value)),
-                F32 => write!(f, "{}", f32_get(value)),
-                ErrCode => write!(f, "<err: {:?}>", errcode_get(value)),
-                Symbol => {
-                    let full_id = sym_get_id(value);
-                    match mode_of_sym(full_id) {
-                        SymbolMode::Basic => {
-                            write!(
-                                f,
-                                "{}",
-                                match self.tbl.lookup_by_id(full_id) {
-                                    Some(n) => unsafe { std::str::from_utf8_unchecked(n) },
-                                    None => "<none>",
-                                }
-                            )
-                        }
-                        SymbolMode::Keyword => {
-                            write!(
-                                f,
-                                ":{}",
-                                match self.tbl.lookup_by_id(demodes_sym(full_id)) {
-                                    Some(n) => unsafe { std::str::from_utf8_unchecked(n) },
-                                    None => "<none>",
-                                }
-                            )
-                        }
-                        SymbolMode::Module => {
-                            write!(
-                                f,
-                                "@{}",
-                                match self.tbl.lookup_by_id(demodes_sym(full_id)) {
-                                    Some(n) => unsafe { std::str::from_utf8_unchecked(n) },
-                                    None => "<none>",
-                                }
-                            )
-                        }
-                        SymbolMode::Type => {
-                            write!(
-                                f,
-                                "${}",
-                                match self.tbl.lookup_by_id(demodes_sym(full_id)) {
-                                    Some(n) => unsafe { std::str::from_utf8_unchecked(n) },
-                                    None => "<none>",
-                                }
-                            )
-                        }
-                    }
-                }
-                Ref => {
-                    write!(f, "(").unwrap();
-                    let mut elt = ref_get(value);
-                    while let Some(next) = elt {
-                        write!(f, "{}", context(self.tbl, next.clone()).to_string()).unwrap();
-                        elt = get_next_list_elt(next);
-                        if elt.is_some() {
-                            write!(f, " ").unwrap();
-                        }
-                    }
-                    write!(f, ")")
-                }
-                VecStd => {
-                    write!(f, "[").unwrap();
-                    let len = stdvec_get_len(value.clone());
-                    for idx in 0..len {
-                        write!(
-                            f,
-                            "{}",
-                            context(self.tbl, stdvec_idx(value.clone(), idx)).to_string()
-                        )
-                        .unwrap();
-                        if idx < len - 1 {
-                            write!(f, " ").unwrap();
-                        }
-                    }
-                    write!(f, "]")
-                }
-                VecStr => write!(f, "\"{}\"", string_get(value)),
-                VecHash => {
-                    // TODO: function to access all map pairs somehow
-                    write!(f, "{{").unwrap();
-                    // visit every position and traverse each entry list as below
-                    let size = hashvec_get_size(value.clone());
-                    let mut fst = true;
-                    for idx in 0..size {
-                        let mut pos = read_ptr(value.clone(), 4 + 4 + (PTR_LEN * idx));
-                        while let Some(next) = pos {
-                            if !fst {
-                                write!(f, " ").unwrap()
-                                // TODO: keep commas / parse them in maps?
-                                // write!(f, ", ").unwrap()
-                            }
-                            write!(
-                                f,
-                                "{} ",
-                                context(self.tbl, ref_get(next.clone()).unwrap()).to_string()
-                            )
-                            .unwrap();
-                            write!(
-                                f,
-                                "{}",
-                                context(
-                                    self.tbl,
-                                    get_next_list_elt(ref_get(next.clone()).unwrap()).unwrap()
-                                )
-                                .to_string()
-                            )
-                            .unwrap();
-                            pos = get_next_list_elt(next);
-                            fst = false;
-                        }
-                    }
-                    write!(f, "}}")
-                }
-                VecArr => {
-                    let typ = arrvec_get_typ(value.clone());
-                    if typ == T_F32.0 {
-                        write!(f, "#[").unwrap();
-                        let len = arrvec_get_len(value.clone());
-                        for idx in 0..len {
-                            let val = read_field::<f32>(value.clone(), 8 + (4 * idx));
-                            write!(f, "{}", val).unwrap();
-                            if idx < len - 1 {
-                                write!(f, " ").unwrap();
-                            }
-                        }
-                        write!(f, "]")
-                    } else {
-                        write!(f, "<$arr-vec>")
-                    }
-                }
-                ProcLambda | ProcNative => write!(f, "<$proc>"),
-                _ => write!(f, "<@core/$other>"),
-            },
-            None => {
-                println!("{:?}", value.cfg_spec());
-                write!(f, "<$other>")
-            }
-        }
-    }
-}
 
 /// Accepts an input stream and runs a read - evaluate - print loop perpetually
 pub fn repl(stream_in: std::io::Stdin) {
@@ -820,7 +659,8 @@ pub fn interpret(code: &str, dolist: bool) -> Result<String, SlErrCode> {
 
     let result = thread_ref.result().unwrap();
 
-    Ok(context(weft.ctx_mut().symtab(), result).to_string())
+    let out = debug::bundle(weft.raw.context().symtab(), result).to_string();
+    Ok(out)
 }
 
 pub fn global_ctx_setup(tact: &mut thread::Tact) {
@@ -890,21 +730,22 @@ mod tests {
     #[test]
     fn parses() {
         let (reg, mut tbl) = (memmgt::Region::acq(1000), Stab::new(51));
+        let tref = Hdl::new(&raw mut table);
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
-        let val = parser::parse(reg, &mut tbl, &exp, false).unwrap();
-        let out = context(&tbl, val).to_string();
+        let val = parser::parse_text(reg, tref, exp.clone().into_bytes(), None).unwrap();
+        let out = debug::bundle(tref, val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("(() (()) ((((() ())))))");
-        let val = parser::parse(reg, &mut tbl, &exp, false).unwrap();
-        let out = context(&tbl, val).to_string();
+        let val = parser::parse_text(reg, tref, exp.clone().into_bytes(), None).unwrap();
+        let out = debug::bundle(tref, val).to_string();
         assert_eq!(exp, out);
 
         let exp = String::from("((1 2 3 4) ;Comment\n5)");
         let gnd = String::from("((1 2 3 4) 5)");
-        let val = parser::parse(reg, &mut tbl, &exp, false).unwrap();
-        let out = context(&tbl, val).to_string();
+        let val = parser::parse_text(reg, tref, exp.into_bytes(), None).unwrap();
+        let out = debug::bundle(tref, val).to_string();
         assert_eq!(gnd, out);
     }
 
