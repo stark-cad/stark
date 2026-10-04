@@ -435,7 +435,7 @@ impl EvalStack {
     /// executing this function repeatedly will evaluate any Sail
     /// expression. It handles all defined opcodes and adds more
     /// frames to the stack as necessary, and never uses recursion.
-    pub fn iter_once(&mut self, vessel_ref: *mut thread::Vessel) -> bool {
+    pub fn iter_once(self: *mut Self, vessel_ref: Hdl<thread::Vessel>) -> bool {
         // ***********************************
         // * Sail stack-based evaluation logic
         // ***********************************
@@ -444,7 +444,7 @@ impl EvalStack {
             return false;
         }
 
-        let reg = unsafe { (*vessel_ref).region() };
+        let reg = vessel_ref.region();
 
         let (ret, env, opc) = self.frame_top();
 
@@ -853,50 +853,30 @@ mod tests {
 
     #[test]
     fn rec_check() {
-        let t_tact = thread::Tact::create(251);
-        let mut t_weft = thread::Weft::create(t_tact);
+        let (_weft, vsl) = super::super::single_thread_setup();
 
-        super::super::global_ctx_setup(t_weft.ctx_mut());
+        vsl.load_from_text(&"(+ (- 8 6) 2)", false).unwrap();
 
-        let t_vsl = thread::Vessel::summon(&mut t_weft, 10000, 20000, None);
+        while vsl.advance() {}
 
-        super::super::vessel_env_setup(t_vsl);
+        assert!(vsl.inert_p());
 
-        let thread_ref = unsafe { &mut *t_vsl };
-
-        thread_ref.load_from_text(&"(+ (- 8 6) 2)", false).unwrap();
-
-        while thread_ref.advance() {}
-
-        assert!(thread_ref.inert_p());
-
-        let result = thread_ref.result().unwrap();
+        let result = vsl.result().unwrap();
 
         assert_eq!(i64_get(result), 4);
     }
 
     #[test]
     fn do_check() {
-        let t_tact = thread::Tact::create(251);
-        let mut t_weft = thread::Weft::create(t_tact);
+        let (_weft, vsl) = super::super::single_thread_setup();
 
-        super::super::global_ctx_setup(t_weft.ctx_mut());
+        vsl.load_from_text(&"(do (+ 1 2) (- 4 3))", false).unwrap();
 
-        let t_vsl = thread::Vessel::summon(&mut t_weft, 10000, 20000, None);
+        while vsl.advance() {}
 
-        super::super::vessel_env_setup(t_vsl);
+        assert!(vsl.inert_p());
 
-        let vessel_ref = unsafe { &mut *t_vsl };
-
-        vessel_ref
-            .load_from_text(&"(do (+ 1 2) (- 4 3))", false)
-            .unwrap();
-
-        while vessel_ref.advance() {}
-
-        assert!(vessel_ref.inert_p());
-
-        let result = vessel_ref.result().unwrap();
+        let result = vsl.result().unwrap();
 
         println!("{}", result.clone().refc_byte());
 

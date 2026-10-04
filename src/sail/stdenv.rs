@@ -18,7 +18,7 @@
 
 // <>
 
-use super::{core::*, memmgt};
+use super::{core::*, debug, memmgt, parser};
 
 // TODO: type checks and variable length arglists for native functions
 // TODO: generate these functions somehow else if macros won't cut it
@@ -37,20 +37,20 @@ macro_rules! sail_fn {
     ) => {
         // compiler incorrectly warns on required 'mut $args'
         #[allow(unused_mut)]
-        pub const $array: &[(&str, crate::sail::core::NativeFn, u16)] =
-            &[$(($name, |
-                _vsl: *mut crate::sail::thread::Vessel,
-                _env: crate::sail::SlHndl,
-                _args: &[crate::sail::SlHndl],
-              | {
-                    let $vsl = _vsl;
-                    let $env = _env;
+        pub const $array: &[(&str, crate::sail::NativeFn, u16)] =
+        &[$(($name, |
+            _vsl: crate::sail::util::Hdl<crate::sail::thread::Vessel>,
+            _env: crate::sail::SlHndl,
+            _args: &[crate::sail::SlHndl],
+            | {
+                let $vsl = _vsl;
+                let $env = _env;
 
-                    $(
-                        let mut $args = _args[${index()}].clone();
-                    )*
+                $(
+                let mut $args = _args[${index()}].clone();
+                )*
 
-                        $body
+                $body
               },
               ${count($args)})),+];
     };
@@ -60,22 +60,22 @@ macro_rules! sail_fn {
     ) => {
         // compiler incorrectly warns on required 'mut $args'
         #[allow(unused_mut)]
-        let $array: &[(&str, crate::sail::core::NativeFn, u16)] =
-            &[$(($name, |
-                _vsl: *mut crate::sail::thread::Vessel,
-                _env: crate::sail::SlHndl,
-                _args: &[crate::sail::SlHndl],
-                | {
-                    let $vsl = _vsl;
-                    let $env = _env;
+        let $array: &[(&str, crate::sail::NativeFn, u16)] =
+        &[$(($name, |
+            _vsl: crate::sail::util::Hdl<crate::sail::thread::Vessel>,
+            _env: crate::sail::SlHndl,
+            _args: &[crate::sail::SlHndl],
+            | {
+                let $vsl = _vsl;
+                let $env = _env;
 
-                    $(
-                        let mut $args = _args[${index()}].clone();
-                    )*
+                $(
+                let mut $args = _args[${index()}].clone();
+                )*
 
-                        $body
-                },
-                ${count($args)})),+];
+                $body
+            },
+            ${count($args)})),+];
     };
 }
 
@@ -91,7 +91,7 @@ sail_fn! {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
@@ -114,7 +114,7 @@ sail_fn! {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
@@ -137,7 +137,7 @@ sail_fn! {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
@@ -160,7 +160,7 @@ sail_fn! {
         let typ = fst.core_type();
         assert_eq!(typ, snd.core_type());
 
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
 
         match typ.expect("type invalid") {
             CoreType::I64 => {
@@ -180,7 +180,7 @@ sail_fn! {
     }
 
     "mod" [fst, snd] {
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
 
         let out = i64_make(reg);
         let result = i64_get(fst) % i64_get(snd);
@@ -189,7 +189,8 @@ sail_fn! {
     }
 
     "neg" [val] {
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
+
         match val.core_type().expect("type invalid") {
             CoreType::I64 => {
                 return i64_init(reg, -i64_get(val));
@@ -202,6 +203,7 @@ sail_fn! {
     }
 
     "=" [fst, snd] {
+        let reg = _vsl.region();
         let result = i64_get(fst) == i64_get(snd);
         if result {
             env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
@@ -212,6 +214,7 @@ sail_fn! {
     }
 
     ">=" [fst, snd] {
+        let reg = _vsl.region();
         let result = i64_get(fst) >= i64_get(snd);
         if result {
             env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
@@ -222,6 +225,7 @@ sail_fn! {
     }
 
     "<=" [fst, snd] {
+        let reg = _vsl.region();
         let result = i64_get(fst) <= i64_get(snd);
         if result {
             env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
@@ -232,6 +236,7 @@ sail_fn! {
     }
 
     "eq" [fst, snd] {
+        let reg = _vsl.region();
         let result = core_eq(fst, snd);
         if result {
             env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
@@ -253,7 +258,7 @@ sail_fn! {
         // return out;
     }
 
-    // TODO: and and or as macros or, more easily, special forms
+    // TODO: and and or as macros or, special forms for short-circuit
     "and" [lhs, rhs] {
         if lhs.truthy() && rhs.truthy() {
             env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
@@ -271,29 +276,39 @@ sail_fn! {
     }
 
     "own-tx-hdl" [] {
-        let reg = unsafe { (*_vsl).region() };
-
-        let tq = unsafe { (*_vsl).inlet_hdl() };
+        let reg = _vsl.region();
+        let tq = _vsl.inlet_hdl() ;
 
         super::send_hdl_init(reg, tq)
     }
 
-    "th-spawn" [fun] {
-        let reg = unsafe { (*_vsl).region() };
-        let new = unsafe { (*_vsl).spawn(None, None) };
+    "vsl-spawn" [fun, args] {
+        let reg = _vsl.region();
+        let mut new = _vsl.spawn(None, None) ;
 
-        let nr = unsafe { (*new).region() };
+        let nr = new.region();
+
+        let mbase = env_lookup_by_id(_vsl.top_env(), super::M_BASE.0) ;
+        env_ins_by_id(nr, new.top_env(), super::M_BASE.0, mbase.unwrap());
+
         let to_apply = unsafe {
             SlHndl::from_raw_unchecked(super::structure_copy(nr, fun))
         };
 
-        unsafe { (*new).load_proc_immed(to_apply) };
+        let mut av = vec![];
+        let mut next = ref_get(args);
+        while let Some(arg) = next {
+            av.push(unsafe { SlHndl::from_raw_unchecked(super::structure_copy(nr, arg.clone())) });
+            next = get_next_list_elt(arg);
+        }
 
-        if !unsafe { (*new).attempt_start() } {
+        new.load_proc_immed(to_apply, &av);
+
+        if !new.attempt_start()  {
             panic!()
         }
 
-        let nq = unsafe { (*new).inlet_hdl() };
+        let nq = new.inlet_hdl();
 
         let send_tgt = super::send_hdl_init(reg, nq);
         let new_hdl = super::vessel_ref_init(reg, new);
@@ -303,36 +318,29 @@ sail_fn! {
         new_hdl
     }
 
-    "th-join" [thref] {
-        let reg = unsafe { (*_vsl).region() };
-        super::vessel_ref_join(reg, thref)
+    "vsl-join" [vsref] {
+        let reg = _vsl.region();
+        super::vessel_ref_join(reg, vsref)
     }
 
-    "th-id" [thref] {
-        assert_eq!(thref.type_id(), super::T_THR_REF_ID.0);
+    "vsl-id" [vsref] {
+        let reg = _vsl.region();
 
-        let addrs: u64 = read_field(thref, 0);
-
-        let th_ref = unsafe {
-            (addrs as *mut super::thread::Vessel)
-                .as_mut()
-                .expect("null thread reference")
-        };
-
-        let reg = unsafe { (*_vsl).region() };
-
-        super::i64_init(reg, th_ref.id as _)
+        let vs_ref = super::vessel_ref_get(vsref);
+        super::i64_init(reg, vs_ref.id() as _)
     }
 
     "qtx" [sender, item] {
-        let id = unsafe { (*_vsl).id };
+        let reg = _vsl.region();
+        let id = _vsl.id();
+
         super::send_hdl_tx(sender, item, id);
         env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
     }
 
     "qrx" [] {
-        let reg = unsafe { (*_vsl).region() };
-        let msg = unsafe { (*_vsl).msg_recv() };
+        let reg = _vsl.region();
+        let msg = _vsl.msg_recv() ;
 
         match msg.1 {
             Some(r) => {
@@ -340,7 +348,10 @@ sail_fn! {
                 set_next_list_elt(_env, id.clone(), r);
                 id
             }
-            None => env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap(),
+            None => {
+                // env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap();
+                return bool_init(reg, false);
+            }
         }
     }
 
@@ -377,6 +388,7 @@ sail_fn! {
     }
 
     "rest" [loc] {
+        let reg = _vsl.region();
         let loc = if coretypp!(loc ; Ref) {
             ref_get(loc).expect("null ref!")
         } else { loc };
@@ -394,7 +406,7 @@ sail_fn! {
     }
 
     "as-f32" [val] {
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
         match val.core_type().expect("type invalid") {
             CoreType::F64 => return f32_init(reg, f64_get(val) as f32),
             CoreType::I64 => return f32_init(reg, i64_get(val) as f32),
@@ -412,7 +424,7 @@ sail_fn! {
         assert!(temp_base_sized_p(typ));
         // assert_eq!(typ, super::get_self_type(init));
 
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
 
         unsafe {
             let size = vec_size(8, temp_get_size(typ), len);
@@ -445,7 +457,7 @@ sail_fn! {
         let idx = i64_get(idx) as u32;
         assert!(idx < super::arrvec_get_len(target.clone()));
 
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
 
         return temp_init_from(reg, typ, unsafe {
             target.value_ptr().add(8 + (temp_get_size(typ) * idx) as usize)
@@ -474,14 +486,14 @@ sail_fn! {
     }
 
     "print" [arg] {
-        let tbl = unsafe { ((*_vsl).context()).symtab() };
+        let tbl = (_vsl.context()).symtab() ;
 
         println!("{}", debug::bundle(tbl, arg.clone()).to_string());
         return arg;
     }
 
     "dbg" [arg] {
-        let tbl = unsafe { ((*_vsl).context()).symtab() };
+        let tbl = (_vsl.context()).symtab() ;
 
         println!("{}", debug::bundle(tbl, arg.clone()).to_string());
         return arg;
@@ -491,8 +503,8 @@ sail_fn! {
         coretypck!(strin ; VecStr);
         let strsl = string_get(strin);
 
-        let reg = unsafe { (*_vsl).region() };
-        let tbl = unsafe { ((*_vsl).context()).symtab() };
+        let reg = _vsl.region();
+        let tbl =  (_vsl.context()).symtab() ;
 
         return match parser::parse_text(reg, tbl, Vec::from(strsl), None) {
             Ok(head) => head,
@@ -502,10 +514,10 @@ sail_fn! {
 
     "parse-prog" [strin] {
         coretypck!(strin ; VecStr);
-        let strsl = string_get(strin);
 
-        let reg = unsafe { (*_vsl).region() };
-        let tbl = unsafe { ((*_vsl).context()).symtab() };
+        let reg = _vsl.region();
+        let tbl = (_vsl.context()).symtab() ;
+        let dbd = _vsl.src_dbg_info() ;
 
         return match parser::parse_obj(reg, tbl, strin, dbd) {
             Ok(head) => head,
@@ -530,7 +542,7 @@ sail_fn! {
     "_itsp_mdbg_id" [obj] {
         let id = obj.memdbg_obj_id();
 
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
 
         let out = super::i64_init(reg, id as _);
 
@@ -538,12 +550,12 @@ sail_fn! {
     }
 
     "str-new" [] {
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
         super::string_make(reg, 0)
     }
 
     "vec-new" [] {
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
         super::stdvec_make(reg, 0)
     }
 
@@ -560,7 +572,7 @@ sail_fn! {
     }
 
     "vec-len" [target] {
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
         i64_init(reg, stdvec_get_len(target) as _)
     }
 
@@ -577,6 +589,7 @@ sail_fn! {
 
     "tmp-vec-match" [target, item] {
         coretypck!(target ; VecStd);
+        let reg = _vsl.region();
 
         for i in 0..super::stdvec_get_len(target.clone()) {
             let this = super::stdvec_idx(target.clone(), i);

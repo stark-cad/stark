@@ -33,7 +33,6 @@
 //!
 //! A custom Lisp dialect for writing STARK
 
-use std::fmt;
 use std::mem;
 use std::ptr;
 
@@ -66,18 +65,26 @@ impl Styc {
         Self { inner: 0 }
     }
 
-    fn get_id(&mut self) -> u32 {
+    fn get_id(self: Hdl<Self>) -> u32 {
         unsafe {
             std::intrinsics::atomic_xadd::<_, _, { AO::AcqRel }>(&raw mut (*self.raw()).inner, 1)
         }
     }
 
-    unsafe fn set_next_id(&mut self, id: u32) {
+    unsafe fn set_next_id(self: Hdl<Self>, id: u32) {
         unsafe {
             std::intrinsics::atomic_store::<_, { AO::Release }, false>(&mut (*self.raw()).inner, id)
         }
     }
 }
+
+/// Signature for Sail functions implemented in Rust
+///
+/// Arguments:
+/// - Structure for local thread
+/// - Current environment
+/// - Slice containing all Sail arguments
+pub type NativeFn = fn(Hdl<thread::Vessel>, SlHndl, &[SlHndl]) -> SlHndl;
 
 // the below, to make a type manifest for a sized value, takes the
 // region, the type ID counter, and information on all the fields;
@@ -86,7 +93,7 @@ impl Styc {
 // TODO: check whether type symbols are valid?
 fn make_val_type_mfst(
     reg: *mut memmgt::Region,
-    ctr: &mut Styc,
+    ctr: Hdl<Styc>,
     fields: Vec<(u32, u32, u32)>,
 ) -> SlHndl {
     // TODO: define and impose proper object size maximums
@@ -164,93 +171,28 @@ fn send_hdl_tx(mut loc: SlHndl, msg: SlHndl, from: usize) {
     unsafe { (loc.value_ptr() as *mut queue::InletHdl).as_mut_unchecked() }.transmit(from, msg)
 }
 
-fn vessel_ref_init(reg: *mut memmgt::Region, tgt: *mut thread::Vessel) -> SlHndl {
-    assert!(!tgt.is_null());
+fn vessel_ref_init(reg: *mut memmgt::Region, tgt: Hdl<thread::Vessel>) -> SlHndl {
     unsafe {
-        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 8, T_THR_REF_ID.0));
-        write_field_unchecked(out.clone(), 0, tgt as u64);
         crate::report_site!("vessel reference alloc");
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 8, T_VSL_REF_ID.0));
+        write_field_unchecked(out.clone(), 0, tgt.raw() as u64);
         out
     }
 }
 
-fn vessel_ref_join(reg: *mut memmgt::Region, mut loc: SlHndl) -> SlHndl {
-    assert_eq!(loc.type_id(), T_THR_REF_ID.0);
-
+fn vessel_ref_get(mut loc: SlHndl) -> Hdl<thread::Vessel> {
+    assert_eq!(loc.type_id(), T_VSL_REF_ID.0);
     let addrs: u64 = read_field(loc, 0);
+    Hdl::new(addrs as _)
+}
 
-    let th_ref = unsafe {
-        (addrs as *mut thread::Vessel)
-            .as_mut()
-            .expect("null thread reference")
-    };
+fn vessel_ref_join(reg: *mut memmgt::Region, loc: SlHndl) -> SlHndl {
+    let vs_ref = vessel_ref_get(loc);
 
     // TODO: real thread management without spinloops
-    while !th_ref.done_p() {}
+    while !vs_ref.done_p() {}
 
-    unsafe { SlHndl::from_raw_unchecked(structure_copy(reg, th_ref.result().unwrap())) }
-}
-
-/// Basic error codes for Sail faults
-#[derive(Debug)]
-#[repr(u16)]
-pub enum SlErrCode {
-    ErrorUnknown = 0,
-    ParseUnexpectedEnd,
-    ParseBadSpecial,
-    ParseInvalidChar,
-    ParseInvalidString,
-    ParseInvalidNum,
-    FileCouldNotRead,
-}
-
-impl TryFrom<u16> for SlErrCode {
-    type Error = ();
-
-    #[inline(always)]
-    fn try_from(v: u16) -> Result<Self, Self::Error> {
-        use SlErrCode::*;
-        match v {
-            x if x == ErrorUnknown as u16 => Ok(ErrorUnknown),
-            x if x == ParseUnexpectedEnd as u16 => Ok(ParseUnexpectedEnd),
-            x if x == ParseBadSpecial as u16 => Ok(ParseBadSpecial),
-            x if x == ParseInvalidChar as u16 => Ok(ParseInvalidChar),
-            x if x == ParseInvalidString as u16 => Ok(ParseInvalidString),
-            x if x == ParseInvalidNum as u16 => Ok(ParseInvalidNum),
-            x if x == FileCouldNotRead as u16 => Ok(FileCouldNotRead),
-            _ => Err(()),
-        }
-    }
-}
-
-#[inline(always)]
-fn errcode_make(reg: *mut memmgt::Region) -> SlHndl {
-    unsafe {
-        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 2, memmgt::cap(Cfg::B2Err)));
-        // write_field_unchecked::<u16>(ptr, 0, 0);
-        out
-    }
-}
-
-#[inline(always)]
-fn errcode_init(reg: *mut memmgt::Region, err: SlErrCode) -> SlHndl {
-    unsafe {
-        let out = errcode_make(reg);
-        write_field_unchecked::<u16>(out.clone(), 0, err as u16);
-        out
-    }
-}
-
-#[inline(always)]
-fn errcode_set(mut loc: SlHndl, err: SlErrCode) {
-    coretypck!(loc ; ErrCode);
-    write_field(loc, 0, err as u16);
-}
-
-#[inline(always)]
-fn errcode_get(mut loc: SlHndl) -> SlErrCode {
-    coretypck!(loc ; ErrCode);
-    SlErrCode::try_from(read_field::<u16>(loc, 0)).unwrap()
+    unsafe { SlHndl::from_raw_unchecked(structure_copy(reg, vs_ref.result().unwrap())) }
 }
 
 fn arrvec_make<T: SizedBase + Copy>(
@@ -371,7 +313,7 @@ incl_symbols! {
     T_ENG_HDL     "eng-hdl" Type;
     T_ENV         "env"     Type;
     T_ENV_LYR     "env-lyr" Type;
-    T_THR_REF     "thr-hdl" Type;
+    T_VSL_REF     "vsl-hdl" Type;
     SP_AND        "and"     Basic;
     SP_COND       "cond"    Basic;
     SP_DEF        "def"     Basic;
@@ -430,7 +372,7 @@ incl_types! {
     TID_COUNT:
     T_FRM_HDL_ID  T_FRM_HDL;
     T_ENG_HDL_ID  T_ENG_HDL;
-    T_THR_REF_ID  T_THR_REF
+    T_VSL_REF_ID  T_VSL_REF
 }
 
 pub fn structure_copy(tgt: *mut memmgt::Region, root: SlHndl) -> *mut SlHead {
@@ -586,17 +528,23 @@ pub fn structure_copy(tgt: *mut memmgt::Region, root: SlHndl) -> *mut SlHead {
 
 /// Accepts an input stream and runs a read - evaluate - print loop perpetually
 pub fn repl(stream_in: std::io::Stdin) {
+pub fn single_thread_setup() -> (thread::WeftOwner, Hdl<thread::Vessel>) {
     // TODO: consider stack-like environment per function
     // TODO: design module / namespace mechanisms
+    // TODO: implement module / namespace mechanisms
 
     let tact = thread::Tact::create(251);
     let mut weft = thread::Weft::create(tact);
 
     global_ctx_setup(weft.ctx_mut());
+    let mut weft = thread::Weft::create(tact, cfg!(feature = "memdbg"));
 
     let thr = thread::Vessel::summon(&mut weft, 10000, 100000, None);
+    // TODO: decide how to lay out the Weft interface
+    global_ctx_setup(weft.raw.context());
 
     vessel_env_setup(thr);
+    let vsl = thread::Vessel::summon(&mut weft, 10000, 17);
 
     // TODO: some kind of thread handle?
     let thread_ref = unsafe { &mut *thr };
@@ -635,35 +583,25 @@ pub fn run_file(filename: &str) -> Result<String, SlErrCode> {
         Ok(s) => s,
         Err(_) => return Err(SlErrCode::FileCouldNotRead),
     };
+    weft.raw.add_worker();
 
     interpret(&file, true)
+    (weft, vsl)
 }
 
 /// Interprets a Sail expression, returning the formatted result
-pub fn interpret(code: &str, dolist: bool) -> Result<String, SlErrCode> {
-    let mut ctx = thread::Tact::create(251);
-    global_ctx_setup(&mut ctx);
+pub fn interpret(code: &str, dolist: bool) -> Result<String, debug::SlErrCode> {
+    let (weft, vsl) = single_thread_setup();
 
-    let mut weft = thread::Weft::create(ctx);
-    let thr = thread::Vessel::summon(&mut weft, 10000, 100000, None);
-    vessel_env_setup(thr);
+    vsl.load_from_text(code, dolist)?;
+    while vsl.advance() {}
 
-    let thread_ref = unsafe { &mut *thr };
-
-    weft.assign_special(thread_ref.id);
-    weft.add_worker();
-
-    thread_ref.load_from_text(code, dolist)?;
-
-    while thread_ref.advance() {}
-
-    let result = thread_ref.result().unwrap();
-
+    let result = vsl.result().unwrap();
     let out = debug::bundle(weft.raw.context().symtab(), result).to_string();
     Ok(out)
 }
 
-pub fn global_ctx_setup(tact: &mut thread::Tact) {
+pub fn global_ctx_setup(tact: Hdl<thread::Tact>) {
     for (n, s) in SYM_ARRAY.into_iter().enumerate() {
         assert_eq!(tact.symtab().get_id(s.as_bytes()) as usize, n);
     }
@@ -671,28 +609,11 @@ pub fn global_ctx_setup(tact: &mut thread::Tact) {
     unsafe { tact.typctr().set_next_id(TID_COUNT as u32) };
 }
 
-pub fn vessel_env_setup(thr: *mut thread::Vessel) {
-    let vsl_ref = unsafe { thr.as_mut().unwrap() };
-
-    let reg = vsl_ref.region();
-    let env = vsl_ref.top_env();
-
-    // TODO: interning is temporary, will crash in lists
-
-    let true_intern = bool_init(reg, true);
-    env_scope_ins_by_id(reg, env.clone(), S_T_INTERN.0, true_intern);
-
-    let false_intern = bool_init(reg, false);
-    env_scope_ins_by_id(reg, env.clone(), S_F_INTERN.0, false_intern);
-
-    insert_native_procs(reg, vsl_ref.context().symtab(), env, stdenv::ENVFNS);
-}
-
 
 /// Insert a slice of native procedures into the symbol table and environment
 pub fn insert_native_procs(
     reg: *mut memmgt::Region,
-    tbl: &mut Stab,
+    tbl: Hdl<Stab>,
     env: SlHndl,
     fns: &[(&str, NativeFn, u16)],
 ) {
@@ -701,7 +622,7 @@ pub fn insert_native_procs(
 
         let proc_fn = proc_native_init(reg, entry.2, entry.1);
 
-        env_scope_ins_by_id(reg, env.clone(), proc_id, proc_fn);
+        env_ins_by_id(reg, env.clone(), proc_id, proc_fn);
     }
 }
 

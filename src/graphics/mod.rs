@@ -29,8 +29,8 @@
 
 // <>
 
-use crate::sail::{self, SlHndl};
 use crate::FrameHandles;
+use crate::sail::{self, Hdl, SlHndl, thread::Vessel};
 
 use ash::vk;
 
@@ -39,10 +39,7 @@ use std::mem::size_of;
 mod text;
 
 /// Sail interpreter loop for the render vessel (holds graphics state)
-pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: usize) {
-    let vsl_ptr = vsl_ptr as *mut sail::thread::Vessel;
-    let vessel_ref = unsafe { &mut *vsl_ptr };
-
+pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: Hdl<Vessel>) {
     let mut engine = Engine::new(frame, name);
 
     let mut test_glyph = text::load();
@@ -56,7 +53,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: usize) {
     let eng_hdl = unsafe {
         crate::report_site!("render loop engine handle alloc");
         SlHndl::from_raw_unchecked(sail::memmgt::alloc(
-            vessel_ref.region(),
+            vsl_ptr.region(),
             8,
             sail::T_ENG_HDL_ID.0,
         ))
@@ -64,12 +61,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: usize) {
 
     unsafe { sail::write_field_unchecked(eng_hdl.clone(), 0, (&mut engine as *mut _) as u64) };
 
-    sail::env_scope_ins_by_id(
-        vessel_ref.region(),
-        vessel_ref.top_env(),
-        sail::S_ENGINE.0,
-        eng_hdl,
-    );
+    vsl_ptr.bind_sym(sail::S_ENGINE.0, eng_hdl);
 
     crate::sail_fn! {
         let rndr_fns;
@@ -165,7 +157,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: usize) {
 
             // println!("HITTEST: win {win} x {wx} y {wy}");
 
-            let reg = unsafe { (*_vsl).region() };
+            let reg = _vsl.region() ;
             let out = sail::i64_init(reg, win);
 
             let coords = sail::arrvec_init(reg, sail::T_F32.0, 2, &[wx, wy]);
@@ -185,7 +177,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: usize) {
             let iid = engine.create_window();
             println!("new window with id {iid}");
 
-            let reg = unsafe { (*_vsl).region() };
+            let reg = _vsl.region() ;
             let out = sail::i64_init(reg, iid as _);
 
             out
@@ -267,22 +259,20 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: usize) {
     }
 
     sail::insert_native_procs(
-        vessel_ref.region(),
-        vessel_ref.context().symtab(),
-        vessel_ref.top_env(),
+        vsl_ptr.region(),
+        vsl_ptr.context().symtab(),
+        vsl_ptr.top_env(),
         rndr_fns,
     );
 
     engine.setup();
     engine.set_clear([1.0, 1.0, 1.0, 1.0]);
 
-    let prog_txt = &std::fs::read_to_string("scripts/rndr.sl").unwrap();
+    vsl_ptr.load_from_file("scripts/rndr.sl").unwrap();
 
-    vessel_ref.load_from_text(prog_txt, true).unwrap();
+    while vsl_ptr.advance() {}
 
-    while vessel_ref.advance() {}
-
-    vessel_ref.load_proc_by_sym(sail::S_RNDR.0);
+    vsl_ptr.load_proc_by_sym(sail::S_RNDR.0);
 
     loop {
         if engine.need_surface_cfg {
@@ -291,7 +281,7 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: usize) {
             engine.need_surface_cfg = false;
         }
 
-        if !vessel_ref.advance() {
+        if !vsl_ptr.advance() {
             println!("render thread ended");
             break;
         }

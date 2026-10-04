@@ -46,7 +46,7 @@ pub mod context;
 pub mod graphics;
 pub mod sail;
 
-use sail::SlHndl;
+use sail::{Hdl, SlHndl, thread::Vessel};
 
 /// Handles for a frame (to pass to rendering system)
 pub struct FrameHandles {
@@ -57,16 +57,13 @@ pub struct FrameHandles {
 unsafe impl Send for FrameHandles {}
 
 /// Sail interpreter loop for the manager vessel
-pub fn manager_loop(frame: Frame, vsl_ptr: usize) {
-    let vsl_ptr = vsl_ptr as *mut sail::thread::Vessel;
-    let vessel_ref = unsafe { &mut *vsl_ptr };
-
+pub fn manager_loop(frame: Frame, vsl_ptr: Hdl<Vessel>) {
     frame.set_cursor(winit::window::CursorIcon::Crosshair);
 
     crate::report_site!("manager loop frame handle alloc");
     let frm_hdl = unsafe {
         SlHndl::from_raw_unchecked(sail::memmgt::alloc(
-            vessel_ref.region(),
+            vsl_ptr.region(),
             8,
             sail::T_FRM_HDL_ID.0,
         ))
@@ -74,12 +71,7 @@ pub fn manager_loop(frame: Frame, vsl_ptr: usize) {
 
     unsafe { sail::write_field_unchecked(frm_hdl.clone(), 0, (&frame as *const _) as u64) };
 
-    sail::env_scope_ins_by_id(
-        vessel_ref.region(),
-        vessel_ref.top_env(),
-        sail::S_FRAME.0,
-        frm_hdl,
-    );
+    vsl_ptr.bind_sym(sail::S_FRAME.0, frm_hdl);
 
     // println!(
     //     "frm_hdl -\ntype id: {}\nsize: {}\nhas size field: {}",
@@ -131,21 +123,26 @@ pub fn manager_loop(frame: Frame, vsl_ptr: usize) {
     }
 
     sail::insert_native_procs(
-        vessel_ref.region(),
-        vessel_ref.context().symtab(),
-        vessel_ref.top_env(),
+        vsl_ptr.region(),
+        vsl_ptr.context().symtab(),
+        vsl_ptr.top_env(),
         mngr_fns,
     );
 
-    let prog_txt = &std::fs::read_to_string("scripts/main.sl").unwrap();
-    vessel_ref.load_from_text(prog_txt, true).unwrap();
+    // TODO: debug information not traced to a file here!!
 
-    while vessel_ref.advance() {}
+    // should we have a =load_from_file= procedure, or should we have
+    // a way to provide the Source of text to the parser instead of it
+    // being responsible for read-in?
 
-    vessel_ref.load_proc_by_sym(sail::S_MAIN.0);
+    vsl_ptr.load_from_file("scripts/main.sl").unwrap();
+
+    while vsl_ptr.advance() {}
+
+    vsl_ptr.load_proc_by_sym(sail::S_MAIN.0);
 
     loop {
-        if !vessel_ref.advance() {
+        if !vsl_ptr.advance() {
             println!("manager thread ended");
             break;
         }

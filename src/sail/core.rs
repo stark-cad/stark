@@ -26,8 +26,7 @@ use std::ptr;
 
 use std::intrinsics::AtomicOrdering as AO;
 
-use super::thread::Vessel;
-
+use super::NativeFn;
 use super::memmgt::{self, Region};
 
 /// Core type assertion
@@ -540,16 +539,6 @@ impl TryFrom<Cfg> for CoreType {
         }
     }
 }
-
-/// Signature for Sail functions implemented in Rust
-///
-/// Arguments:
-/// - Structure for local thread
-/// - Current environment
-/// - Slice containing all Sail arguments
-pub type NativeFn = fn(*mut Vessel, SlHndl, &[SlHndl]) -> SlHndl;
-
-// TODO: should the env be provided as part of the argument slice?
 
 /// Returns a null pointer
 #[inline(always)]

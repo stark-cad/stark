@@ -29,7 +29,9 @@
 
 // <>
 
-use stark::{context, graphics, manager_loop, sail, FrameHandles};
+#![feature(arbitrary_self_types)]
+
+use stark::{FrameHandles, context, graphics, manager_loop, sail};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -37,8 +39,8 @@ use std::env;
 use std::io;
 use std::thread;
 
-// TODO: Have a static base Sail environment so that native functions
-// may be added from anywhere?
+// TODO: have a static base Sail environment so that native functions
+// may be added from anywhere in the program?
 
 fn main() {
     const NAME: &'static str = "STARK";
@@ -83,94 +85,65 @@ fn main() {
     };
 
     let mut global_interact = sail::thread::Tact::create(251);
-    sail::global_ctx_setup(&mut global_interact);
+    sail::global_ctx_setup(sail::Hdl::new(&raw mut global_interact));
 
     // data structure that accounts for the global interaction state,
     // as well as all threads, using an array of pointers to vessels
-    let mut global_weft = sail::thread::Weft::create(global_interact);
+    // NOTE: global source debug data collection switch currently here
+    let mut global_weft = sail::thread::Weft::create(global_interact, true);
 
-    let main_vsl = sail::thread::Vessel::summon(&mut global_weft, 10000, 1 << 20, None);
-    sail::vessel_env_setup(main_vsl);
-    let main_vsl_ref = unsafe { &mut *main_vsl };
+    let main_vsl = sail::thread::Vessel::summon(&mut global_weft, 10000, 20);
+    let main_qin = main_vsl.inlet_hdl();
 
-    let main_qin = main_vsl_ref.inlet_hdl();
+    let rndr_vsl = main_vsl.spawn(None, None);
+    let rndr_qin = rndr_vsl.inlet_hdl();
 
-    let rndr_vsl = main_vsl_ref.spawn(None, None);
-    let rndr_vsl_ref = unsafe { &mut *rndr_vsl };
+    let base_mod = sail::env_make(main_vsl.region());
+    sail::insert_native_procs(
+        main_vsl.region(),
+        main_vsl.context().symtab(),
+        base_mod.clone(),
+        sail::stdenv::ENVFNS,
+    );
 
-    let rndr_qin = rndr_vsl_ref.inlet_hdl();
+    main_vsl.bind_sym(sail::M_BASE.0, base_mod.clone());
+    rndr_vsl.bind_sym(sail::M_BASE.0, base_mod);
 
-    global_weft.assign_special(main_vsl_ref.id);
-    global_weft.assign_special(rndr_vsl_ref.id);
+    // global_weft.assign_special(main_vsl.id);
+    // global_weft.assign_special(rndr_vsl.id);
 
     // TODO: match available parallelism or setting
-    global_weft.add_worker();
-    global_weft.add_worker();
+    global_weft.raw.add_worker();
+    global_weft.raw.add_worker();
 
-    let rdr_tgt_obj = sail::send_hdl_init(main_vsl_ref.region(), rndr_qin.clone());
-    sail::env_scope_ins_by_id(
-        main_vsl_ref.region(),
-        main_vsl_ref.top_env(),
-        sail::S_RDR_TGT.0,
-        rdr_tgt_obj,
-    );
+    let rdr_tgt_obj = sail::send_hdl_init(main_vsl.region(), rndr_qin.clone());
+    main_vsl.bind_sym(sail::S_RDR_TGT.0, rdr_tgt_obj);
 
-    let rdr_id_obj = sail::i64_init(main_vsl_ref.region(), rndr_vsl_ref.id as _);
-    sail::env_scope_ins_by_id(
-        main_vsl_ref.region(),
-        main_vsl_ref.top_env(),
-        sail::S_RDR_ID.0,
-        rdr_id_obj,
-    );
+    let rdr_id_obj = sail::i64_init(main_vsl.region(), rndr_vsl.id() as _);
+    main_vsl.bind_sym(sail::S_RDR_ID.0, rdr_id_obj);
 
-    let mgr_tgt_obj = sail::send_hdl_init(rndr_vsl_ref.region(), main_qin.clone());
-    sail::env_scope_ins_by_id(
-        rndr_vsl_ref.region(),
-        rndr_vsl_ref.top_env(),
-        sail::S_MGR_TGT.0,
-        mgr_tgt_obj,
-    );
+    let mgr_tgt_obj = sail::send_hdl_init(rndr_vsl.region(), main_qin.clone());
+    rndr_vsl.bind_sym(sail::S_MGR_TGT.0, mgr_tgt_obj);
 
-    let mgr_id_obj = sail::i64_init(rndr_vsl_ref.region(), main_vsl_ref.id as _);
-    sail::env_scope_ins_by_id(
-        rndr_vsl_ref.region(),
-        rndr_vsl_ref.top_env(),
-        sail::S_MGR_ID.0,
-        mgr_id_obj,
-    );
+    let mgr_id_obj = sail::i64_init(rndr_vsl.region(), main_vsl.id() as _);
+    rndr_vsl.bind_sym(sail::S_MGR_ID.0, mgr_id_obj);
 
-    let ctxt_region = sail::memmgt::Region::acq(1000);
+    let fr_dims = sail::arrvec_init::<u32>(main_vsl.region(), sail::T_U32.0, 2, &[0, 0]);
+    let cur_pos = sail::arrvec_init::<f32>(main_vsl.region(), sail::T_F32.0, 2, &[0.0, 0.0]);
 
-    let fr_dims = sail::arrvec_init::<u32>(main_vsl_ref.region(), sail::T_U32.0, 2, &[0, 0]);
-    let cur_pos = sail::arrvec_init::<f32>(main_vsl_ref.region(), sail::T_F32.0, 2, &[0.0, 0.0]);
-
-    sail::env_scope_ins_by_id(
-        main_vsl_ref.region(),
-        main_vsl_ref.top_env(),
-        sail::S_FR_DIMS.0,
-        fr_dims.clone(),
-    );
-    sail::env_scope_ins_by_id(
-        main_vsl_ref.region(),
-        main_vsl_ref.top_env(),
-        sail::S_CUR_POS.0,
-        cur_pos.clone(),
-    );
-
-    let ctxt_region = ctxt_region as usize;
-
-    let (main_vsl_adr, rndr_vsl_adr) = (main_vsl as usize, rndr_vsl as usize);
+    main_vsl.bind_sym(sail::S_FR_DIMS.0, fr_dims.clone());
+    main_vsl.bind_sym(sail::S_CUR_POS.0, cur_pos.clone());
 
     // This thread renders to the graphical frame: the output interface
     let render = thread::Builder::new()
         .name("render".to_string())
-        .spawn(move || graphics::render_loop(NAME, handles, rndr_vsl_adr))
+        .spawn(move || graphics::render_loop(NAME, handles, rndr_vsl))
         .unwrap();
 
     // This thread manages the program, treating the actual main thread as a source of user input
     let manager = thread::Builder::new()
         .name("manager".to_string())
-        .spawn(move || manager_loop(frame, main_vsl_adr))
+        .spawn(move || manager_loop(frame, main_vsl))
         .unwrap();
 
     // let (sl_main_qin, sl_rndr_qin) = (main_qin as usize, rndr_qin as usize);
