@@ -203,12 +203,15 @@ impl SlHndl {
     }
 
     #[inline(always)]
-    pub fn basic_sym_p(&mut self) -> bool {
+    /// True if a symbol which may be bound to any object
+    pub fn resolv_p(&mut self) -> bool {
         unsafe { self.correct_pos() };
 
         match self.core_type() {
-            Some(t) if t == CoreType::Symbol => {
-                mode_of_sym(sym_get_id(self.clone())) == SymbolMode::Basic
+            Some(CoreType::Symbol) => mode_of_sym(sym_get_id(self.clone())) == SymbolMode::Basic,
+            Some(CoreType::VecPath) => {
+                mode_of_sym(sympath_idx(self.clone(), sympath_get_len(self.clone()) - 1))
+                    == SymbolMode::Basic
             }
             _ => false,
         }
@@ -417,8 +420,9 @@ enum_and_tryfrom! {
         VecStd = 0b11000000,
         VecStr = 0b11000100,
         VecArr = 0b11001000,
-        VecAny = 0b11001100,
+        // VecAny = 0b11001100,
         VecHash = 0b11010000,
+        VecPath = 0b11010100,
         VecOther = 0b11011100,
         // TODO: typechecked variant with same type codes?
         ProcLambda = 0b11100000,
@@ -470,32 +474,71 @@ enum_and_tryfrom! {
 #[derive(Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CoreType {
+    /// Nonexistent; target of null pointer
     Nil,
+
+    /// No fields; bool state in Cfg byte
     Bool,
+
     U8,
+
     I8,
+
     U16,
+
     I16,
+
     U32,
+
     I32,
+
     U64,
+
     I64,
+
     U128,
+
     I128,
+
     F32,
+
     F64,
+
+    /// 4-byte code, 2 MSBs give sym type
     Symbol,
+
+    /// 8-byte pointer, ONLY 48 bits used
     Ref,
+
+    /// Pointer into a Vessel
     SendHdl,
+
     TyDsc,
+
     TyMfst,
+
+    /// Presently 2-byte code
     ErrCode,
+
+    /// Expandable vector of Ref
     VecStd,
+
+    /// Expandable vector of U8
     VecStr,
+
+    /// Set-length array of any sized type
     VecArr,
-    VecAny,
+
+    // VecAny,
+    /// TODO: hash table builtin mechanics
     VecHash,
+
+    /// Set-length array of symbols
+    VecPath,
+
     ProcLambda,
+
+    /// Rust function pointer
     ProcNative,
 
     // EnvScope,
@@ -530,8 +573,9 @@ impl TryFrom<Cfg> for CoreType {
             Cfg::VecStd => Ok(Self::VecStd),
             Cfg::VecStr => Ok(Self::VecStr),
             Cfg::VecArr => Ok(Self::VecArr),
-            Cfg::VecAny => Ok(Self::VecAny),
+            // Cfg::VecAny => Ok(Self::VecAny),
             Cfg::VecHash => Ok(Self::VecHash),
+            Cfg::VecPath => Ok(Self::VecPath),
             // Cfg::EnvScope => Ok(Self::EnvScope),
             Cfg::EnvLayer => Ok(Self::EnvLayer),
             Cfg::ProcLambda => Ok(Self::ProcLambda),
@@ -1609,6 +1653,34 @@ pub fn string_init(reg: *mut Region, val: &str) -> SlHndl {
     out
 }
 
+pub fn sympath_make(reg: *mut Region, len: u32) -> SlHndl {
+    let size = vec_size(NUM_32_LEN, NUM_32_LEN, len);
+    crate::report_site!("symbol path alloc");
+    unsafe {
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, size, memmgt::cap(Cfg::VecPath)));
+        write_field_unchecked::<u32>(out.clone(), 0, len);
+        out
+    }
+}
+
+pub fn sympath_init(reg: *mut Region, seq: &[SlSym]) -> SlHndl {
+    let len = seq.len();
+    let out = sympath_make(reg, len.try_into().unwrap());
+
+    for (i, s) in seq.iter().enumerate() {
+        unsafe { write_field_unchecked(out.clone(), NUM_32_LEN + SYMBOL_LEN * i as u32, *s) }
+    }
+
+    // the pointers aren't aligned
+    // unsafe {
+    //     let slot =
+    //         std::slice::from_raw_parts_mut(out.value_ptr().add(NUM_32_LEN as _) as *mut u32, len);
+    //     slot.copy_from_slice(seq);
+    // }
+
+    out
+}
+
 #[inline(always)]
 pub fn hashvec_make(reg: *mut Region, size: u32) -> SlHndl {
     // size, fill, (pointer * size)
@@ -1690,6 +1762,16 @@ pub fn sym_set_id(mut loc: SlHndl, id: SlSym) {
 pub fn sym_get_id(mut loc: SlHndl) -> SlSym {
     coretypck!(loc ; Symbol);
     read_field(loc, 0)
+}
+
+pub fn sympath_get_len(mut loc: SlHndl) -> u32 {
+    coretypck!(loc ; VecPath);
+    read_field(loc, 0)
+}
+
+pub fn sympath_idx(loc: SlHndl, idx: u32) -> SlSym {
+    assert!(idx < sympath_get_len(loc.clone()));
+    read_field(loc, NUM_32_LEN + (idx * SYMBOL_LEN))
 }
 
 #[inline(always)]

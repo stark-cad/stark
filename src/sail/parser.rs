@@ -370,71 +370,61 @@ fn read_map(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
     Ok(map)
 }
 
-/// Reads a basic symbol from the input stream and creates its Sail
-/// object
-fn read_symbol(
-    chars: &mut iter::Peekable<str::Bytes>,
-    acc: &mut Vec<u8>,
-    reg: *mut memmgt::Region,
-    tbl: &mut Stab,
-) -> Result<SlHndl, SlErrCode> {
+/// Reads any symbol or sympath from the input stream and creates the
+/// indicated Sail object
+fn read_sym(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
+    let mut stack: Vec<u32> = vec![];
+    let mut variety = SymbolMode::Basic;
+
     while {
-        let peek = chars.peek().unwrap_or(&b' ');
+        let peek = s.cursor.peek().unwrap_or(&b' ');
         match peek {
             b')' | b']' | b'}' => false,
             _ if peek.is_ascii_whitespace() => false,
             _ => true,
         }
     } {
-        let next = chars.next().unwrap();
+        // if character is '/', push id to stack, clear acc, reset
+        // variety, and accept sigil if next character
+        let next = s.cursor.next().unwrap();
         match next {
-            b'!' | b'*' | b'+' | b'-' | b'/' | b'<' | b'=' | b'>' | b'?' | b'_' => acc.push(next),
-            _ if next.is_ascii_alphanumeric() => acc.push(next),
-            _ => {
-                return Err(SlErrCode::ParseInvalidChar);
+            b'/' if s.acc.is_empty() => s.acc.push(next),
+            b'/' => {
+                stack.push(super::modeize_sym(s.tbl.get_id(s.acc.as_slice()), variety));
+                s.acc.clear();
+                variety = SymbolMode::Basic;
             }
-        }
-    }
-
-    let sym = sym_init(reg, tbl.get_id(acc.as_slice()));
-
-    Ok(sym)
-}
-
-/// Reads a specialized symbol from the input stream and creates its
-/// Sail object
-fn read_spec_sym(
-    chars: &mut iter::Peekable<str::Bytes>,
-    acc: &mut Vec<u8>,
-    reg: *mut memmgt::Region,
-    tbl: &mut Stab,
-    mode: SymbolMode,
-) -> Result<SlHndl, SlErrCode> {
-    while {
-        let peek = chars.peek().unwrap_or(&b' ');
-        match peek {
-            b')' | b']' | b'}' => false,
-            _ if peek.is_ascii_whitespace() => false,
-            _ => true,
-        }
-    } {
-        let next = chars.next().unwrap();
-        match next {
-            b'-' | b'_' => acc.push(next),
-            _ if next.is_ascii_alphanumeric() => acc.push(next),
-            _ => {
-                return Err(SlErrCode::ParseInvalidChar);
+            b':' if s.acc.is_empty() && variety == SymbolMode::Basic => {
+                variety = SymbolMode::Keyword
             }
+            b'@' if s.acc.is_empty() && variety == SymbolMode::Basic => {
+                variety = SymbolMode::Module
+            }
+            b'$' if s.acc.is_empty() && variety == SymbolMode::Basic => variety = SymbolMode::Type,
+            // sigils are not allowed within symbols
+            b':' | b'@' | b'$' => return Err(debug::SlErrCode::ParseInvalidChar),
+            // symbols cannot start with a digit
+            b'0'..=b'9' if s.acc.is_empty() => return Err(debug::SlErrCode::ParseInvalidChar),
+            b'*' | b'+' | b'-' | b'<' | b'=' | b'>' | b'?' => s.acc.push(next),
+            _ if next.is_ascii_alphanumeric() => s.acc.push(next),
+            _ => return Err(debug::SlErrCode::ParseInvalidChar),
         }
     }
 
-    if acc.is_empty() {
-        return Err(SlErrCode::ParseUnexpectedEnd);
+    // no empty symbols or trailing slashes permitted
+    if s.acc.is_empty() {
+        return Err(debug::SlErrCode::ParseUnexpectedEnd);
     }
 
-    let sym = sym_init(reg, super::modeize_sym(tbl.get_id(acc.as_slice()), mode));
+    stack.push(super::modeize_sym(s.tbl.get_id(s.acc.as_slice()), variety));
 
-    Ok(sym)
+    let out = if stack.len() == 1 {
+        sym_init(s.reg, stack[0])
+    } else {
+        sympath_init(s.reg, &stack)
+    };
+
+    Ok(out)
 }
 
 /// Reads a string from the input stream and creates its Sail object
