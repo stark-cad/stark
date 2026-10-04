@@ -1391,7 +1391,7 @@ mod free_tree_tests {
         let mut test_block = FreeBlock { prev: 0, next: 0 };
 
         unsafe {
-            let block_ptr = &mut test_block;
+            let block_ptr = &raw mut test_block;
 
             fblk_set_len(block_ptr, HEAD_LEN);
             fblk_set_prev_ofs(block_ptr, 101);
@@ -1409,8 +1409,8 @@ mod free_tree_tests {
     #[test]
     fn block_lengths() {
         unsafe {
-            let ptr =
-                alloc::alloc(alloc::Layout::from_size_align(13, 1).unwrap()) as *mut FreeBlock;
+            let layout = alloc::Layout::from_size_align(13, 1).unwrap();
+            let ptr = alloc::alloc_zeroed(layout) as *mut FreeBlock;
 
             fblk_set_prev_ofs(ptr, 222222);
             fblk_set_next_ofs(ptr, 888888);
@@ -1431,6 +1431,8 @@ mod free_tree_tests {
 
             assert_eq!(222222, fblk_get_prev_ofs(ptr));
             assert_eq!(888888, fblk_get_next_ofs(ptr));
+
+            alloc::dealloc(ptr as _, layout);
         }
     }
 
@@ -1439,20 +1441,21 @@ mod free_tree_tests {
         use super::super::Cfg;
 
         unsafe {
-            let region = Region::acq(1000);
+            let mut region = Region::new(10);
+            let reg = &raw mut region;
 
-            let zone = (*region).head;
-
-            let obj = alloc(region, 0, cap(Cfg::B0BoolT));
+            let obj = alloc(reg, 0, cap(Cfg::B0BoolT));
             let adrs = obj as usize;
             dealloc(obj);
 
+            let zone = reg.get_list_head();
+
             assert_eq!(0, (*zone).used);
 
-            let obj_1 = alloc(region, 256, cap(Cfg::VecAny));
-            let obj_2 = alloc(region, 16, cap(Cfg::B16U128));
-            let obj_3 = alloc(region, 0, cap(Cfg::B0BoolF));
-            let obj_4 = alloc(region, 42, cap(Cfg::VecStr));
+            let obj_1 = alloc(reg, 256, cap(Cfg::VecArr));
+            let obj_2 = alloc(reg, 16, cap(Cfg::B16U128));
+            let obj_3 = alloc(reg, 0, cap(Cfg::B0BoolF));
+            let obj_4 = alloc(reg, 42, cap(Cfg::VecStr));
 
             assert_eq!(adrs, obj_1 as _);
 
@@ -1483,7 +1486,142 @@ mod free_tree_tests {
 }
 
 
-// TODO: store zone location information?
+#[cfg(test)]
+mod zone_test {
+    use super::*;
+
+    #[test]
+    fn residence() {
+        const O: u8 = 8;
+
+        let (mut r1, mut r2) = (Region::new(O), Region::new(O));
+        let (r1p, r2p) = (&raw mut r1, &raw mut r2);
+        let (mut r1z, mut r2z) = (vec![], vec![]);
+
+        for _ in 0..3 {
+            r1z.push(r1p.add_zone());
+            r2z.push(r2p.add_zone());
+
+            println!();
+            r1p.depict_tree();
+            println!();
+            r2p.depict_tree();
+            println!();
+        }
+
+        // allocate objects within the zones, or just generate
+        // addresses
+        let (mut r1o, mut r2o) = (vec![], vec![]);
+
+        for i in 0..30 {
+            let offset: u8 = std::random::random(..);
+            let z = match i {
+                0..5 => r1z[0],
+                5..10 => r1z[1],
+                10..15 => r1z[2],
+                15..20 => r2z[0],
+                20..25 => r2z[1],
+                25..30 => r2z[2],
+                _ => unreachable!(),
+            };
+
+            if i < 15 { &mut r1o } else { &mut r2o }
+                .push((z as usize + offset as usize) as *mut SlHead)
+        }
+
+        // confirm that =resident_p= correctly detects whether
+        // addresses belong to each region
+        for o in r1o {
+            println!("r1: {:0x}", o as usize);
+
+            assert!(!r2p.resident_p(o as _).is_some());
+            assert!(r1p.resident_p(o as _).is_some());
+        }
+
+        for o in r2o {
+            println!("r2: {:0x}", o as usize);
+
+            assert!(!r1p.resident_p(o as _).is_some());
+            assert!(r2p.resident_p(o as _).is_some());
+        }
+    }
+
+    #[test]
+    fn melee() {
+        const O: u8 = 9;
+
+        // stress-test for hypothetical situation where tons of data
+        // is copied for queue send at once (or chance races)
+
+        let mut reg = Region::new(O);
+        let rp = &raw mut reg;
+
+        let zkeep = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
+
+        fn create(r: util::Hdl<Region>, a: std::sync::Arc<std::sync::Mutex<Vec<usize>>>, c: i32) {
+            let rp = r.raw();
+            let mut locz = vec![];
+            for _ in 0..c {
+                locz.push(rp.add_zone() as usize);
+            }
+
+            // safely write zone info out to parent thread
+            a.lock().unwrap().append(&mut locz);
+        }
+
+        // bunch of threads creating new Zones at the same time
+        let mut thrs = vec![];
+        for _ in 0..10 {
+            let rhdl = rp.hdl();
+            let vhdl = zkeep.clone();
+            thrs.push(std::thread::spawn(move || create(rhdl, vhdl, 5)))
+        }
+
+        for t in thrs.drain(..) {
+            t.join().unwrap();
+        }
+
+        let zones = std::sync::Arc::into_inner(zkeep)
+            .unwrap()
+            .into_inner()
+            .unwrap();
+
+        println!("{} zones created", zones.len());
+
+        // check that every zone we added is in the linked list
+        for p in &zones {
+            let mut cz = rp.get_list_head();
+            loop {
+                if cz as usize == *p {
+                    break;
+                }
+
+                let next = unsafe { (*cz).next };
+                if next.is_null() {
+                    panic!("zone {p:0x} NOT in list");
+                }
+
+                cz = next;
+            }
+        }
+
+        rp.depict_tree();
+
+        // check that =residence_p= recognizes objects from every
+        // single zone
+        for p in zones {
+            for _ in 0..3 {
+                let ofs: u8 = std::random::random(..);
+                let offset = (ofs as usize) << 1;
+
+                let o = (p + offset) as *mut SlHead;
+
+                assert!(rp.resident_p(o as _).is_some());
+            }
+        }
+    }
+}
+
 // minimum zone size 2^8; maximum zone size 2^31; only powers of 2
 // permitted, only 5 bits needed to specify.
 

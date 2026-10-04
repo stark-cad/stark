@@ -1099,7 +1099,8 @@ mod refc_tests {
     #[test]
     fn up_down() {
         unsafe {
-            let reg = memmgt::Region::acq(100);
+            let mut region = memmgt::Region::new(8);
+            let reg = &raw mut region;
             let item = memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0BoolF));
 
             let adrs = item as usize;
@@ -1130,9 +1131,10 @@ mod refc_tests {
     #[test]
     fn stack_refs() {
         unsafe {
-            let reg = memmgt::Region::acq(100);
+            let mut region = memmgt::Region::new(10);
+            let reg = &raw mut region;
 
-            let dme = env_create(reg, None);
+            let dme = env_make(reg);
 
             let hdl_a_1 = u64_make(reg);
             let ptr_a = hdl_a_1.get_raw();
@@ -1867,12 +1869,14 @@ mod redir_test {
 
     #[test]
     fn chain_follow() {
-        let region = memmgt::Region::acq(1000);
-        let gt = bool_init(region, true);
+        let mut region = memmgt::Region::new(10);
+        let reg = &raw mut region;
 
-        let r1 = redir_gen(region, gt.clone());
-        let r2 = redir_gen(region, r1.clone());
-        let r3 = redir_gen(region, r2.clone());
+        let gt = bool_init(reg, true);
+
+        let r1 = redir_gen(reg, gt.clone());
+        let r2 = redir_gen(reg, r1.clone());
+        let r3 = redir_gen(reg, r2.clone());
 
         assert_eq!(true_obj(gt.clone()).raw, gt.clone().raw);
         assert_eq!(true_obj(r1).raw, gt.clone().raw);
@@ -1882,10 +1886,12 @@ mod redir_test {
 
     #[test]
     fn ow_norm() {
-        let region = memmgt::Region::acq(1000);
-        let gt = bool_init(region, true);
+        let mut region = memmgt::Region::new(10);
+        let reg = &raw mut region;
 
-        let re = redir_gen(region, gt.clone());
+        let gt = bool_init(reg, true);
+
+        let re = redir_gen(reg, gt.clone());
 
         let mut slot: *mut SlHead = re.raw;
         inc_refc(slot);
@@ -1899,13 +1905,15 @@ mod redir_test {
 
     #[test]
     fn ow_next() {
-        let region = memmgt::Region::acq(1000);
-        let gt = bool_init(region, true);
+        let mut region = memmgt::Region::new(10);
+        let reg = &raw mut region;
 
-        let r1 = redir_gen(region, gt.clone());
-        let r2 = redir_gen(region, r1.clone());
+        let gt = bool_init(reg, true);
 
-        let fr = bool_init(region, false);
+        let r1 = redir_gen(reg, gt.clone());
+        let r2 = redir_gen(reg, r1.clone());
+
+        let fr = bool_init(reg, false);
 
         inc_refc(r2.raw);
         unsafe { set_next_list_elt_unsafe_unchecked(fr.clone(), r2) };

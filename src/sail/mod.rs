@@ -592,7 +592,7 @@ pub fn insert_native_procs(
 }
 
 #[cfg(test)]
-mod tests {
+mod general_tests {
     use super::*;
 
     #[test]
@@ -615,7 +615,9 @@ mod tests {
 
     #[test]
     fn parses() {
-        let (reg, mut tbl) = (memmgt::Region::acq(1000), Stab::new(51));
+        let mut region = memmgt::Region::new(10);
+        let mut table = Stab::new(51);
+        let reg = &raw mut region;
         let tref = Hdl::new(&raw mut table);
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
