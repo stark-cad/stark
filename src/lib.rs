@@ -29,6 +29,9 @@
 // <>
 
 #![allow(internal_features)]
+#![feature(arbitrary_self_types)]
+// TODO: remove below feature, only above needed
+#![feature(arbitrary_self_types_pointers)]
 #![feature(core_intrinsics)]
 #![feature(box_as_ptr)]
 #![feature(macro_metavar_expr)]

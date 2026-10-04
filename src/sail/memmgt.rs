@@ -40,8 +40,8 @@ static mut OBJECT_ID_CTR: u32 = 0;
 
 static mut ZONE_ID_CTR: u32 = 0;
 
-/// TODO: allow the programmer to handle atomic operations if needed?
-/// TODO: global memory, thread local memory
+// TODO: allow the programmer to handle atomic operations if needed?
+// TODO: global memory, thread local memory
 
 static mut REGION_TABLE: RegionTable = RegionTable::new(64);
 
@@ -68,8 +68,12 @@ struct RegionTable {
     lock: u8,
 }
 
+// TODO: test by prefix! search tree of zones, return region
+
 // TODO: define region table concurrency characteristics
 // NOTE: possibly excessive locking currently
+
+// TODO: suspect rare failures connected to this data structure at present
 
 impl RegionTable {
     /// Create a new region table
@@ -128,30 +132,31 @@ impl RegionTable {
         }
     }
 
-    /// Resize the table, reallocating as necessary
-    unsafe fn resize(&mut self, cap: usize) {
+    /// Resize the table, reallocating as necessary (must be locked)
+    unsafe fn resize(tgt: *mut Self, cap: usize) {
         unsafe {
             // let lock: *mut u8 = &mut self.lock;
             // while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
             //     std::hint::spin_loop();
             // }
 
-            if self.cap != cap {
-                let current_layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
+            if (*tgt).cap != cap {
+                let current_layout = alloc::Layout::from_size_align_unchecked((*tgt).cap * 8, 8);
 
-                self.low_array = alloc::realloc(self.low_array as *mut u8, current_layout, cap * 8)
-                    as *mut usize;
-                self.high_array =
-                    alloc::realloc(self.high_array as *mut u8, current_layout, cap * 8)
+                (*tgt).low_array =
+                    alloc::realloc((*tgt).low_array as *mut u8, current_layout, cap * 8)
                         as *mut usize;
-                self.zone_array =
-                    alloc::realloc(self.zone_array as *mut u8, current_layout, cap * 8)
+                (*tgt).high_array =
+                    alloc::realloc((*tgt).high_array as *mut u8, current_layout, cap * 8)
+                        as *mut usize;
+                (*tgt).zone_array =
+                    alloc::realloc((*tgt).zone_array as *mut u8, current_layout, cap * 8)
                         as *mut *mut Zone;
-                self.region_array =
-                    alloc::realloc(self.region_array as *mut u8, current_layout, cap * 8)
+                (*tgt).region_array =
+                    alloc::realloc((*tgt).region_array as *mut u8, current_layout, cap * 8)
                         as *mut *mut Region;
 
-                self.cap = cap;
+                (*tgt).cap = cap;
             }
 
             // std::intrinsics::atomic_store_release(lock, false as u8);
@@ -179,13 +184,17 @@ impl RegionTable {
             }
 
             if (*tgt).low_array.is_null() {
-                Self::init(tgt)
+                if cfg!(test) {
+                    Self::init(tgt)
+                } else {
+                    panic!("region table not initialized")
+                }
             }
 
             let old_len = (*tgt).len;
 
             if old_len >= (*tgt).cap {
-                Self::resize(tgt.as_mut_unchecked(), (*tgt).cap * 2);
+                Self::resize(tgt, (*tgt).cap * 2);
             }
 
             (*tgt).len += 1;
