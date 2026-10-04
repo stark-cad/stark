@@ -426,7 +426,7 @@ enum_and_tryfrom! {
         ProcNative = 0b11100100,
         // ProcLbdaCk = 0b11101000,
         TyMfst = 0b11110000,
-        EnvScope = 0b11110100,
+        // EnvScope = 0b11110100,
         EnvLayer = 0b11111000,
         Other = 0b11111100,
     }
@@ -497,7 +497,9 @@ pub enum CoreType {
     VecHash,
     ProcLambda,
     ProcNative,
-    EnvScope,
+
+    // EnvScope,
+
     EnvLayer,
 }
 
@@ -530,11 +532,11 @@ impl TryFrom<Cfg> for CoreType {
             Cfg::VecArr => Ok(Self::VecArr),
             Cfg::VecAny => Ok(Self::VecAny),
             Cfg::VecHash => Ok(Self::VecHash),
+            // Cfg::EnvScope => Ok(Self::EnvScope),
+            Cfg::EnvLayer => Ok(Self::EnvLayer),
             Cfg::ProcLambda => Ok(Self::ProcLambda),
             Cfg::ProcNative => Ok(Self::ProcNative),
             Cfg::TyMfst => Ok(Self::TyMfst),
-            Cfg::EnvScope => Ok(Self::EnvScope),
-            Cfg::EnvLayer => Ok(Self::EnvLayer),
             _ => Err(()),
         }
     }
@@ -560,9 +562,11 @@ pub fn nil_p(loc: *mut SlHead) -> bool {
 //     }
 // }
 
+pub const SYM_ID_BIT_WIDTH: u32 = (SYMBOL_LEN * 8) - 2;
+
 /// Set a symbol to one of the four symbol modes
-pub const fn modeize_sym(sym: u32, mode: SymbolMode) -> u32 {
-    (sym & 0x3FFFFFFF) + ((mode as u32) << 30)
+pub const fn modeize_sym(sym: SlSym, mode: SymbolMode) -> SlSym {
+    (sym & 0x3FFFFFFF) + ((mode as u32) << SYM_ID_BIT_WIDTH)
 }
 
 /// Returns a symbol set to the default, basic mode
@@ -571,8 +575,8 @@ pub const fn demodes_sym(sym: u32) -> u32 {
 }
 
 /// Get the mode of a symbol
-pub const fn mode_of_sym(sym: u32) -> SymbolMode {
-    unsafe { mem::transmute::<u8, SymbolMode>((sym >> 30) as u8) }
+pub const fn mode_of_sym(sym: SlSym) -> SymbolMode {
+    unsafe { mem::transmute::<u8, SymbolMode>((sym >> SYM_ID_BIT_WIDTH) as u8) }
 }
 
 /// Checks whether a valid Sail object contains the 4-byte type ID
@@ -904,11 +908,11 @@ pub fn discern_ref_offsets_core(loc: *mut SlHead) -> Vec<u32> {
             Some(CoreType::Ref) => acc.push(0),
             Some(CoreType::ProcLambda) => acc.push(2),
             Some(CoreType::TyDsc) => acc.push(8),
-            Some(CoreType::EnvScope) => {
-                for l in 0..3 {
-                    acc.push(l * PTR_LEN)
-                }
-            }
+            // Some(CoreType::EnvScope) => {
+            //     for l in 0..3 {
+            //         acc.push(l * PTR_LEN)
+            //     }
+            // }
             Some(CoreType::EnvLayer) => {
                 for ety in 0..ENV_LAYER_SLOTS {
                     acc.push(ety * (PTR_LEN + SYMBOL_LEN) + SYMBOL_LEN)
@@ -1535,7 +1539,7 @@ pub fn sym_make(reg: *mut Region) -> SlHndl {
 }
 
 #[inline(always)]
-pub fn sym_init(reg: *mut Region, val: u32) -> SlHndl {
+pub fn sym_init(reg: *mut Region, val: SlSym) -> SlHndl {
     let out = sym_make(reg);
     unsafe { write_field_unchecked(out.clone(), 0, val) };
     out
@@ -1677,13 +1681,13 @@ pub fn ref_get(mut loc: SlHndl) -> Option<SlHndl> {
 }
 
 #[inline(always)]
-pub fn sym_set_id(mut loc: SlHndl, id: u32) {
+pub fn sym_set_id(mut loc: SlHndl, id: SlSym) {
     coretypck!(loc ; Symbol);
     write_field(loc, 0, id)
 }
 
 #[inline(always)]
-pub fn sym_get_id(mut loc: SlHndl) -> u32 {
+pub fn sym_get_id(mut loc: SlHndl) -> SlSym {
     coretypck!(loc ; Symbol);
     read_field(loc, 0)
 }
@@ -2169,8 +2173,8 @@ fn core_cons_copy(reg: *mut Region, car: SlHndl, cdr: SlHndl) -> SlHndl {
 
 // TODO: assess changing slot "value" for module and type dicts
 
-// unused, tentative, might aid type checking
-type SlSym = u32;
+// tentative, might aid type checking
+pub type SlSym = u32;
 
 // elements of an environment slot
 struct _EnvSlot {
@@ -2178,29 +2182,17 @@ struct _EnvSlot {
     obj: *mut SlHead,
 }
 
-const ENV_LAYER_SLOTS: u32 = 41;
+pub const ENV_LAYER_SLOTS: u32 = 41;
 const ENV_MAX_PROBES: u32 = 5;
 
-/// Creates an environment, which is a list of structures containing
-/// distinct hash dictionaries for binding objects, modules, and types
-/// to symbols
-pub fn env_create(reg: *mut Region, parent: Option<SlHndl>) -> SlHndl {
-    unsafe {
-        let env =
-            SlHndl::from_raw_unchecked(memmgt::alloc(reg, 3 * PTR_LEN, memmgt::cap(Cfg::EnvScope)));
+// An environment scope is a list of set-size maps, with waterfall
+// probing. Environments don't have parents. If we can make this a
+// list of general-purpose maps with an enumeration-selected size, we
+// will. Types are checked by logic. By their structure, not any
+// incidental tags, shall ye know them.
 
-        if let Some(par) = parent {
-            inc_refc(par.get_raw());
-            set_next_list_elt_unsafe_unchecked(env.clone(), par);
-        }
-
-        // println!("<> environment created");
-
-        env
-    }
-}
-
-pub fn env_layer_make(reg: *mut Region) -> SlHndl {
+/// Returns a fresh environment scope (symbol binding dictionary)
+pub fn env_make(reg: *mut Region) -> SlHndl {
     crate::report_site!("env layer alloc");
     // TODO: prevent the technically unnecessary `mut`
     let mut layer = unsafe {
@@ -2226,6 +2218,7 @@ pub fn env_layer_make(reg: *mut Region) -> SlHndl {
 /// object it refers to
 #[inline(always)]
 pub fn env_lookup(env: SlHndl, mut sym: SlHndl) -> Option<SlHndl> {
+    coretypck!(env.clone() ; EnvLayer);
     coretypck!(sym ; Symbol);
     env_lookup_by_id(env, sym_get_id(sym))
 }
@@ -2233,7 +2226,7 @@ pub fn env_lookup(env: SlHndl, mut sym: SlHndl) -> Option<SlHndl> {
 /// Looks up the given symbol ID in the given environment, returning
 /// the object it refers to
 #[inline(always)]
-pub fn env_lookup_by_id(env: SlHndl, sym_id: u32) -> Option<SlHndl> {
+pub fn env_lookup_by_id(env: SlHndl, sym_id: SlSym) -> Option<SlHndl> {
     env_get_binding_loc(env, sym_id).map(|l| unsafe {
         write_correct_pos_slot(l);
 
@@ -2248,9 +2241,10 @@ pub fn env_lookup_by_id(env: SlHndl, sym_id: u32) -> Option<SlHndl> {
 ///
 /// Returns false if no mutation was performed, or true if it was
 #[inline(always)]
-pub fn env_scope_mut(env: SlHndl, mut sym: SlHndl, obj: SlHndl) -> bool {
+pub fn env_mut_entry(env: SlHndl, mut sym: SlHndl, obj: SlHndl) -> bool {
+    coretypck!(env.clone() ; EnvLayer);
     coretypck!(sym ; Symbol);
-    env_scope_mut_by_id(env, sym_get_id(sym), obj)
+    env_mut_entry_by_id(env, sym_get_id(sym), obj)
 }
 
 /// Changes the object pointed to by the given ID in the environment,
@@ -2258,7 +2252,7 @@ pub fn env_scope_mut(env: SlHndl, mut sym: SlHndl, obj: SlHndl) -> bool {
 ///
 /// Returns false if no mutation was performed, or true if it was
 #[inline(always)]
-pub fn env_scope_mut_by_id(env: SlHndl, sym_id: u32, obj: SlHndl) -> bool {
+pub fn env_mut_entry_by_id(env: SlHndl, sym_id: SlSym, obj: SlHndl) -> bool {
     match env_get_binding_loc(env.clone(), sym_id) {
         Some(loc) => {
             unsafe {
@@ -2280,40 +2274,37 @@ pub fn env_scope_mut_by_id(env: SlHndl, sym_id: u32, obj: SlHndl) -> bool {
 /// Inserts the given symbol into the environment, bound to the given
 /// object
 #[inline(always)]
-pub fn env_scope_ins(reg: *mut Region, env: SlHndl, mut sym: SlHndl, obj: SlHndl) {
+pub fn env_ins(reg: *mut Region, env: SlHndl, mut sym: SlHndl, obj: SlHndl) -> bool {
     coretypck!(sym ; Symbol);
-    env_scope_ins_by_id(reg, env, sym_get_id(sym), obj)
+    env_ins_by_id(reg, env, sym_get_id(sym), obj)
 }
 
-// TODO: shadowing behavior within a scope is complete nonsense;
-// characterize and fix
-
 /// Inserts a symbol with the given ID into the environment, bound to
-/// the given object
-pub fn env_scope_ins_by_id(reg: *mut Region, mut env: SlHndl, sym_id: u32, obj: SlHndl) {
-    coretypck!(env ; EnvScope);
+/// the given object; true if replacing an existing local binding
+pub fn env_ins_by_id(reg: *mut Region, mut env: SlHndl, sym_id: SlSym, obj: SlHndl) -> bool {
+    coretypck!(env ; EnvLayer);
 
-    let layer_offset = match mode_of_sym(sym_id) {
-        SymbolMode::Basic => 0,
-        SymbolMode::Module => 8,
-        SymbolMode::Type => 16,
-        SymbolMode::Keyword => return,
-    };
+    if mode_of_sym(sym_id) == SymbolMode::Keyword {
+        return false;
+    }
 
-    let entry_offset = sym_id % ENV_LAYER_SLOTS;
+    let mut replaced_p = false;
 
-    let top_layer = unsafe { read_ptr_unchecked(env.clone(), layer_offset) };
-    let mut layer_ptr = top_layer.clone();
+    let bare_id = demodes_sym(sym_id);
+    let entry_offset = bare_id % ENV_LAYER_SLOTS;
+
+    // let top_layer = unsafe { read_ptr_unchecked(env.clone(), 0) };
+    let mut layer_ptr = Some(env.clone());
 
     'layer: loop {
         if layer_ptr.is_none() {
-            let new_layer = env_layer_make(reg);
-            // TODO: r!() macro instead of clone?
-            match top_layer.clone() {
-                Some(tl) => set_next_list_elt(env.clone(), new_layer.clone(), tl),
+            let new_layer = env_make(reg);
+            match get_next_list_elt(env.clone()) {
+                Some(ctl) => set_next_list_elt(env.clone(), new_layer.clone(), ctl),
                 None => clr_next_list_elt(env.clone(), new_layer.clone()),
             }
-            write_ptr(env.clone(), env.clone(), layer_offset, new_layer.clone());
+            // write_ptr(env.clone(), env.clone(), 0, new_layer.clone());
+            set_next_list_elt(env.clone(), env.clone(), new_layer.clone());
             layer_ptr = Some(new_layer.clone());
         }
 
@@ -2329,9 +2320,12 @@ pub fn env_scope_ins_by_id(reg: *mut Region, mut env: SlHndl, sym_id: u32, obj: 
             let slot_id: u32 =
                 unsafe { read_field_unchecked(layer_ptr.clone().unwrap(), byte_offset) };
 
-            // there needs to be a way to discern an empty slot in all
-            // three environment sections
-            if slot_id >> 30 != SymbolMode::Keyword as u32 {
+            // TODO: this won't notice if layers added since last binding
+            if slot_id == sym_id {
+                replaced_p = true;
+            } else
+            // NOTE: current method to discern an empty slot
+            if slot_id >> SYM_ID_BIT_WIDTH != SymbolMode::Keyword as u32 {
                 continue 'entry;
             }
 
@@ -2346,68 +2340,52 @@ pub fn env_scope_ins_by_id(reg: *mut Region, mut env: SlHndl, sym_id: u32, obj: 
         layer_ptr = get_next_list_elt(layer_ptr.unwrap());
     }
 
-    ()
+    replaced_p
 }
 
 /// Looks up the given symbol ID in the given environment, returning
 /// the location in the environment of the object it refers to; None
 /// if no binding
-fn env_get_binding_loc(mut env: SlHndl, sym_id: u32) -> Option<*mut *mut SlHead> {
-    coretypck!(env ; EnvScope);
+fn env_get_binding_loc(mut env: SlHndl, sym_id: SlSym) -> Option<*mut *mut SlHead> {
+    coretypck!(env ; EnvLayer);
 
-    let layer_offset = match mode_of_sym(sym_id) {
-        SymbolMode::Basic => 0,
-        SymbolMode::Module => 8,
-        SymbolMode::Type => 16,
-        SymbolMode::Keyword => return None,
-    };
+    if mode_of_sym(sym_id) == SymbolMode::Keyword {
+        return None;
+    }
 
-    let entry_offset = sym_id % ENV_LAYER_SLOTS;
+    let bare_id = demodes_sym(sym_id);
+    let entry_offset = bare_id % ENV_LAYER_SLOTS;
 
-    let mut scope_ptr: Option<SlHndl> = Some(env);
-    let mut layer_ptr: Option<SlHndl>;
+    let mut layer_ptr: Option<SlHndl> = Some(env);
 
-    'scope: loop {
-        if scope_ptr.is_none() {
-            break 'scope;
+    'layer: loop {
+        if layer_ptr.is_none() {
+            break 'layer;
         }
 
-        let sctt = scope_ptr.as_mut().unwrap();
-        coretypck!(sctt ; EnvScope);
+        let lytt = layer_ptr.as_mut().unwrap();
+        coretypck!(lytt ; EnvLayer);
 
-        layer_ptr = unsafe { read_ptr_unchecked(scope_ptr.clone().unwrap(), layer_offset) };
+        'entry: for o in 0..ENV_MAX_PROBES {
+            let slot_offset = (entry_offset + o) % ENV_LAYER_SLOTS;
+            let byte_offset = slot_offset * (SYMBOL_LEN + PTR_LEN);
 
-        'layer: loop {
-            if layer_ptr.is_none() {
-                break 'layer;
-            }
+            let slot_id: u32 =
+                unsafe { read_field_unchecked(layer_ptr.clone().unwrap(), byte_offset) };
 
-            let lytt = layer_ptr.as_mut().unwrap();
-            coretypck!(lytt ; EnvLayer);
-
-            'entry: for o in 0..ENV_MAX_PROBES {
-                let slot_offset = (entry_offset + o) % ENV_LAYER_SLOTS;
-                let byte_offset = slot_offset * (SYMBOL_LEN + PTR_LEN);
-
-                let slot_id: u32 =
-                    unsafe { read_field_unchecked(layer_ptr.clone().unwrap(), byte_offset) };
-
-                if slot_id != sym_id {
-                    if slot_id >> 30 == SymbolMode::Keyword as u32 {
-                        break 'entry;
-                    }
-                    continue 'entry;
+            if slot_id != sym_id {
+                if slot_id >> SYM_ID_BIT_WIDTH == SymbolMode::Keyword as u32 {
+                    break 'entry;
                 }
-
-                return Some(unsafe {
-                    get_ptr_ptr_unchecked(layer_ptr.unwrap(), byte_offset + SYMBOL_LEN)
-                });
+                continue 'entry;
             }
 
-            layer_ptr = get_next_list_elt(layer_ptr.unwrap());
+            return Some(unsafe {
+                get_ptr_ptr_unchecked(layer_ptr.unwrap(), byte_offset + SYMBOL_LEN)
+            });
         }
 
-        scope_ptr = get_next_list_elt(scope_ptr.unwrap());
+        layer_ptr = get_next_list_elt(layer_ptr.unwrap());
     }
 
     None
