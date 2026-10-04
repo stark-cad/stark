@@ -60,8 +60,7 @@ pub fn init_context(
 pub fn run_loop<Ij: 'static>(
     event_loop: EventLoop<()>,
     threads: Ij,
-    sl_weft: sail::thread::Weft,
-    sl_reg: usize,
+    sl_weft: sail::thread::WeftOwner,
     main_tx: sail::queue::InletHdl,
     rndr_tx: sail::queue::InletHdl,
     fr_dims: sail::SlHndl,
