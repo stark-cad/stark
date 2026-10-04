@@ -157,7 +157,6 @@ fn main() {
         event_loop,
         vec![manager, render].into_iter(),
         global_weft,
-        ctxt_region,
         main_qin,
         rndr_qin,
         fr_dims,

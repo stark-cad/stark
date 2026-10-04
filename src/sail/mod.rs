@@ -33,6 +33,9 @@
 //!
 //! A custom Lisp dialect for writing STARK
 
+// Sail uses a double metaphor: of sailing, as ships on a sea; and of
+// weaving, as the fabric that makes up a sail
+
 use std::mem;
 use std::ptr;
 

@@ -70,7 +70,11 @@ pub fn run_loop<Ij: 'static>(
 {
     let mut joins = Some(threads);
 
-    let dummy_env = sail::env_create(sl_reg as _, None);
+    let mut sl_reg = sail::memmgt::Region::new(10);
+    let reg_r = &raw mut sl_reg;
+    let reg_h = reg_r.hdl();
+
+    let dummy_env = sail::env_make(reg_r);
     let dm_env_ax = dummy_env.clone();
 
     let mtx = main_tx.clone();
@@ -78,17 +82,17 @@ pub fn run_loop<Ij: 'static>(
     let _stdin = thread::Builder::new()
         .name("stdin".to_string())
         .spawn(move || {
-            let sl_reg = sl_reg as *mut sail::memmgt::Region;
+            let reg_r = reg_h.raw();
 
             let mut buffer = String::new();
 
-            let shell = sail::sym_init(sl_reg, sail::K_CX_SHELL.0);
+            let shell = sail::sym_init(reg_r, sail::K_CX_SHELL.0);
 
             loop {
                 buffer.clear();
                 std::io::stdin().read_line(&mut buffer).unwrap();
 
-                let strin = sail::string_init(sl_reg, &buffer);
+                let strin = sail::string_init(reg_r, &buffer);
                 sail::set_next_list_elt(dm_env_ax.clone(), shell.clone(), strin);
 
                 mtx.transmit(1, shell.clone());
@@ -96,17 +100,15 @@ pub fn run_loop<Ij: 'static>(
         })
         .unwrap();
 
-    let sl_reg = sl_reg as *mut sail::memmgt::Region;
-
     let mut frame_dims: [u32; 2] = [0, 0];
 
     let mut focus = false;
 
-    let ks_redrw = sail::sym_init(sl_reg, sail::K_CX_REDRW.0);
-    let ks_destr = sail::sym_init(sl_reg, sail::K_CX_DESTR.0);
-    let ks_resiz = sail::sym_init(sl_reg, sail::K_CX_RESIZ.0);
-    let ks_recrd = sail::sym_init(sl_reg, sail::K_CX_RECRD.0);
-    let ks_moved = sail::sym_init(sl_reg, sail::K_CX_CURMV.0);
+    let ks_redrw = sail::sym_init(reg_r, sail::K_CX_REDRW.0);
+    let ks_destr = sail::sym_init(reg_r, sail::K_CX_DESTR.0);
+    let ks_resiz = sail::sym_init(reg_r, sail::K_CX_RESIZ.0);
+    let ks_recrd = sail::sym_init(reg_r, sail::K_CX_RECRD.0);
+    let ks_moved = sail::sym_init(reg_r, sail::K_CX_CURMV.0);
 
     // println!("fr_dims is at: {:x}", unsafe { fr_dims.get_raw() as usize });
     // println!("cur_pos is at: {:x}", unsafe { cur_pos.get_raw() as usize });
@@ -163,7 +165,10 @@ pub fn run_loop<Ij: 'static>(
 
                         unsafe {
                             sail::inc_refc(cur_pos.get_raw());
-                            sail::set_next_list_elt_unsafe_unchecked(ks_moved.clone(), cur_pos.clone())
+                            sail::set_next_list_elt_unsafe_unchecked(
+                                ks_moved.clone(),
+                                cur_pos.clone(),
+                            )
                         };
 
                         rndr_tx.transmit(1, ks_moved.clone());
@@ -188,39 +193,39 @@ pub fn run_loop<Ij: 'static>(
                             let key_sym = match s.bytes().nth(0).unwrap() {
                                 b'u' => {
                                     // move up
-                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_U.0))
+                                    Some(sail::sym_init(reg_r, sail::K_CX_KEY_U.0))
                                 }
                                 b'd' => {
                                     // move down
-                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_D.0))
+                                    Some(sail::sym_init(reg_r, sail::K_CX_KEY_D.0))
                                 }
                                 b'f' => {
                                     // move forward (right)
-                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_F.0))
+                                    Some(sail::sym_init(reg_r, sail::K_CX_KEY_F.0))
                                 }
                                 b'b' => {
                                     // move backward (left)
-                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_B.0))
+                                    Some(sail::sym_init(reg_r, sail::K_CX_KEY_B.0))
                                 }
                                 b'l' => {
                                     // make step longer
-                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_L.0))
+                                    Some(sail::sym_init(reg_r, sail::K_CX_KEY_L.0))
                                 }
                                 b's' => {
                                     // make step shorter
-                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_S.0))
+                                    Some(sail::sym_init(reg_r, sail::K_CX_KEY_S.0))
                                 }
                                 b'e' => {
                                     // escape line in progress
-                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_E.0))
+                                    Some(sail::sym_init(reg_r, sail::K_CX_KEY_E.0))
                                 }
                                 b'k' => {
                                     // kill last line drawn
-                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_K.0))
+                                    Some(sail::sym_init(reg_r, sail::K_CX_KEY_K.0))
                                 }
                                 b'm' => {
                                     // switch drawing mode
-                                    Some(sail::sym_init(sl_reg, sail::K_CX_KEY_M.0))
+                                    Some(sail::sym_init(reg_r, sail::K_CX_KEY_M.0))
                                 }
                                 _ => None,
                             };

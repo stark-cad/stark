@@ -19,7 +19,7 @@
 
 // <>
 
-//! TODO: Gradual typing; more extensible type system; subtypes
+//! TODO: gradual typing; more extensible type system; subtypes
 
 use std::mem;
 use std::ptr;
@@ -32,16 +32,19 @@ use super::memmgt::{self, Region};
 /// Core type assertion
 #[macro_export]
 macro_rules! coretypck {
-    ( $var:ident ; $typ:ident ) => {
-        assert_eq!($var.core_type().unwrap(), crate::sail::core::CoreType::$typ);
+    ( $var:expr ; $typ:ident ) => {
+        assert_eq!(
+            ($var).core_type().unwrap(),
+            crate::sail::core::CoreType::$typ
+        );
     };
 }
 
 /// Core type predicate
 #[macro_export]
 macro_rules! coretypp {
-    ( $var:ident ; $typ:ident ) => {
-        match $var.core_type() {
+    ( $var:expr ; $typ:ident ) => {
+        match ($var).core_type() {
             Some(t) => t == crate::sail::core::CoreType::$typ,
             None => false,
         }
@@ -92,15 +95,15 @@ pub struct SlHead {
     pub rc: u8,
 }
 
+// TODO / NOTE: There are now two spare, unused bits in the Sail head:
+// the lowest two bits
+
 // TODO: potential change: add a "shared" bit to indicate that an object
 // may be read and / or written by other threads
 
 // TODO: add an "interned" bit to indicate that the object must be
 // copied before any list structure manipulation; also could mean
 // "loner" or "read-only"
-
-// TODO / NOTE: There are now two spare, unused bits in the Sail head:
-// the lowest two bits
 
 /// ALL Sail objects that may be independently referenced, begin with bytes of this format
 ///
@@ -153,7 +156,6 @@ impl SlHndl {
             let mut loc = orig;
 
             while raw_cfg_byte(loc) == Cfg::B0Redir as u8 {
-                // TODO: rewrite addresses in memory to avoid indirection!
                 println!("-- redir hit --");
                 loc = (ptr::read_unaligned(loc as *mut usize) >> 16) as *mut SlHead;
             }
@@ -197,7 +199,7 @@ impl SlHndl {
         unsafe { self.correct_pos() };
 
         match self.core_type() {
-            Some(t) if t == CoreType::Ref => ref_get(self.clone()).is_some(),
+            Some(CoreType::Ref) => ref_get(self.clone()).is_some(),
             _ => false,
         }
     }
@@ -222,7 +224,7 @@ impl SlHndl {
         unsafe { self.correct_pos() };
 
         match self.core_type() {
-            Some(t) if t == CoreType::ProcLambda || t == CoreType::ProcNative => true,
+            Some(CoreType::ProcLambda | CoreType::ProcNative) => true,
             _ => false,
         }
     }
@@ -241,6 +243,14 @@ impl SlHndl {
 
         let head = self.cfg_byte();
         head >> 5 > 5
+    }
+
+    pub unsafe fn memdbg_obj_id_immed(&self) -> u32 {
+        if cfg!(feature = "memdbg") {
+            unsafe { ptr::read_unaligned((self.raw as *mut u32).add(2)) }
+        } else {
+            panic!("Memory debug mode not active")
+        }
     }
 
     pub fn memdbg_obj_id(&mut self) -> u32 {
@@ -793,7 +803,7 @@ pub fn temp_init_from(reg: *mut Region, typ: u32, ptr: *const u8) -> SlHndl {
             t if t == super::T_SYMBOL.0 => sym_init(reg, ptr::read_unaligned(ptr as *const _)),
             t if t == super::T_REF.0 => ref_init(reg, ptr::read_unaligned(ptr as *const _)),
             t if t == super::T_ERR.0 => {
-                super::errcode_init(reg, ptr::read_unaligned(ptr as *const _))
+                super::debug::errcode_init(reg, ptr::read_unaligned(ptr as *const _))
             }
             _ => unreachable!(),
         }
@@ -852,6 +862,8 @@ pub fn inc_refc(loc: *mut SlHead) -> bool {
     let rc_pos = unsafe { (loc as *mut u8).add(1) };
     let mut cur = unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(rc_pos) };
 
+    // let cur = unsafe { ptr::read(rc_pos) };
+
     loop {
         match cur {
             0 => panic!("attempted reference to dead object"),
@@ -863,7 +875,7 @@ pub fn inc_refc(loc: *mut SlHead) -> bool {
                 }
                 return true;
             }
-            _ => (),
+            _ => (), // unsafe { ptr::write(rc_pos, cur + 1) },
         }
 
         let sp;
@@ -879,8 +891,6 @@ pub fn inc_refc(loc: *mut SlHead) -> bool {
             break;
         }
     }
-
-    // unsafe { ptr::write(rc_pos, cur + 1) };
 
     if cfg!(feature = "memdbg") {
         println!(
@@ -901,6 +911,8 @@ pub fn dec_refc(loc: *mut SlHead) -> bool {
 
     let rc_pos = unsafe { (loc as *mut u8).add(1) };
     let mut cur = unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(rc_pos) };
+
+    // let cur = unsafe { ptr::read(rc_pos) };
 
     loop {
         match cur {
@@ -2829,8 +2841,6 @@ pub fn bool_get(mut loc: SlHndl) -> bool {
     unsafe { ptr::read_unaligned(loc.get_raw() as *mut u8) & 0b00000100 != 0 }
 }
 
-// TODO: need a sort of "NsPath" type which stores an arbitrary-length
-// path of symbol IDs, used for resolution of "path symbols" (?)
 
 struct _TypeDesc {
     type_sort_and_sym: u32, // type symbol of the described type (first bit HIGH denotes manifest or LOW predicate)

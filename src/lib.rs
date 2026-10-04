@@ -33,9 +33,9 @@
 // TODO: remove below feature, only above needed
 #![feature(arbitrary_self_types_pointers)]
 #![feature(core_intrinsics)]
-#![feature(box_as_ptr)]
 #![feature(macro_metavar_expr)]
-#![feature(ptr_as_ref_unchecked)]
+#![feature(random)]
+#![feature(variant_count)]
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
