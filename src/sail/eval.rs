@@ -89,6 +89,8 @@ struct FrameHead {
     prev_len: u8,
     /// Full length of the current frame
     this_len: u8,
+    /// Do we follow a tail? Or if a scope, were we created by a call?
+    toc_p: bool,
 
     // TODO: save four bytes of space to store the symbol which
     // referred to the module or procedure represented here?
@@ -123,6 +125,8 @@ pub struct EvalStack {
     current_scope: *mut usize,
     /// Space allocated for the evaluation stack
     stack_ext: u32,
+    /// Cycles since a do sequence concluded (temp)
+    since_do_tail: u8,
 }
 
 impl EvalStack {
@@ -140,6 +144,7 @@ impl EvalStack {
                 current_frame: frm_stk_ptr as *mut usize,
                 current_scope: ptr::null_mut(),
                 stack_ext: size_bytes as _,
+                since_do_tail: 3,
             }
         }
     }
@@ -199,6 +204,7 @@ impl EvalStack {
             self.frame_push_head((*self).current_scope as _, Opcode::Scope);
             (*self).current_scope = self.frame_addr(0) as *mut usize;
             self.ref_push(env);
+            (*self.frame_idx(0)).toc_p = call_p;
         }
 
         // println!("Pushed scope {:x}", unsafe { env.get_raw() as usize });
@@ -413,6 +419,7 @@ impl EvalStack {
                     (*self.frame_idx(0)).this_len
                 },
                 this_len: 2,
+                toc_p: false,
                 // unused: 0,
                 return_address: ret,
             };
@@ -808,6 +815,9 @@ impl EvalStack {
 
         let reg = vessel_ref.region();
 
+        unsafe {
+            (*self).since_do_tail += 1;
+        }
 
         let (ret, opc) = (self.frame_ret(), self.frame_opc());
 
@@ -1035,6 +1045,15 @@ impl EvalStack {
                     // construct application frame; slots must come first!
                     self.frame_fold(Opcode::Apply);
 
+                    // we're about to make a tail call
+                    unsafe {
+                        if (*self).since_do_tail < 2
+                            && (*self.frame_idx(1)).opcode == Opcode::Scope
+                            && (*self.frame_idx(1)).toc_p
+                        {
+                            (*self.frame_idx(0)).toc_p = true;
+                        }
+                    }
 
                     self.ref_push(proc);
                     for _ in 0..arg_ct {
@@ -1126,6 +1145,9 @@ impl EvalStack {
                         self.ref_push(ref_get(remainder).unwrap());
                     }
                 } else {
+                    unsafe {
+                        (*self).since_do_tail = 0;
+                    }
                     self.eval_expr_fold(remainder).unwrap();
                 }
             }
@@ -1158,6 +1180,9 @@ impl EvalStack {
                 let consequent = self.frame_obj(1);
 
                 if pred_res.truthy() {
+                    unsafe {
+                        (*self).since_do_tail = 0;
+                    }
                     self.eval_expr_fold(consequent).unwrap();
                 } else if let Some(next_pred) = get_next_list_elt(consequent) {
                     let next_cons = get_next_list_elt(next_pred.clone())
@@ -1232,6 +1257,9 @@ impl EvalStack {
                             );
                         }
 
+                        if unsafe { (*self.frame_idx(0)).toc_p } {
+                            self.frame_pop();
+                        }
 
                         self.frame_pop();
                         self.scope_push(proc_env, true);
@@ -1277,6 +1305,7 @@ impl EvalStack {
                 println!("Opcode: {:?}", (*self.frame_idx(cur_frame)).opcode);
                 println!("this len: {}", (*self.frame_idx(cur_frame)).this_len);
                 println!("prev len: {}", (*self.frame_idx(cur_frame)).prev_len);
+                println!("tail? / call?: {}", (*self.frame_idx(cur_frame)).toc_p);
                 // println!(
                 //     "Ret: {:x}",
                 //     self.frame_idx(cur_frame).return_address as usize
