@@ -23,8 +23,8 @@ use std::usize;
 
 use std::intrinsics::AtomicOrdering as AO;
 
-use super::{eval, memmgt, parser, queue};
-use super::{SlHndl, Stab, Styc};
+use super::{Hdl, SlHndl, SlSym, Stab, Styc};
+use super::{debug, eval, memmgt, parser, queue};
 
 /// Global context data for inter-thread and human interaction
 pub struct Tact {
@@ -36,6 +36,7 @@ pub struct Tact {
 }
 
 impl Tact {
+    /// Instantiates symbol table and type layout counter
     pub fn create(symtab_size: usize) -> Self {
         Self {
             symtab: Stab::new(symtab_size),
@@ -43,43 +44,34 @@ impl Tact {
         }
     }
 
-    pub fn symtab(&mut self) -> &mut Stab {
-        &mut self.symtab
+    /// Returns handle to symbol table
+    pub fn symtab(self: Hdl<Self>) -> Hdl<Stab> {
+        unsafe { Hdl::new(&raw mut (*self.raw()).symtab) }
     }
 
-    pub fn typctr(&mut self) -> &mut Styc {
-        &mut self.typctr
+    /// Returns handle to type layout counter
+    pub fn typctr(self: Hdl<Self>) -> Hdl<Styc> {
+        unsafe { Hdl::new(&raw mut (*self.raw()).typctr) }
     }
 }
 
 // TODO: track refs to vessel from parent / other owners
-
-// TODO: adjust the weft / vessel data structures to avoid misuse of
-// pointers; align with Rust norms to benefit from guarantees
-
-// TODO: hand out handles to vessels, not raw pointers
-
 // TODO: structures / functions for arbitrary mapping between Sail
 // vessels and OS threads, in order to evenly and efficiently advance
 // all active Sail vessels
 
-pub struct SlVslHdl {
-    raw: *mut Vessel,
-}
-
 // NOTE: once Sail vessels are added to the weft (so as soon as they
 // are created), they should "magically" / automatically run
 
+/// Represents one Vessel in the OS thread worklist
 struct WorkTgtNode {
     next: *mut WorkTgtNode,
     prev: *mut WorkTgtNode,
-    vsl: *mut Vessel,
-
-    _pin: std::marker::PhantomPinned,
+    vsl: Option<Hdl<Vessel>>,
 }
 
-unsafe impl Send for WorkTgtNode {}
-unsafe impl Sync for WorkTgtNode {}
+}
+
 
 // NOTE: code which runs in each OS thread to advance Sail vessels
 // TODO: track stopped Sail vessels and thread::park when no work
@@ -144,11 +136,10 @@ fn worker_runtime(th_list_sentinel: usize) {
 // groups of vectors in the weft are parallel arrays, with equal
 // element counts and associated indices!
 
-// NOTE: other names: fiber? timber? member? strand? sheet?
-
-// assign usizes are indices into the Sail vessel list
-
 // TODO: should assign by vessel ID instead? might require mapping
+
+// TODO: basis lock and assignment lock?
+
 
 // NOTE: can shorten structure by unifying parallel vector accounting
 
@@ -443,16 +434,13 @@ impl Weft {
 #[repr(C)]
 pub struct Vessel {
     /// identifier (index in weft)
-    pub id: usize,
+    id: usize,
 
     /// tracker for all extant vessels
     weft: *mut Weft,
 
-    /// dedicated memory
-    reg: memmgt::Region,
-
-    /// queue target
-    qin: queue::Inlet,
+    /// final return location
+    out: *mut super::SlHead,
 
     /// top-level environment
     tenv: SlHndl,
@@ -460,11 +448,11 @@ pub struct Vessel {
     /// evaluator
     eval: eval::EvalStack,
 
-    /// final return location
-    out: *mut super::SlHead,
+    /// dedicated memory
+    reg: memmgt::Region,
 
-    /// does not implement Unpin
-    _pin: std::marker::PhantomPinned,
+    /// queue target
+    qin: queue::Inlet,
 }
 
 unsafe impl Send for Vessel {}
@@ -473,156 +461,231 @@ unsafe impl Send for Vessel {}
 // codex managers, record keepers, and render thread
 
 
-// previously "ThreadHull"
 impl Vessel {
-    pub fn summon(
-        weft: &mut Weft,
-        s_init_size: usize,
-        r_zone_size: u32,
-        env_parent: Option<SlHndl>,
-    ) -> *mut Self {
-        let it = {
+    /// Creates new Vessel, adding it to a Weft
+    pub fn summon(weft: &mut WeftOwner, s_init_size: u16, r_zone_ord: u8) -> Hdl<Self> {
+        let it = Box::into_raw({
             let mut uninit = Box::<Self>::new_uninit();
             let ptr = uninit.as_mut_ptr();
 
             unsafe {
-                (&raw mut (*ptr).id).write(weft.get_tid());
-                (&raw mut (*ptr).weft).write(weft);
+                (&raw mut (*ptr).id).write(weft.raw.get_vsl_id());
+                (&raw mut (*ptr).weft).write(weft.raw);
 
-                (&raw mut (*ptr).reg).write(memmgt::Region::new(r_zone_size));
-                (*ptr).reg.init();
+                (&raw mut (*ptr).reg).write(memmgt::Region::new(r_zone_ord));
+                (&raw mut (*ptr).reg).init();
 
                 (&raw mut (*ptr).qin).write(queue::Inlet::new(&raw mut (*ptr).reg));
-                (&raw mut (*ptr).tenv).write(super::env_create(&raw mut (*ptr).reg, env_parent));
+                (&raw mut (*ptr).tenv).write(super::env_make(&raw mut (*ptr).reg));
                 (&raw mut (*ptr).eval).write(eval::EvalStack::new(s_init_size));
 
-                (&raw mut (*ptr).out).write(std::ptr::null_mut());
+                (&raw mut (*ptr).out).write(ptr::null_mut());
             }
 
-            Box::into_pin(unsafe { uninit.assume_init() })
-        };
+            unsafe { uninit.assume_init() }
+        });
 
-        weft.add_vessel(it)
+        // the result is always registered to the weft
+        weft.raw.add_vessel(it)
     }
 
-    pub fn spawn(&self, s_init_size: Option<usize>, r_zone_size: Option<u32>) -> *mut Self {
-        let weft = unsafe { self.weft.as_mut().unwrap() };
-
-        let it = {
+    /// Creates new Vessel based on one existing (same Weft)
+    pub fn spawn(self: Hdl<Self>, s_init_size: Option<u16>, r_zone_ord: Option<u8>) -> Hdl<Self> {
+        let it = Box::into_raw({
             let mut uninit = Box::<Self>::new_uninit();
             let ptr = uninit.as_mut_ptr();
 
             unsafe {
-                (&raw mut (*ptr).id).write(weft.get_tid());
-                (&raw mut (*ptr).weft).write(weft);
+                (&raw mut (*ptr).id).write((*self.raw()).weft.get_vsl_id());
+                (&raw mut (*ptr).weft).write((*self.raw()).weft);
 
                 (&raw mut (*ptr).reg).write(memmgt::Region::new(
-                    r_zone_size.unwrap_or(self.reg.zone_size),
+                    r_zone_ord.unwrap_or(memmgt::Region::zn_ord((&raw const (*self.raw()).reg))),
                 ));
-                (*ptr).reg.init();
+                (&raw mut (*ptr).reg).init();
 
                 (&raw mut (*ptr).qin).write(queue::Inlet::new(&raw mut (*ptr).reg));
-                (&raw mut (*ptr).tenv).write(super::env_create(
-                    &raw mut (*ptr).reg,
-                    Some(self.tenv.clone()),
-                ));
+                (&raw mut (*ptr).tenv).write(super::env_make(&raw mut (*ptr).reg));
                 (&raw mut (*ptr).eval).write(eval::EvalStack::new(
-                    s_init_size.unwrap_or(self.eval.size()),
+                    s_init_size.unwrap_or((&raw const (*self.raw()).eval).size()),
                 ));
 
-                (&raw mut (*ptr).out).write(std::ptr::null_mut());
+                (&raw mut (*ptr).out).write(ptr::null_mut());
             }
 
-            Box::into_pin(unsafe { uninit.assume_init() })
-        };
+            unsafe { uninit.assume_init() }
+        });
 
-        weft.add_vessel(it)
+        // the result is always registered to the weft
+        unsafe { (*self.raw()).weft.add_vessel(it) }
     }
 
+    /// Returns unique Vessel identifier
+    pub fn id(self: Hdl<Self>) -> usize {
+        unsafe { (*self.raw()).id }
+    }
+
+
     #[inline(always)]
-    pub fn context<'a, 'b>(&'a self) -> &'b mut Tact {
+    /// Returns relevant symbol table and type layout counter
+    pub fn context(self: Hdl<Self>) -> Hdl<Tact> {
         // the TAble and CounTer will always outlive all vessels
-        // unsafe { self.tact.as_mut_unchecked() }
-        unsafe { (&raw mut (*self.weft).tact).as_mut_unchecked() }
+        // self^.weft~tact
+        unsafe { (&raw mut *(*self.raw()).weft).context() }
     }
 
     // TODO: again, switch to a handle type
-    pub fn region(&self) -> *mut memmgt::Region {
-        ((&self.reg) as *const memmgt::Region).cast_mut()
+    /// Returns handle to this Vessel's memory region
+    pub fn region(self: Hdl<Self>) -> *mut memmgt::Region {
+        unsafe { (&raw mut (*self.raw()).reg) }
     }
 
-    pub fn inlet_hdl(&mut self) -> queue::InletHdl {
-        queue::InletHdl::new((&raw mut self.reg) as *mut queue::_SendFields)
+    /// Returns handle to this Vessel's queue inlet
+    pub fn inlet_hdl(self: Hdl<Self>) -> queue::InletHdl {
+        unsafe {
+            // this works
+            queue::InletHdl::new((&raw mut (*self.raw()).reg) as *mut queue::_SendFields)
+        }
     }
 
-    pub fn msg_recv(&mut self) -> (usize, Option<SlHndl>) {
-        self.qin.receive()
+    /// Returns top message from this Vessel's incoming queue
+    pub fn msg_recv(self: Hdl<Self>) -> (usize, Option<SlHndl>) {
+        unsafe { (&raw mut (*self.raw()).qin).receive() }
     }
 
-    pub fn top_env(&self) -> SlHndl {
-        self.tenv.clone()
+    /// Returns top-level local environment for this Vessel
+    pub fn top_env(self: Hdl<Self>) -> SlHndl {
+        unsafe { (*self.raw()).tenv.clone() }
     }
 
-    pub fn load_from_text(&mut self, text: &str, prog: bool) -> Result<(), super::SlErrCode> {
-        let expr_sexp = parser::parse(self.region(), self.context().symtab(), text, prog)?;
+    /// Returns reference to relevant source-level debug data
+    pub fn src_dbg_info(self: Hdl<Self>) -> Option<&'static mut debug::SrcInfo> {
+        unsafe { (&raw mut (*(*self.raw()).weft).temp_debug).as_mut_unchecked() }.as_mut()
+    }
 
-        assert!(self.eval.is_empty());
-        self.eval.start(&mut self.out, self.top_env(), expr_sexp);
+    /// Binds symbol in this Vessel's top-level local environment
+    pub fn bind_sym(self: Hdl<Self>, sym_id: SlSym, obj: SlHndl) {
+        let repp = super::env_ins_by_id(self.region(), self.top_env(), sym_id, obj);
+        assert!(!repp);
+    }
+
+    /// Loads Sail program for evaluation from provided file
+    pub fn load_from_file<T: AsRef<std::path::Path>>(
+        self: Hdl<Self>,
+        path: T,
+    ) -> Result<(), debug::SlErrCode> {
+        let sexp = parser::parse_file(
+            self.region(),
+            self.context().symtab(),
+            path.as_ref().to_path_buf(),
+            self.src_dbg_info(),
+        )?;
+
+        assert!(self.inert_p());
+        unsafe {
+            (&raw mut (*self.raw()).eval).start(&raw mut (*self.raw()).out, self.top_env(), sexp);
+        }
 
         Ok(())
     }
 
-    pub fn load_proc_immed(&mut self, mut proc: SlHndl) {
-        coretypck!(proc ; ProcLambda);
-        assert!(self.eval.is_empty());
+    /// Loads Sail program for evaluation directly from provided text
+    pub fn load_from_text(self: Hdl<Self>, text: &str, prog: bool) -> Result<(), debug::SlErrCode> {
+        let expr_sexp = if prog {
+            parser::parse_text(
+                self.region(),
+                self.context().symtab(),
+                parser::wrap_prog(text.as_bytes()),
+                self.src_dbg_info(),
+            )?
+        } else {
+            // TODO: also modify debug state?
+            parser::parse_text(
+                self.region(),
+                self.context().symtab(),
+                Vec::from(text),
+                self.src_dbg_info(),
+            )?
+        };
 
-        self.eval
-            .push_frame_head(&mut self.out, eval::Opcode::Apply, self.top_env());
-        self.eval.push(proc);
+        assert!(self.inert_p());
+        unsafe {
+            (&raw mut (*self.raw()).eval).start(
+                &raw mut (*self.raw()).out,
+                self.top_env(),
+                expr_sexp,
+            );
+        }
+
+        Ok(())
     }
 
-    pub fn load_proc_by_sym(&mut self, sym: u32) {
+    /// Loads Sail procedure for immediate evaluation
+    pub fn load_proc_immed(self: Hdl<Self>, mut proc: SlHndl, args: &[SlHndl]) {
+        coretypck!(proc ; ProcLambda);
+        assert!(self.inert_p());
+        unsafe {
+            (&raw mut (*self.raw()).eval).start_proc(
+                &raw mut (*self.raw()).out,
+                self.top_env(),
+                proc,
+                args,
+            );
+        }
+    }
+
+    /// Loads Sail procedure for immediate evaluation, by symbol lookup
+    pub fn load_proc_by_sym(self: Hdl<Self>, sym: u32) {
         let proc = super::env_lookup_by_id(self.top_env(), sym).expect("symbol not bound");
-        self.load_proc_immed(proc)
+        self.load_proc_immed(proc, &[])
     }
 
     // TODO: somehow assert that code to run is in local region
 
-    pub fn load_direct(&mut self, sexp: SlHndl) {
-        assert!(self.eval.is_empty());
-        self.eval.start(&mut self.out, self.top_env(), sexp);
+    /// Loads Sail expression for immediate evaluation
+    pub fn load_direct(self: Hdl<Self>, sexp: SlHndl) {
+        assert!(self.inert_p());
+        unsafe {
+            (&raw mut (*self.raw()).eval).start(&raw mut (*self.raw()).out, self.top_env(), sexp);
+        }
     }
 
-    pub fn attempt_start(&self) -> bool {
-        let weft = unsafe { self.weft.as_mut().unwrap() };
-        weft.thaw(self.id)
+    /// Attempts to start evaluation running on Weft workers
+    pub fn attempt_start(self: Hdl<Self>) -> bool {
+        unsafe { (*self.raw()).weft.thaw((*self.raw()).id) }
     }
 
-    pub fn inert_p(&self) -> bool {
-        self.eval.is_empty()
+    /// True if the evaluator is empty of code
+    pub fn inert_p(self: Hdl<Self>) -> bool {
+        unsafe { (&raw const (*self.raw()).eval) }.is_empty()
     }
 
-    pub fn advance(&mut self) -> bool {
-        let self_ptr = self as *mut Self;
-        self.eval.iter_once(self_ptr)
+    // TODO: stack is Vessel's core; move to methods on Vessel itself?
+    // define Vessel in eval?
+    /// Advances evaluator by one stack frame
+    pub fn advance(self: Hdl<Self>) -> bool {
+        unsafe { (&raw mut (*self.raw()).eval) }.iter_once(self)
     }
 
-    pub fn result(&self) -> Option<SlHndl> {
-        unsafe { SlHndl::from_raw(self.out) }
+    /// Returns final result of this Vessel
+    pub fn result(self: Hdl<Self>) -> Option<SlHndl> {
+        unsafe { SlHndl::from_raw((*self.raw()).out) }
     }
 
-    pub fn clr_res(&mut self) {
-        if !self.out.is_null() {
-            unsafe {
-                let old = SlHndl::from_raw_unchecked(self.out);
-                self.out = std::ptr::null_mut();
+    /// Clears final result slot
+    pub fn clr_res(self: Hdl<Self>) {
+        unsafe {
+            if !(*self.raw()).out.is_null() {
+                let old = SlHndl::from_raw_unchecked((*self.raw()).out);
+                (*self.raw()).out = ptr::null_mut();
                 drop(old);
             }
         }
     }
 
     // TODO: this could be done much better (get it?)
-    pub fn done_p(&self) -> bool {
+    /// True if execution has finished with a result
+    pub fn done_p(self: Hdl<Self>) -> bool {
         self.inert_p() && self.result().is_some()
     }
 
@@ -634,13 +697,10 @@ impl Vessel {
 }
 
 /// Use with std::thread::spawn to take over an OS thread and run to
-/// completion of a vessel (simplest possible scheduler)
-pub fn exec_vessel(ptr: usize) {
-    let vsl = ptr as *mut Vessel;
-    let th_ref = unsafe { &mut *vsl };
-
+/// completion of a Vessel (simplest possible scheduler)
+pub fn exec_vessel(ptr: Hdl<Vessel>) {
     loop {
-        if !th_ref.advance() {
+        if !ptr.advance() {
             break;
         }
     }
