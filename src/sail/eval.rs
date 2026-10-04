@@ -25,6 +25,8 @@ use super::memmgt;
 use super::thread;
 
 use super::Hdl;
+
+use super::M_BASE;
 use super::{SP_COND, SP_DEF, SP_DO, SP_EVAL, SP_FN, SP_IF, SP_QUOTE, SP_SET, SP_WHILE};
 
 use std::alloc;
@@ -91,6 +93,8 @@ struct FrameHead {
     this_len: u8,
     /// Do we follow a tail? Or if a scope, were we created by a call?
     toc_p: bool,
+    /// If a scope, do we represent an included module?
+    mod_p: bool,
 
     // TODO: save four bytes of space to store the symbol which
     // referred to the module or procedure represented here?
@@ -420,6 +424,7 @@ impl EvalStack {
                 },
                 this_len: 2,
                 toc_p: false,
+                mod_p: false,
                 // unused: 0,
                 return_address: ret,
             };
@@ -570,6 +575,7 @@ impl EvalStack {
             false
         } else {
             self.scope_push(env, false);
+            self.import_module(M_BASE.0);
             self.frame_push_head(ret, Opcode::Apply);
             self.ref_push(proc);
             for a in args {
@@ -707,6 +713,17 @@ impl EvalStack {
         }
 
         true
+    }
+
+    // TODO: maybe a little strict / hard-coded
+    fn import_module(self: *mut Self, modsym: SlSym) {
+        // let mod_dict = self.scope_search(modsym).unwrap();
+        let mod_dict = env_lookup_by_id(self.scope_cur(), modsym).unwrap();
+
+        self.scope_push(mod_dict, false);
+        unsafe {
+            (*self.frame_idx(0)).mod_p = true;
+        }
     }
 
     /// Evaluates any Sail expression in object form, using the given

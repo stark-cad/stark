@@ -314,6 +314,7 @@ incl_symbols! {
     T_ENV         "env"     Type;
     T_ENV_LYR     "env-lyr" Type;
     T_VSL_REF     "vsl-hdl" Type;
+    M_BASE        "base"    Module;
     SP_AND        "and"     Basic;
     SP_COND       "cond"    Basic;
     SP_DEF        "def"     Basic;
@@ -525,67 +526,31 @@ pub fn structure_copy(tgt: *mut memmgt::Region, root: SlHndl) -> *mut SlHead {
     new_ptrs[0]
 }
 
-
-/// Accepts an input stream and runs a read - evaluate - print loop perpetually
-pub fn repl(stream_in: std::io::Stdin) {
 pub fn single_thread_setup() -> (thread::WeftOwner, Hdl<thread::Vessel>) {
     // TODO: consider stack-like environment per function
-    // TODO: design module / namespace mechanisms
     // TODO: implement module / namespace mechanisms
 
     let tact = thread::Tact::create(251);
-    let mut weft = thread::Weft::create(tact);
-
-    global_ctx_setup(weft.ctx_mut());
     let mut weft = thread::Weft::create(tact, cfg!(feature = "memdbg"));
 
-    let thr = thread::Vessel::summon(&mut weft, 10000, 100000, None);
     // TODO: decide how to lay out the Weft interface
     global_ctx_setup(weft.raw.context());
 
-    vessel_env_setup(thr);
     let vsl = thread::Vessel::summon(&mut weft, 10000, 17);
 
-    // TODO: some kind of thread handle?
-    let thread_ref = unsafe { &mut *thr };
+    let base_mod = env_make(vsl.region());
 
-    weft.assign_special(thread_ref.id);
-    weft.add_worker();
+    insert_native_procs(
+        vsl.region(),
+        vsl.context().symtab(),
+        base_mod.clone(),
+        stdenv::ENVFNS,
+    );
 
-    let region = thread_ref.region();
+    env_ins_by_id(vsl.region(), vsl.top_env(), M_BASE.0, base_mod);
 
-    loop {
-        let mut input = String::new();
-        stream_in.read_line(&mut input).expect("Failure");
-
-        let expr = match parser::parse(region, weft.ctx_mut().symtab(), &input, false) {
-            Ok(out) => out,
-            Err(err) => {
-                println!("{:?}\n", err);
-                continue;
-            }
-        };
-
-        thread_ref.load_direct(expr);
-
-        while thread_ref.advance() {}
-
-        println!(
-            "{}\n",
-            context(weft.ctx_mut().symtab(), thread_ref.result().unwrap())
-        );
-    }
-}
-
-/// Runs a Sail file in its own context
-pub fn run_file(filename: &str) -> Result<String, SlErrCode> {
-    let file = match std::fs::read_to_string(filename) {
-        Ok(s) => s,
-        Err(_) => return Err(SlErrCode::FileCouldNotRead),
-    };
     weft.raw.add_worker();
 
-    interpret(&file, true)
     (weft, vsl)
 }
 

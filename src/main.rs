@@ -64,17 +64,20 @@ fn main() {
 
     sail::memmgt::init();
 
+    // TODO: actual argument recognition
+    // TODO: return exit code from main
+
     // cargo run file <filename> to run a Sail file
     // cargo run repl for Sail REPL
     let args: Vec<String> = env::args().collect();
     if args.len() >= 3 {
-        match sail::run_file(&args[2]) {
+        match run_file(&args[2]) {
             Ok(out) => println!("{}", out),
             Err(err) => println!("{:?}", err),
         }
-        std::process::exit(0);
+        std::process::exit(0)
     } else if args.len() >= 2 {
-        sail::repl(io::stdin())
+        repl(io::stdin())
     }
 
     let (frame, event_loop) = context::init_context(NAME, ICON, SIZE[0], SIZE[1]);
@@ -160,4 +163,56 @@ fn main() {
         fr_dims,
         cur_pos,
     );
+}
+
+/// Accepts an input stream and runs a read - evaluate - print loop perpetually
+fn repl(stream_in: std::io::Stdin) -> ! {
+    let (weft, vsl) = sail::single_thread_setup();
+
+    let region = vsl.region();
+
+    let mut input = String::new();
+    loop {
+        print!(" -> ");
+
+        input.clear();
+        stream_in.read_line(&mut input).expect("stdin read failure");
+
+        if input.is_empty() {
+            drop(weft);
+            std::process::exit(0)
+        }
+
+        let expr = match sail::parser::parse_text(
+            region,
+            weft.raw.context().symtab(),
+            input.as_bytes().to_vec(),
+            None,
+        ) {
+            Ok(out) => out,
+            Err(err) => {
+                println!("{:?}\n", err);
+                continue;
+            }
+        };
+
+        vsl.load_direct(expr);
+
+        while vsl.advance() {}
+
+        println!(
+            "{}\n",
+            sail::debug::bundle(weft.raw.context().symtab(), vsl.result().unwrap())
+        );
+    }
+}
+
+/// Runs a Sail file in its own context
+fn run_file(filename: &str) -> Result<String, sail::debug::SlErrCode> {
+    let file = match std::fs::read_to_string(filename) {
+        Ok(s) => s,
+        Err(_) => return Err(sail::debug::SlErrCode::FileCouldNotRead),
+    };
+
+    sail::interpret(&file, true)
 }
