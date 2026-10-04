@@ -69,7 +69,12 @@
 
 (def step (as-f32 0.0625))
 
-(def prot-rec-proc (eval (parse (temp-read-file "scripts/prot_line_rec.sl"))))
+;; alist associating record ID to record data, followed by default record ID
+(def default-codex '(((1 ([0 () #'t] [1 () #'e] [2 () #'s] [3 () #'t]))) 1))
+
+(eval (parse-file "scripts/codex_mgr.sl"))
+
+(def prot-rec-proc (eval (parse-file "scripts/prot_line_rec.sl")))
 
 (def child-records [])
 (def cur-child ())
@@ -77,11 +82,11 @@
 (def gw-sig :get-win)
 
 (def inst-window (fn []
-     (def new-thr (th-spawn prot-rec-proc))
-     (vec-push child-records new-thr)
-     (qtx rdr-tgt (link gw-sig (link (th-id new-thr) (rest new-thr))))
-     (qtx (rest new-thr) (link :ini-rdt rdr-tgt))
-     (qtx (rest new-thr) (link :ini-cxt (own-tx-hdl)))
+     (def new-vsl (vsl-spawn prot-rec-proc '()))
+     (vec-push child-records new-vsl)
+     (qtx rdr-tgt (link gw-sig (link (vsl-id new-vsl) (rest new-vsl))))
+     (qtx (rest new-vsl) (link :ini-rdt rdr-tgt))
+     (qtx (rest new-vsl) (link :ini-cxt (own-tx-hdl)))
 ))
 
 (def vec-find (fn [target pred]
@@ -93,6 +98,8 @@
             (if (pred entry) (set found #T) ())
             (set idx (+ 1 idx)))
      (if found entry ())))
+
+(def cdx (vsl-spawn manager (list default-codex)))
 
 (inst-window)
 
@@ -121,7 +128,7 @@
                  (set wh (rest input))
                  (print wh)
                  (set id (rest wh))
-                 (set slot (vec-find child-records (fn [e] (= id (th-id e)))))
+                 (set slot (vec-find child-records (fn [e] (= id (vsl-id e)))))
                  (if (not (eq slot ())) (do
                      (link (rest slot) wh)
                      (qtx (rest slot) (link iw-sig wh))) ()))
@@ -178,7 +185,7 @@
                     (if cur-child (qtx (rest cur-child) input) ()))
            ))
 
-         (= input (th-id cur-child)) (do
+         (= input (vsl-id cur-child)) (do
              (set input (rest input))
              (if (eq input :cmv-req) (do
                  (print "cursor move requested, lol"))

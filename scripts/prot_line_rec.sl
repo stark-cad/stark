@@ -17,6 +17,7 @@
 
 ;; <>
 
+;; TODO: load whole file with inherent separation from loading context
 (fn []
     ;; input comes from common manager thread (initialization, human interaction)
 

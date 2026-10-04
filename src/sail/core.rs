@@ -2061,6 +2061,8 @@ pub fn core_eq(mut fst: SlHndl, mut lst: SlHndl) -> bool {
             Some(CoreType::Bool) => bool_get(fst) == bool_get(lst),
             Some(CoreType::Symbol) => sym_get_id(fst) == sym_get_id(lst),
             Some(CoreType::VecStr) => string_get(fst) == string_get(lst),
+            // TODO: set rules for number system
+            Some(CoreType::I64) => i64_get(fst) == i64_get(lst),
             _ => false,
         }
     }
@@ -2129,18 +2131,23 @@ pub fn hash_map_insert(reg: *mut Region, loc: SlHndl, key: SlHndl, val: SlHndl) 
 //     alist_search(entry, key)
 // }
 
-// fn alist_search(head: *mut SlHead, target: *mut SlHead) -> *mut SlHead {
-//     let mut pos = head;
-//     loop {
-//         if nil_p(pos) {
-//             return nil();
-//         }
-//         if core_eq(ref_get(pos), target) {
-//             return pos;
-//         }
-//         pos = get_next_list_elt(pos);
-//     }
-// }
+/// For a list of lists, where the keys are the first element of each
+/// sublist, and the values are what follows
+pub fn alist_search(head: SlHndl, target: SlHndl) -> Option<SlHndl> {
+    let mut pos = head;
+    loop {
+        if let Some(chain) = ref_get(pos.clone())
+            && core_eq(chain.clone(), target.clone())
+        {
+            return Some(chain);
+        }
+
+        pos = match get_next_list_elt(pos.clone()) {
+            Some(p) => p,
+            None => return None,
+        }
+    }
+}
 
 #[inline(always)]
 pub fn proc_get_argct(mut loc: SlHndl) -> u16 {

@@ -18,14 +18,31 @@
 
 ;; <>
 
-(def manager [codex]
-     ;; knows the full list (index) of records, which ones are live,
-     ;; the keeper vessels thereof, and their queue inlet handles
-     ;; (message targets)
+(def manager
+     (fn [codex]
+         (def input ())
+         ;; knows the full list (index) of records, which ones are live,
+         ;; the keeper vessels thereof, and their queue inlet handles
+         ;; (message targets)
 
-     ;; responsible for instantiating record keepers
-     (while #T
-       (set input (qrx))
+         (print "codex manager spawned with:")
+         (print codex)
 
-       )
-     )
+         ;; start by spawning keeper vessel for default record, whose
+         ;; data will be passed as an argument
+
+         ;; also spawn a buffer vessel linked to that record, and seek
+         ;; a window for it to render into
+
+         (def default-record (alist-get (fst codex) (rest codex)))
+
+         (eval (parse-file "scripts/record_kpr.sl"))
+
+         (def drec (vsl-spawn keeper (list default-record)))
+
+         ;; responsible for instantiating record keepers
+         (while #T
+           (set input (qrx))
+
+           )
+         ))

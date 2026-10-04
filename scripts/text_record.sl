@@ -27,10 +27,9 @@
 
 ;; NOTE: initializer, two operations, one query
 
-(def init (fn []
-              '()))
 
-;; TODO: tail call optimization (track identifier for proc?)
+(def init (fn [] ()))
+
 (def insert (fn [self stamp tgt char]
                 (def elt (vec-new))
                 (vec-push elt stamp)
@@ -60,7 +59,6 @@
                 (del-inner 0 (fst self))))
 
 ;; (set (vec-get cur 1) stamp)))
-
 ;; TODO: set resolves first argument to a pointer to a SlHndl slot,
 ;; allowing for general use to set symbol values or modify collections
 
@@ -76,9 +74,8 @@
 
 ;; NOTE: this logic all belongs in the record task
 
-(def next-stamp (fn [self])
-     ;; TODO: prototype: add 1 to current last stamp
-     )
+;; TODO: prototype: add 1 to current last stamp
+(def next-stamp (fn [self] ()))
 
 (def ins-local (fn [self tgt char]
                  (insert self (next-stamp self) tgt char)))
@@ -88,7 +85,7 @@
 
 (def interface [[:op 1 apply-op] [:ins 2 ins-local] [:del 1 del-local] [:xstr 0 as-str]])
 
-(def apply-op (fn [self op]))
+(def apply-op (fn [self op] ()))
 
 ;; [:ins <stamp> <tgt> <char>]
 
@@ -96,3 +93,5 @@
 ;; (.insert record 157 #'a)
 
 ;; (.push vec 'a')
+
+(print "text record module loaded")

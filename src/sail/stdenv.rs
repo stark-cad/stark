@@ -404,6 +404,11 @@ sail_fn! {
         }
     }
 
+    // TODO: variadic procedures
+    "list" [arg] {
+        ref_init(_vsl.region(), arg)
+    }
+
     // TODO: automatically link following item
     "link" [fst, nxt] {
         set_next_list_elt(_env, fst.clone(), nxt);
@@ -416,6 +421,20 @@ sail_fn! {
             CoreType::F64 => return f32_init(reg, f64_get(val) as f32),
             CoreType::I64 => return f32_init(reg, i64_get(val) as f32),
             _ => panic!("type invalid for cast"),
+        }
+    }
+
+    "alist-get" [loc, tgt] {
+        let reg = _vsl.region();
+        let lst = if coretypp!(loc ; Ref) {
+            ref_get(loc).expect("null ref!")
+        } else {
+            loc
+        };
+
+        match alist_search(lst, tgt) {
+            Some(c) => get_next_list_elt(c).unwrap(),
+            None => bool_init(reg, false),
         }
     }
 
@@ -530,7 +549,21 @@ sail_fn! {
         };
     }
 
-    "temp-read-file" [path] {
+    "parse-file" [path] {
+        coretypck!(path ; VecStr);
+        let pth = std::path::PathBuf::from(string_get(path));
+
+        let reg = _vsl.region();
+        let tbl = (_vsl.context()).symtab() ;
+        let dbd = _vsl.src_dbg_info() ;
+
+        return match parser::parse_file(reg, tbl, pth, dbd) {
+            Ok(head) => head,
+            Err(err) => debug::errcode_init(reg, err),
+        };
+    }
+
+    "tmp-read-file" [path] {
         coretypck!(path ; VecStr);
         let pth = string_get(path);
 
