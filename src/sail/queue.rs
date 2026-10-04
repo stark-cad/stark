@@ -320,8 +320,7 @@ mod inlet_tests {
         let mut rx_in = test_queue(100);
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
-
-        let ogv = super::super::parser::parse(tx_reg, &mut tbl, &exp, false).unwrap();
+        let ogv = parser::parse_text(tx_reg, tref, exp.clone().into_bytes(), None).unwrap();
 
         test_hdl(&mut rx_in).transmit(1, ogv);
 

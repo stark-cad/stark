@@ -18,158 +18,227 @@
 
 // <>
 
-// TODO: move to using &mut for the Region instead of *mut
+// TODO: move to using a handle for the Region
 
-use super::{SlErrCode, Stab, core::*, memmgt};
+use super::{Hdl, Stab, core::*, debug, memmgt};
 
 use std::iter;
 use std::str;
 
-// struct Parser {
-//     chars: iter::Peekable<str::Bytes<'static>>,
-//     acc: Vec<u8>,
-// }
-
-/// Parses a textual Sail expression into a structure of Sail objects
-pub fn parse(
+struct ParseState<'a> {
+    acc: Vec<u8>,
     reg: *mut memmgt::Region,
-    tbl: &mut Stab,
-    code: &str,
-    file: bool,
-) -> Result<SlHndl, SlErrCode> {
-    // Accumulator for collecting string values
-    let mut acc: Vec<u8> = Vec::new();
+    tbl: Hdl<Stab>,
+    src: u32,
+    ln: u32,
+    dbg: Option<&'a mut debug::SrcInfo>,
+    cursor: iter::Peekable<iter::Copied<std::slice::Iter<'a, u8>>>,
+}
 
-    let chars = if file {
-        String::from("(do ") + code + ")"
+pub fn wrap_prog(code: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(code.len() + 6);
+    out.extend(b"(do\n");
+    out.extend(code);
+    out.extend(b"\n)");
+    out
+}
+
+fn parse_inner(
+    reg: *mut memmgt::Region,
+    tbl: Hdl<Stab>,
+    src: Option<debug::Source>,
+    mut dbd: Option<&mut debug::SrcInfo>,
+    text: Vec<u8>,
+) -> Result<SlHndl, debug::SlErrCode> {
+    let src = if let Some(d) = dbd.as_deref_mut() {
+        d.add_src(src.expect("all or nothing"))
     } else {
-        code.to_string()
+        u32::MAX
     };
 
-    let mut cit = chars.bytes().peekable();
+    let mut init = ParseState {
+        acc: Vec::new(),
+        reg,
+        tbl,
+        src,
+        ln: 0,
+        dbg: dbd,
+        cursor: text.iter().copied().peekable(),
+    };
 
-    let val = read_value(&mut cit, &mut acc, reg, tbl)?;
+    let val = read_value(&mut init)?;
 
     Ok(val)
 }
 
-// pub fn parse_bytes(tbl: *mut SlHead, code: &[u8]) -> Result<*mut SlHead, SlErrCode> {
-//     let mut acc: Vec<u8> = Vec::new();
-//     let mut chars = code.iter().peekable();
+// TODO: should the actual source handling happen elsewhere?
+pub fn parse_text(
+    reg: *mut memmgt::Region,
+    tbl: Hdl<Stab>,
+    code: Vec<u8>,
+    dbg: Option<&mut debug::SrcInfo>,
+) -> Result<SlHndl, debug::SlErrCode> {
+    parse_inner(reg, tbl, Some(debug::Source::Text(code.clone())), dbg, code)
+}
 
-//     read_value(&mut chars, &mut acc, tbl, false)
-// }
+pub fn parse_obj(
+    reg: *mut memmgt::Region,
+    tbl: Hdl<Stab>,
+    mut loc: SlHndl,
+    dbg: Option<&mut debug::SrcInfo>,
+) -> Result<SlHndl, debug::SlErrCode> {
+    coretypck!(loc ; VecStr);
+    let code = string_get(loc.clone());
+    parse_inner(
+        reg,
+        tbl,
+        Some(debug::Source::Object(loc)),
+        dbg,
+        wrap_prog(code.as_bytes()),
+    )
+}
+
+pub fn parse_file(
+    reg: *mut memmgt::Region,
+    tbl: Hdl<Stab>,
+    fpa: std::path::PathBuf,
+    dbg: Option<&mut debug::SrcInfo>,
+) -> Result<SlHndl, debug::SlErrCode> {
+    let code = std::fs::read(&fpa).map_err(|_| debug::SlErrCode::FileCouldNotRead)?;
+    parse_inner(
+        reg,
+        tbl,
+        Some(debug::Source::File(fpa)),
+        dbg,
+        wrap_prog(&code),
+    )
+}
+
+// NOTE: keep in mind =next_if_map= and =next_if_map_mut= on Peekable
 
 /// Returns the head of a Sail object structure representing a single
 /// item parsed from the input stream
 ///
 /// This is a recursive descent parser; the appropriate reader can
 /// almost always be deduced from the first character
-fn read_value(
-    chars: &mut iter::Peekable<str::Bytes>,
-    acc: &mut Vec<u8>,
-    reg: *mut memmgt::Region,
-    tbl: &mut Stab,
-) -> Result<SlHndl, SlErrCode> {
+fn read_value(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
     let value;
 
-    let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
-    while c.is_ascii_whitespace() || c == b';' {
-        if c == b';' {
-            while *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?) != b'\n' {
-                chars.next();
+    let mut in_comment = false;
+    loop {
+        match *(s
+            .cursor
+            .peek()
+            .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?)
+        {
+            b';' => {
+                in_comment = true;
+                s.cursor.next();
             }
+            b'\n' => {
+                in_comment = false;
+                s.ln += 1;
+                s.cursor.next();
+            }
+            c if in_comment || c.is_ascii_whitespace() => {
+                s.cursor.next();
+            }
+            _ => break,
         }
-        chars.next();
-        c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
     }
 
-    match c {
+    // let mut c = **(chars.peek().ok_or(debug::SlErrCode::ParseUnexpectedEnd)?);
+    // while c.is_ascii_whitespace() || c == b';' {
+    //     if c == b';' {
+    //         while **(chars.peek().ok_or(debug::SlErrCode::ParseUnexpectedEnd)?) != b'\n' {
+    //             chars.next();
+    //         }
+    //     }
+    //     chars.next();
+    //     c = **(chars.peek().ok_or(debug::SlErrCode::ParseUnexpectedEnd)?);
+    // }
+
+    match *(s
+        .cursor
+        .peek()
+        .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?)
+    {
         b'\'' => {
-            chars.next();
-            value = read_quote(chars, acc, reg, tbl)?;
+            s.cursor.next();
+            value = read_quote(s)?;
         }
         b'(' => {
-            chars.next();
-            value = read_list(chars, acc, reg, tbl)?;
+            s.cursor.next();
+            value = read_list(s)?;
         }
         b'[' => {
-            chars.next();
-            value = read_vec(chars, acc, reg, tbl)?;
+            s.cursor.next();
+            value = read_vec(s)?;
         }
         b'{' => {
-            chars.next();
-            value = read_map(chars, acc, reg, tbl)?;
-        }
-        b':' => {
-            chars.next();
-            value = read_spec_sym(chars, acc, reg, tbl, SymbolMode::Keyword)?;
-            acc.clear();
-        }
-        b'$' => {
-            chars.next();
-            value = read_spec_sym(chars, acc, reg, tbl, SymbolMode::Type)?;
-            acc.clear();
-        }
-        b'@' => {
-            chars.next();
-            value = read_spec_sym(chars, acc, reg, tbl, SymbolMode::Module)?;
-            acc.clear();
+            s.cursor.next();
+            value = read_map(s)?;
         }
         b'"' => {
-            chars.next();
-            value = read_string(chars, acc, reg, tbl)?;
-            acc.clear();
+            s.cursor.next();
+            value = read_string(s)?;
+            s.acc.clear();
         }
         b'#' => {
-            chars.next();
-            value = read_special(chars, acc, reg, tbl)?;
-            acc.clear();
+            s.cursor.next();
+            value = read_special(s)?;
+            s.acc.clear();
         }
         b'+' | b'-' => {
-            acc.push(chars.next().unwrap());
-            if chars
+            s.acc.push(s.cursor.next().unwrap());
+            if s.cursor
                 .peek()
-                .ok_or(SlErrCode::ParseUnexpectedEnd)?
+                .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?
                 .is_ascii_digit()
             {
-                value = read_number(chars, acc, reg, tbl)?;
+                value = read_number(s)?;
             } else {
-                value = read_symbol(chars, acc, reg, tbl)?;
+                value = read_sym(s)?;
             }
-            acc.clear();
+            s.acc.clear();
         }
-        b'*' | b'/' | b'<' | b'=' | b'>' | b'_' => {
-            value = read_symbol(chars, acc, reg, tbl)?;
-            acc.clear();
+        b':' | b'$' | b'@' | b'*' | b'/' | b'<' | b'=' | b'>' | b'_' => {
+            value = read_sym(s)?;
+            s.acc.clear();
         }
-        _ if c.is_ascii_alphabetic() => {
-            value = read_symbol(chars, acc, reg, tbl)?;
-            acc.clear();
+        c if c.is_ascii_alphabetic() => {
+            value = read_sym(s)?;
+            s.acc.clear();
         }
-        _ if c.is_ascii_digit() => {
-            value = read_number(chars, acc, reg, tbl)?;
-            acc.clear();
+        c if c.is_ascii_digit() => {
+            value = read_number(s)?;
+            s.acc.clear();
         }
         _ => {
-            return Err(SlErrCode::ParseInvalidChar);
+            return Err(debug::SlErrCode::ParseInvalidChar);
         }
     }
+
+    if let Some(d) = s.dbg.as_mut() {
+        let did = if cfg!(feature = "memdbg") {
+            unsafe { value.memdbg_obj_id_immed() }
+        } else {
+            (unsafe { value.get_raw() } as usize & u32::MAX as usize) as u32
+        };
+
+        d.ins_entry(did, s.src, s.ln)
+    }
+
     Ok(value)
 }
 
 /// Reads a quoted expression off the input stream, into the
 /// appropriate object structure
-fn read_quote(
-    chars: &mut iter::Peekable<str::Bytes>,
-    acc: &mut Vec<u8>,
-    reg: *mut memmgt::Region,
-    tbl: &mut Stab,
-) -> Result<SlHndl, SlErrCode> {
-    let start = sym_init(reg, super::SP_QUOTE.0);
-    let head = ref_init(reg, start.clone());
+fn read_quote(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
+    let start = sym_init(s.reg, super::SP_QUOTE.0);
+    let head = ref_init(s.reg, start.clone());
 
-    let end = read_value(chars, acc, reg, tbl)?;
+    let end = read_value(s)?;
     unsafe {
         inc_refc(end.get_raw());
         set_next_list_elt_unsafe_unchecked(start, end);
@@ -180,33 +249,34 @@ fn read_quote(
 
 /// Reads a list of values from the input stream and creates a
 /// corresponding list of Sail objects
-fn read_list(
-    chars: &mut iter::Peekable<str::Bytes>,
-    acc: &mut Vec<u8>,
-    reg: *mut memmgt::Region,
-    tbl: &mut Stab,
-) -> Result<SlHndl, SlErrCode> {
-    let head = ref_make(reg);
+fn read_list(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
+    let head = ref_make(s.reg);
 
-    let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
-    if c == b')' {
-        chars.next();
-        return Ok(head);
-    }
+    let mut c = *(s
+        .cursor
+        .peek()
+        .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?);
 
     let mut count = 0;
     let mut tail = head.clone();
 
     while c != b')' {
         match c {
-            b';' => while chars.next().unwrap_or(b'\n') != b'\n' {},
+            b';' => {
+                while s.cursor.next().unwrap_or(b'\n') != b'\n' {}
+                s.ln += 1;
+            }
+            b'\n' => {
+                s.cursor.next();
+                s.ln += 1;
+            }
             _ if c.is_ascii_whitespace() => {
-                chars.next();
+                s.cursor.next();
             }
             _ => {
                 // append to the list tail
                 tail = {
-                    let next = read_value(chars, acc, reg, tbl)?;
+                    let next = read_value(s)?;
                     unsafe {
                         inc_refc(next.get_raw());
                         if count < 1 {
@@ -222,10 +292,13 @@ fn read_list(
             }
         }
 
-        c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
+        c = *(s
+            .cursor
+            .peek()
+            .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?);
     }
 
-    chars.next();
+    s.cursor.next();
     Ok(head)
 }
 
@@ -234,55 +307,66 @@ fn read_list(
 
 /// Reads a vector from the input stream and creates the corresponding
 /// Sail object
-fn read_vec(
-    chars: &mut iter::Peekable<str::Bytes>,
-    acc: &mut Vec<u8>,
-    reg: *mut memmgt::Region,
-    tbl: &mut Stab,
-) -> Result<SlHndl, SlErrCode> {
+fn read_vec(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
     let mut tvc = vec![];
-    let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
+    let mut c = *(s
+        .cursor
+        .peek()
+        .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?);
     while c != b']' {
         match c {
-            b';' => while chars.next().unwrap_or(b'\n') != b'\n' {},
-            _ if c.is_ascii_whitespace() => {
-                chars.next();
+            b';' => {
+                while s.cursor.next().unwrap_or(b'\n') != b'\n' {}
+                s.ln += 1;
             }
-            _ => tvc.push(read_value(chars, acc, reg, tbl)?),
+            b'\n' => {
+                s.cursor.next();
+                s.ln += 1;
+            }
+            _ if c.is_ascii_whitespace() => {
+                s.cursor.next();
+            }
+            _ => tvc.push(read_value(s)?),
         }
-        c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
+        c = *(s
+            .cursor
+            .peek()
+            .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?);
     }
-    let vec = stdvec_init(reg, &tvc.into_boxed_slice());
-    chars.next();
+    let vec = stdvec_init(s.reg, &tvc.into_boxed_slice());
+    s.cursor.next();
     Ok(vec)
 }
 
 /// Reads an associative map from the input stream and creates the
 /// corresponding Sail object
-fn read_map(
-    chars: &mut iter::Peekable<str::Bytes>,
-    acc: &mut Vec<u8>,
-    reg: *mut memmgt::Region,
-    tbl: &mut Stab,
-) -> Result<SlHndl, SlErrCode> {
-    let map = hashvec_make(reg, 16);
-    let mut c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
+fn read_map(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
+    let map = hashvec_make(s.reg, 16);
+    let mut c = *(s
+        .cursor
+        .peek()
+        .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?);
     while c != b'}' {
         match c {
-            b';' => while chars.next().unwrap_or(b'\n') != b'\n' {},
-            _ if c.is_ascii_whitespace() => {
-                chars.next();
+            b';' => {
+                while s.cursor.next().unwrap_or(b'\n') != b'\n' {}
+                s.ln += 1;
             }
-            _ => hash_map_insert(
-                reg,
-                map.clone(),
-                read_value(chars, acc, reg, tbl)?,
-                read_value(chars, acc, reg, tbl)?,
-            ),
+            b'\n' => {
+                s.cursor.next();
+                s.ln += 1;
+            }
+            _ if c.is_ascii_whitespace() => {
+                s.cursor.next();
+            }
+            _ => hash_map_insert(s.reg, map.clone(), read_value(s)?, read_value(s)?),
         }
-        c = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
+        c = *(s
+            .cursor
+            .peek()
+            .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?);
     }
-    chars.next();
+    s.cursor.next();
     Ok(map)
 }
 
@@ -354,25 +438,26 @@ fn read_spec_sym(
 }
 
 /// Reads a string from the input stream and creates its Sail object
-fn read_string(
-    chars: &mut iter::Peekable<str::Bytes>,
-    acc: &mut Vec<u8>,
-    reg: *mut memmgt::Region,
-    _tbl: &mut Stab,
-) -> Result<SlHndl, SlErrCode> {
-    let mut next = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
+fn read_string(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
+    let mut next = *(s
+        .cursor
+        .peek()
+        .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?);
     while next != b'"' {
-        acc.push(chars.next().unwrap());
-        next = *(chars.peek().ok_or(SlErrCode::ParseUnexpectedEnd)?);
+        s.acc.push(s.cursor.next().unwrap());
+        next = *(s
+            .cursor
+            .peek()
+            .ok_or(debug::SlErrCode::ParseUnexpectedEnd)?);
     }
 
-    chars.next();
+    s.cursor.next();
 
     let string = string_init(
-        reg,
-        match str::from_utf8(acc) {
+        s.reg,
+        match str::from_utf8(&s.acc) {
             Ok(s) => s,
-            _ => return Err(SlErrCode::ParseInvalidString),
+            _ => return Err(debug::SlErrCode::ParseInvalidString),
         },
     );
 
@@ -380,81 +465,71 @@ fn read_string(
 }
 
 /// Reads a number from the input stream and creates its Sail object
-fn read_number(
-    chars: &mut iter::Peekable<str::Bytes>,
-    acc: &mut Vec<u8>,
-    reg: *mut memmgt::Region,
-    _tbl: &mut Stab,
-) -> Result<SlHndl, SlErrCode> {
+fn read_number(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
     while {
-        let peek = chars.peek().unwrap_or(&b' ');
+        let peek = s.cursor.peek().unwrap_or(&&b' ');
         match peek {
             b')' | b']' | b'}' => false,
             _ if peek.is_ascii_whitespace() => false,
             _ => true,
         }
     } {
-        let next = chars.next().unwrap();
+        let next = s.cursor.next().unwrap();
         match next {
-            b'+' | b'-' | b'_' | b'.' => acc.push(next),
-            _ if next.is_ascii_alphanumeric() => acc.push(next),
+            b'+' | b'-' | b'_' | b'.' => s.acc.push(next),
+            _ if next.is_ascii_alphanumeric() => s.acc.push(next),
             _ => {
-                return Err(SlErrCode::ParseInvalidChar);
+                return Err(debug::SlErrCode::ParseInvalidChar);
             }
         }
     }
-    process_num(unsafe { str::from_utf8_unchecked(acc) }, reg)
+    process_num(unsafe { str::from_utf8_unchecked(&s.acc) }, s.reg)
 }
 
 /// Reads a special item from the input stream and creates a Sail
 /// object if appropriate
-fn read_special(
-    chars: &mut iter::Peekable<str::Bytes>,
-    acc: &mut Vec<u8>,
-    reg: *mut memmgt::Region,
-    _tbl: &mut Stab,
-) -> Result<SlHndl, SlErrCode> {
+fn read_special(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
     while {
-        let peek = chars.peek().unwrap_or(&b' ');
+        let peek = s.cursor.peek().unwrap_or(&b' ');
         match peek {
             b')' | b']' | b'}' => false,
             _ if peek.is_ascii_whitespace() => false,
             _ => true,
         }
     } {
-        let next = chars.next().unwrap();
+        let next = s.cursor.next().unwrap();
         match next {
-            b'_' | b'\'' => acc.push(next),
-            _ if next.is_ascii_alphanumeric() => acc.push(next),
+            b'_' | b'\'' => s.acc.push(next),
+            _ if next.is_ascii_alphanumeric() => s.acc.push(next),
             _ => {
-                return Err(SlErrCode::ParseInvalidChar);
+                return Err(debug::SlErrCode::ParseInvalidChar);
             }
         }
     }
 
-    if acc.is_empty() {
-        return Err(SlErrCode::ParseUnexpectedEnd);
+    if s.acc.is_empty() {
+        return Err(debug::SlErrCode::ParseUnexpectedEnd);
     }
 
-    if acc[0].eq_ignore_ascii_case(&b't') && acc.len() == 1 {
-        Ok(bool_init(reg, true))
-    } else if acc[0].eq_ignore_ascii_case(&b'f') && acc.len() == 1 {
-        Ok(bool_init(reg, false))
-    } else if acc[0].eq(&b'\'') && acc.len() == 2 {
-        Ok(u8_init(reg, acc[1]))
+    if s.acc[0].eq_ignore_ascii_case(&b't') && s.acc.len() == 1 {
+        Ok(bool_init(s.reg, true))
+    } else if s.acc[0].eq_ignore_ascii_case(&b'f') && s.acc.len() == 1 {
+        Ok(bool_init(s.reg, false))
+    } else if s.acc[0].eq(&b'\'') && s.acc.len() == 2 {
+        Ok(u8_init(s.reg, s.acc[1]))
     } else {
-        Err(SlErrCode::ParseBadSpecial)
+        Err(debug::SlErrCode::ParseBadSpecial)
     }
 }
 
 /// Parses a number and creates an object according to its textual
 /// representation
-fn process_num(slice: &str, reg: *mut memmgt::Region) -> Result<SlHndl, SlErrCode> {
+fn process_num(slice: &str, reg: *mut memmgt::Region) -> Result<SlHndl, debug::SlErrCode> {
     if let Ok(n) = slice.parse::<i64>() {
         Ok(i64_init(reg, n))
     } else if let Ok(n) = slice.parse::<f64>() {
         Ok(f64_init(reg, n))
     } else {
-        Err(SlErrCode::ParseInvalidNum)
+        Err(debug::SlErrCode::ParseInvalidNum)
     }
 }

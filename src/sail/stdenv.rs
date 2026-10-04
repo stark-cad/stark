@@ -494,9 +494,9 @@ sail_fn! {
         let reg = unsafe { (*_vsl).region() };
         let tbl = unsafe { ((*_vsl).context()).symtab() };
 
-        return match super::parser::parse(reg, tbl, strsl, false) {
+        return match parser::parse_text(reg, tbl, Vec::from(strsl), None) {
             Ok(head) => head,
-            Err(err) => super::errcode_init(reg, err),
+            Err(err) => debug::errcode_init(reg, err),
         };
     }
 
@@ -507,9 +507,9 @@ sail_fn! {
         let reg = unsafe { (*_vsl).region() };
         let tbl = unsafe { ((*_vsl).context()).symtab() };
 
-        return match super::parser::parse(reg, tbl, strsl, true) {
+        return match parser::parse_obj(reg, tbl, strin, dbd) {
             Ok(head) => head,
-            Err(err) => super::errcode_init(reg, err),
+            Err(err) => debug::errcode_init(reg, err),
         };
     }
 
@@ -517,11 +517,11 @@ sail_fn! {
         coretypck!(path ; VecStr);
         let pth = string_get(path);
 
-        let reg = unsafe { (*_vsl).region() };
+        let reg = _vsl.region();
 
         let out = match std::fs::read_to_string(pth) {
             Ok(s) => super::string_init(reg, &s),
-            Err(_) => super::errcode_init(reg, super::SlErrCode::FileCouldNotRead)
+            Err(_) => debug::errcode_init(reg, super::debug::SlErrCode::FileCouldNotRead)
         };
 
         out
