@@ -19,7 +19,8 @@
 
 // <>
 
-use super::{SlHead, HEAD_LEN, NUM_32_LEN};
+use super::util;
+use super::{HEAD_LEN, NUM_32_LEN, SlHead};
 
 use std::alloc;
 use std::mem;
@@ -1483,31 +1484,499 @@ mod free_tree_tests {
 
 
 // TODO: store zone location information?
+// minimum zone size 2^8; maximum zone size 2^31; only powers of 2
+// permitted, only 5 bits needed to specify.
+
+// first field: initial 56 bits contain the prefix (first 16 bits will
+// be empty). last 6 bits give the length of the prefix. bits 6 and 7
+// (from right) signal type of following addresses; 7 for n0, 6 for
+// n1; HIGH means a zone pointer (so test against zone address with
+// known size), low means another node
+
+const PTR_BIT_W: usize = super::PTR_LEN as usize * 8;
+
+struct AddrPfxNode {
+    // NOTE: bits?
+    pfx: PfxInfo,
+    slots: [PfxTgt; 2],
+}
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct PfxInfo(usize);
+
+impl PfxInfo {
+    fn breakout(self) -> (usize, u8, bool, bool) {
+        let width = (self.0 & 0b00111111) as u8;
+        let slot_0_zone_p = self.0 & 0b10000000 != 0;
+        let slot_1_zone_p = self.0 & 0b01000000 != 0;
+
+        let prefix = take_msb_span(self.0, width);
+
+        (prefix, width as u8, slot_0_zone_p, slot_1_zone_p)
+    }
+}
+
+union PfxTgt {
+    node: ptr::NonNull<AddrPfxNode>,
+    zone: ptr::NonNull<Zone>,
+}
+
+fn cons_pfx(val: usize, width: u8, s0zp: bool, s1zp: bool) -> PfxInfo {
+    let pfx_f = take_msb_span(val, width);
+    let wid_f = (width & 0b00111111) as usize;
+    let s0z_f = if s0zp { 0b10000000 } else { 0 };
+    let s1z_f = if s1zp { 0b01000000 } else { 0 };
+
+    PfxInfo(pfx_f + wid_f + s0z_f + s1z_f)
+}
+
+fn take_msb_span(val: usize, width: u8) -> usize {
+    let w = width as usize;
+    val & (((1 << w) - 1) << (PTR_BIT_W - w))
+}
+
+/// returns width of overlap from MSB end
+fn find_overlap(va: usize, vb: usize) -> u8 {
+    ((PTR_BIT_W as u32 - 1) - (va ^ vb).highest_one().unwrap()) as _
+}
+
+fn next_bit(val: usize, width: u8) -> bool {
+    val & (1 << ((PTR_BIT_W - 1) - width as usize)) != 0
+}
 
 /// A memory region is a linked list of memory zones, all of the same size
-#[derive(Debug)]
 #[repr(C)]
 pub struct Region {
-    pub head: *mut Zone,
-    pub zone_size: u32,
+    /// pointer to top Zone
+    list_head: *mut Zone,
+    /// root AddrPfxNode; None if only one zone
+    tree_root: Option<ptr::NonNull<AddrPfxNode>>,
+    /// lock for the residence tree
+    tree_lock: u8,
+    /// common zone size as a power of 2
+    zone_order: u8,
+    // TODO: list of small objects for reuse?
+    // TODO: list of big separate objects?
+}
+
+impl std::fmt::Debug for Region {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let sp = self as *const Self;
+        let zn_top = sp.get_list_head();
+        let zn_ord = sp.zn_ord();
+        let tree = sp.get_tree_root().map_or(ptr::null_mut(), |p| p.as_ptr());
+        write!(
+            f,
+            "{{ zone order: {}; top zone addr: {:x}; tree addr: {:x} }}",
+            zn_ord, zn_top as usize, tree as usize
+        )
+    }
 }
 
 impl Region {
-    pub fn new(zone_size: u32) -> Self {
+    pub fn hdl(self: *mut Self) -> util::Hdl<Region> {
+        // reference count?
+        util::Hdl::new(self)
+    }
+
+    pub fn new(zone_order: u8) -> Self {
+        match zone_order {
+            8..=31 => (),
+            z => panic!("invalid zone order {z}"),
+        }
+
         Self {
-            zone_size,
-            head: ptr::null_mut(),
+            list_head: ptr::null_mut(),
+            tree_root: None,
+            tree_lock: false as u8,
+            zone_order,
         }
     }
 
-    pub fn acq(zs: u32) -> *mut Self {
-        let mut new = Box::from(Self::new(zs));
-        new.init();
-        Box::into_raw(new)
+    pub fn init(self: *mut Self) {
+        assert_eq!(self.get_list_head(), ptr::null_mut());
+        self.add_zone();
     }
 
-    pub fn init(&mut self) {
-        unsafe { new_mem_zone(self) };
+    /// Returns *previous* head zone
+    fn set_head_zone(self: *mut Self, p: *mut Zone) -> *mut Zone {
+        debug_assert!(p as usize & u8::MAX as usize == 0);
+        unsafe {
+            (*p).next = ptr::null_mut();
+            loop {
+                let top = self.get_list_head();
+                (*p).next = top;
+
+                if std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
+                    &raw mut (*self).list_head,
+                    top,
+                    p,
+                )
+                .1
+                {
+                    break top;
+                }
+            }
+        }
+    }
+
+    fn get_list_head(self: *const Self) -> *mut Zone {
+        unsafe {
+            std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(
+                &raw const ((*self).list_head),
+            )
+        }
+    }
+
+    pub fn zn_ord(self: *const Self) -> u8 {
+        unsafe { (*self).zone_order }
+    }
+
+    pub fn zone_size(self: *const Self) -> u32 {
+        1u32 << self.zn_ord()
+    }
+
+    fn set_tree_root(self: *mut Self, ptr: *mut AddrPfxNode) {
+        if !self.chk_tree_lck() {
+            panic!("tree not locked");
+        }
+
+        unsafe {
+            (*self).tree_root = ptr::NonNull::new(ptr);
+        }
+    }
+
+    fn get_tree_root(self: *const Self) -> Option<ptr::NonNull<AddrPfxNode>> {
+        unsafe { (*self).tree_root }
+    }
+
+    #[inline(always)]
+    fn acq_tree_lck(self: *mut Self) {
+        unsafe {
+            while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
+                &raw mut (*self).tree_lock,
+                false as u8,
+                true as u8,
+            )
+            .1
+            {
+                std::hint::spin_loop();
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn rel_tree_lck(self: *mut Self) {
+        unsafe {
+            std::intrinsics::atomic_store::<_, { AO::Release }, false>(
+                &raw mut (*self).tree_lock,
+                false as u8,
+            );
+        }
+    }
+
+    fn chk_tree_lck(self: *mut Self) -> bool {
+        unsafe {
+            std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(&raw mut (*self).tree_lock)
+                != 0
+        }
+    }
+
+    // TODO: this function must be reentrant
+    /// Adds a zone to the top of the Region's list. Returns a pointer to the new zone.
+    pub fn add_zone(self: *mut Self) -> *mut Zone {
+        if cfg!(feature = "memdbg") {
+            log::debug!("Creating mem zone");
+        }
+
+        debug_assert_eq!(1usize.highest_one(), Some(0));
+        debug_assert_eq!(usize::MAX.highest_one(), Some(PTR_BIT_W as u32 - 1));
+
+        let size = 1usize << (self.zn_ord());
+
+        let new_zone_ptr = unsafe {
+            let layout = alloc::Layout::from_size_align_unchecked(size, size);
+            alloc::alloc(layout) as *mut Zone
+        };
+
+        assert_eq!(new_zone_ptr as usize & (size - 1), 0);
+
+        unsafe {
+            let start = (new_zone_ptr as *mut u8).add(MEM_ZONE_HEAD_SIZE);
+            let end = (new_zone_ptr as *mut u8).add(size as _);
+
+            RegionTable::append(
+                &raw mut REGION_TABLE,
+                start as usize,
+                end as usize,
+                new_zone_ptr,
+                self,
+            );
+
+            let zn_id =
+                std::intrinsics::atomic_xadd::<u32, u32, { AO::AcqRel }>(&raw mut ZONE_ID_CTR, 1);
+
+            let new_head = Zone {
+                used: 0,
+                id: zn_id,
+                free: ptr::null_mut(),
+                next: ptr::null_mut(),
+                top: start,
+                end,
+                bot: start,
+                lock: false as u8,
+            };
+
+            ptr::write(new_zone_ptr, new_head);
+        }
+
+        // no local objects will be checked for residence before the
+        // tree has been mutated
+        let next_zone = self.set_head_zone(new_zone_ptr);
+
+        self.acq_tree_lck();
+
+        fn fresh_node(pfx: PfxInfo, slots: [PfxTgt; 2]) -> *mut AddrPfxNode {
+            let datum = AddrPfxNode { pfx, slots };
+            unsafe {
+                let ptr = alloc::alloc(alloc::Layout::new::<AddrPfxNode>()) as *mut AddrPfxNode;
+                ptr.write(datum);
+                ptr
+            }
+        }
+
+        // TODO: region tree instead of region table
+
+        // TODO: break tree insertion out into another function
+        if !next_zone.is_null() {
+            match self.get_tree_root() {
+                None => {
+                    let pfx_width = find_overlap(new_zone_ptr as usize, next_zone as usize);
+                    let pfx = cons_pfx(new_zone_ptr as usize, pfx_width, true, true);
+
+                    let (zna, znb) = (
+                        ptr::NonNull::new(next_zone).unwrap(),
+                        ptr::NonNull::new(new_zone_ptr).unwrap(),
+                    );
+
+                    let slots = if next_bit(new_zone_ptr as usize, pfx_width) {
+                        assert!(!next_bit(next_zone as usize, pfx_width));
+                        [PfxTgt { zone: zna }, PfxTgt { zone: znb }]
+                    } else {
+                        assert!(next_bit(next_zone as usize, pfx_width));
+                        [PfxTgt { zone: znb }, PfxTgt { zone: zna }]
+                    };
+
+                    let new_root = fresh_node(pfx, slots);
+
+                    self.set_tree_root(new_root);
+                }
+                Some(rnn) => {
+                    let mut root_node = rnn;
+                    let mut cur_node = &raw mut root_node;
+
+                    // begin looping traversal of the tree
+                    loop {
+                        let node_ptr = unsafe { *cur_node }.as_ptr();
+
+                        let (cur_prefix, cur_width, cur_s0zp, cur_s1zp) =
+                            unsafe { (*node_ptr).pfx }.breakout();
+
+                        let diff_bit = ((new_zone_ptr as usize) ^ cur_prefix)
+                            .highest_one()
+                            .unwrap_or(0);
+
+                        if diff_bit > ((PTR_BIT_W as u8 - 1) - cur_width) as u32 {
+                            // in this case, replace present node (it gets linked as one of the leaves)
+                            let new_width = (PTR_BIT_W as u8 - 1) - diff_bit as u8;
+
+                            let (zna, znb) = (
+                                ptr::NonNull::new(node_ptr).unwrap(),
+                                ptr::NonNull::new(new_zone_ptr).unwrap(),
+                            );
+
+                            let (pfx, slots) = if cur_prefix & (1 << diff_bit) == 0 {
+                                assert_ne!((new_zone_ptr as usize) & (1 << diff_bit), 0);
+                                (
+                                    cons_pfx(new_zone_ptr as usize, new_width, false, true),
+                                    [PfxTgt { node: zna }, PfxTgt { zone: znb }],
+                                )
+                            } else {
+                                assert_eq!((new_zone_ptr as usize) & (1 << diff_bit), 0);
+                                (
+                                    cons_pfx(new_zone_ptr as usize, new_width, true, false),
+                                    [PfxTgt { zone: znb }, PfxTgt { node: zna }],
+                                )
+                            };
+
+                            let new_node = fresh_node(pfx, slots);
+
+                            // if we need to replace the root node, do it separately
+                            if root_node.as_ptr() == node_ptr {
+                                self.set_tree_root(new_node)
+                            } else {
+                                unsafe {
+                                    ptr::write(cur_node, ptr::NonNull::new_unchecked(new_node))
+                                }
+                            }
+
+                            break;
+                        } else {
+                            // in this case, select which leaf to point to as our next site
+                            let (slot_i, zone_p) = if !next_bit(new_zone_ptr as usize, cur_width) {
+                                (0, cur_s0zp)
+                            } else {
+                                (1, cur_s1zp)
+                            };
+
+                            if zone_p {
+                                let shift_zone = unsafe { (*node_ptr).slots[slot_i].zone }.as_ptr();
+                                let new_width =
+                                    find_overlap(new_zone_ptr as usize, shift_zone as usize);
+                                let pfx = cons_pfx(new_zone_ptr as usize, new_width, true, true);
+
+                                let (zna, znb) = (
+                                    ptr::NonNull::new(shift_zone).unwrap(),
+                                    ptr::NonNull::new(new_zone_ptr).unwrap(),
+                                );
+
+                                let slots = if next_bit(new_zone_ptr as usize, new_width) {
+                                    assert!(!next_bit(shift_zone as usize, new_width));
+                                    [PfxTgt { zone: zna }, PfxTgt { zone: znb }]
+                                } else {
+                                    assert!(next_bit(shift_zone as usize, new_width));
+                                    [PfxTgt { zone: znb }, PfxTgt { zone: zna }]
+                                };
+
+                                let new_node = fresh_node(pfx, slots);
+
+                                unsafe {
+                                    // make sure the current node metadata shows the child node
+                                    ptr::write(
+                                        &raw mut (*node_ptr).pfx,
+                                        if slot_i == 0 {
+                                            cons_pfx(cur_prefix, cur_width, false, cur_s1zp)
+                                        } else {
+                                            cons_pfx(cur_prefix, cur_width, cur_s0zp, false)
+                                        },
+                                    );
+                                    ptr::write(
+                                        &raw mut (*node_ptr).slots[slot_i].node,
+                                        ptr::NonNull::new_unchecked(new_node),
+                                    );
+                                }
+
+                                break;
+                            } else {
+                                unsafe {
+                                    cur_node = &raw mut (*node_ptr).slots[slot_i].node;
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // println!("{:x}", self as usize);
+        // self.depict_tree();
+
+        self.rel_tree_lck();
+
+        new_zone_ptr
+    }
+
+    fn depict_tree(self: *const Self) {
+        let tree = self.get_tree_root();
+
+        if tree.is_none() {
+            println!("ONE ZONE");
+            return;
+        }
+
+        fn depict_tree_1(node: ptr::NonNull<AddrPfxNode>, l: usize) {
+            let (pfx, w, z0, z1) = unsafe { (*node.as_ptr()).pfx }.breakout();
+
+            let sp = String::from_utf8(vec![b' '; 2 * l]).unwrap();
+            println!("{sp}Node: {:0x}; w{w}", pfx);
+
+            if z0 {
+                let zp = unsafe { (*node.as_ptr()).slots[0].zone };
+                println!("{sp} Zone: {:0x}", zp.as_ptr() as usize);
+            } else {
+                let np = unsafe { (*node.as_ptr()).slots[0].node };
+                depict_tree_1(np, l + 1);
+            }
+
+            if z1 {
+                let zp = unsafe { (*node.as_ptr()).slots[1].zone };
+                println!("{sp} Zone: {:0x}", zp.as_ptr() as usize);
+            } else {
+                let np = unsafe { (*node.as_ptr()).slots[1].node };
+                depict_tree_1(np, l + 1);
+            }
+        }
+
+        depict_tree_1(tree.unwrap(), 0)
+    }
+
+    fn resident_p(self: *const Self, loc: *mut u8) -> Option<ptr::NonNull<Zone>> {
+        if self.get_list_head().is_null() {
+            return None;
+        }
+
+        let tree = self.get_tree_root();
+
+        let zw = PTR_BIT_W as u8 - self.zn_ord();
+
+        fn test_pfx(pfx: usize, tgt: usize, w: u8) -> bool {
+            let pmask = ((1 << w as usize) - 1) << (PTR_BIT_W - w as usize);
+
+            let prefix_expect = pmask & pfx;
+            let prefix_exist = pmask & tgt;
+
+            prefix_exist == prefix_expect
+        }
+
+        if tree.is_none() {
+            let addr = self.get_list_head();
+            return if test_pfx(addr as usize, loc as usize, zw) {
+                Some(unsafe { ptr::NonNull::new_unchecked(addr) })
+            } else {
+                None
+            };
+        }
+
+        let mut tree = tree.unwrap();
+        loop {
+            let pfx = unsafe { (*tree.as_ptr()).pfx };
+            let (_, width, s0zp, s1zp) = pfx.breakout();
+            debug_assert!(width <= (PTR_BIT_W as u8 - 8));
+
+            if !test_pfx(pfx.0, loc as usize, width) {
+                return None;
+            }
+
+            let nmask = 1 << ((PTR_BIT_W - 1) - width as usize);
+            let (slot_i, zone_p) = if nmask & loc as usize == 0 {
+                (0, s0zp)
+            } else {
+                (1, s1zp)
+            };
+
+            if zone_p {
+                let addr = unsafe { (*tree.as_ptr()).slots[slot_i].zone };
+                return if test_pfx(addr.as_ptr() as usize, loc as usize, zw) {
+                    Some(addr)
+                } else {
+                    None
+                };
+            } else {
+                tree = unsafe { (*tree.as_ptr()).slots[slot_i].node }
+            }
+        }
     }
 }
 
@@ -1533,7 +2002,7 @@ impl Drop for Region {
 }
 
 // NOTE: Maximum zone size: 2GiB
-// NOTE: Maximum object size: 1/32 of zone size
+// NOTE: Maximum object size: 1/16 of zone size
 // TODO: special allocation scheme for larger objects
 
 /// A zone is a contiguous chunk of memory in which Sail objects may
@@ -1543,8 +2012,6 @@ impl Drop for Region {
 pub struct Zone {
     /// Size of used portion
     pub used: u32,
-    // /// Size of largest free block
-    // lblk: u32,
     /// Unique zone identifier
     id: u32,
     /// Pointer to start of working memory
@@ -1571,9 +2038,9 @@ struct FreeBlock {
     prev: u32,
 }
 
-// const MEM_REGION_HEAD_SIZE: usize = mem::size_of::<Region>();
 const MEM_ZONE_HEAD_SIZE: usize = mem::size_of::<Zone>();
 
+// TODO: this tests every zone, no logic; we can do better!
 /// Returns the region and zone in which a given Sail object is stored
 unsafe fn which_mem_area(ptr: *mut SlHead) -> (*mut Region, *mut Zone) {
     unsafe {
@@ -1596,56 +2063,5 @@ unsafe fn which_mem_area(ptr: *mut SlHead) -> (*mut Region, *mut Zone) {
         }
 
         panic!("INVALID memory area for {:x}", ptr as usize)
-    }
-}
-
-/// Creates and links in a new memory zone within the given region
-/// TODO: this function may need to be reentrant
-unsafe fn new_mem_zone(region: *mut Region) {
-    unsafe {
-        assert_ne!(region, ptr::null_mut());
-
-        if cfg!(feature = "memdbg") {
-            log::debug!("Creating mem zone");
-        }
-
-        let region_head = region.as_mut().unwrap();
-        let size = region_head.zone_size;
-        let cur_head = region_head.head;
-
-        let ptr = {
-            let layout =
-                alloc::Layout::from_size_align_unchecked(size as usize + MEM_ZONE_HEAD_SIZE, 1);
-            alloc::alloc(layout) as *mut Zone
-        };
-
-        let start = (ptr as *mut u8).add(MEM_ZONE_HEAD_SIZE);
-        let end = start.add(size as _);
-
-        RegionTable::append(
-            &raw mut REGION_TABLE,
-            start as usize,
-            end as usize,
-            ptr,
-            region,
-        );
-
-        let zn_id =
-            std::intrinsics::atomic_xadd::<u32, u32, { AO::AcqRel }>(&raw mut ZONE_ID_CTR, 1);
-
-        let new_head = Zone {
-            used: 0,
-            id: zn_id,
-            free: ptr::null_mut(),
-            next: cur_head,
-            top: start,
-            end,
-            bot: start,
-            lock: false as u8,
-        };
-
-        ptr::write_unaligned(ptr, new_head);
-
-        ptr::write_unaligned(&mut (*region).head, ptr);
     }
 }
