@@ -110,7 +110,7 @@ impl TryFrom<u16> for SlErrCode {
 }
 
 #[inline(always)]
-fn errcode_make(reg: *mut memmgt::Region) -> SlHndl {
+fn errcode_make(reg: Hdl<memmgt::Region>) -> SlHndl {
     unsafe {
         crate::report_site!("error code obj alloc");
         let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 2, memmgt::cap(Cfg::B2Err)));
@@ -120,7 +120,7 @@ fn errcode_make(reg: *mut memmgt::Region) -> SlHndl {
 }
 
 #[inline(always)]
-pub fn errcode_init(reg: *mut memmgt::Region, err: SlErrCode) -> SlHndl {
+pub fn errcode_init(reg: Hdl<memmgt::Region>, err: SlErrCode) -> SlHndl {
     unsafe {
         let out = errcode_make(reg);
         write_field_unchecked::<u16>(out.clone(), 0, err as u16);

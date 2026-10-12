@@ -18,8 +18,6 @@
 
 // <>
 
-// TODO: move to using a handle for the Region
-
 use super::{Hdl, Stab, core::*, debug, memmgt};
 
 use std::iter;
@@ -27,7 +25,7 @@ use std::str;
 
 struct ParseState<'a> {
     acc: Vec<u8>,
-    reg: *mut memmgt::Region,
+    reg: Hdl<memmgt::Region>,
     tbl: Hdl<Stab>,
     src: u32,
     ln: u32,
@@ -44,7 +42,7 @@ pub fn wrap_prog(code: &[u8]) -> Vec<u8> {
 }
 
 fn parse_inner(
-    reg: *mut memmgt::Region,
+    reg: Hdl<memmgt::Region>,
     tbl: Hdl<Stab>,
     src: Option<debug::Source>,
     mut dbd: Option<&mut debug::SrcInfo>,
@@ -73,7 +71,7 @@ fn parse_inner(
 
 // TODO: should the actual source handling happen elsewhere?
 pub fn parse_text(
-    reg: *mut memmgt::Region,
+    reg: Hdl<memmgt::Region>,
     tbl: Hdl<Stab>,
     code: Vec<u8>,
     dbg: Option<&mut debug::SrcInfo>,
@@ -82,7 +80,7 @@ pub fn parse_text(
 }
 
 pub fn parse_obj(
-    reg: *mut memmgt::Region,
+    reg: Hdl<memmgt::Region>,
     tbl: Hdl<Stab>,
     mut loc: SlHndl,
     dbg: Option<&mut debug::SrcInfo>,
@@ -99,7 +97,7 @@ pub fn parse_obj(
 }
 
 pub fn parse_file(
-    reg: *mut memmgt::Region,
+    reg: Hdl<memmgt::Region>,
     tbl: Hdl<Stab>,
     fpa: std::path::PathBuf,
     dbg: Option<&mut debug::SrcInfo>,
@@ -514,7 +512,7 @@ fn read_special(s: &mut ParseState) -> Result<SlHndl, debug::SlErrCode> {
 
 /// Parses a number and creates an object according to its textual
 /// representation
-fn process_num(slice: &str, reg: *mut memmgt::Region) -> Result<SlHndl, debug::SlErrCode> {
+fn process_num(slice: &str, reg: Hdl<memmgt::Region>) -> Result<SlHndl, debug::SlErrCode> {
     if let Ok(n) = slice.parse::<i64>() {
         Ok(i64_init(reg, n))
     } else if let Ok(n) = slice.parse::<f64>() {

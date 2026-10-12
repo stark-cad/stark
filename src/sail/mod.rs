@@ -95,7 +95,7 @@ pub type NativeFn = fn(Hdl<thread::Vessel>, SlHndl, &[SlHndl]) -> SlHndl;
 
 // TODO: check whether type symbols are valid?
 fn make_val_type_mfst(
-    reg: *mut memmgt::Region,
+    reg: Hdl<memmgt::Region>,
     ctr: Hdl<Styc>,
     fields: Vec<(u32, u32, u32)>,
 ) -> SlHndl {
@@ -199,7 +199,7 @@ fn vessel_ref_join(reg: *mut memmgt::Region, loc: SlHndl) -> SlHndl {
 }
 
 fn arrvec_make<T: SizedBase + Copy>(
-    reg: *mut memmgt::Region,
+    reg: Hdl<memmgt::Region>,
     typ: u32,
     len: u32,
     fill: T,
@@ -222,7 +222,7 @@ fn arrvec_make<T: SizedBase + Copy>(
 }
 
 pub fn arrvec_init<T: SizedBase + Copy>(
-    reg: *mut memmgt::Region,
+    reg: Hdl<memmgt::Region>,
     typ: u32,
     len: u32,
     val: &[T],
@@ -379,7 +379,7 @@ incl_types! {
     T_VSL_REF_ID  T_VSL_REF
 }
 
-pub fn structure_copy(tgt: *mut memmgt::Region, root: SlHndl) -> *mut SlHead {
+pub fn structure_copy(tgt: Hdl<memmgt::Region>, root: SlHndl) -> *mut SlHead {
     // collect handles to all objects referenced by msg, with
     // appropriate reference counts (1 for msg, 1+ for all others
     // according to the structure) (panic if too many layers)
@@ -580,7 +580,7 @@ pub fn global_ctx_setup(tact: Hdl<thread::Tact>) {
 
 /// Insert a slice of native procedures into the symbol table and environment
 pub fn insert_native_procs(
-    reg: *mut memmgt::Region,
+    reg: Hdl<memmgt::Region>,
     tbl: Hdl<Stab>,
     env: SlHndl,
     fns: &[(&str, NativeFn, u16)],
@@ -620,7 +620,8 @@ mod general_tests {
     fn parses() {
         let mut region = memmgt::Region::new(10);
         let mut table = Stab::new(51);
-        let reg = &raw mut region;
+
+        let reg = Hdl::new(&raw mut region);
         let tref = Hdl::new(&raw mut table);
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");

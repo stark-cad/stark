@@ -711,7 +711,7 @@ impl Vessel {
                 (&raw mut (*ptr).weft).write(weft.raw);
 
                 (&raw mut (*ptr).reg).write(memmgt::Region::new(r_zone_ord));
-                (&raw mut (*ptr).reg).init();
+                Hdl::new(&raw mut (*ptr).reg).init();
 
                 (&raw mut (*ptr).qin).write(queue::Inlet::new(&raw mut (*ptr).reg));
                 (&raw mut (*ptr).tenv).write(super::env_make(&raw mut (*ptr).reg));
@@ -737,10 +737,11 @@ impl Vessel {
                 (&raw mut (*ptr).id).write((*self.raw()).weft.get_vsl_id());
                 (&raw mut (*ptr).weft).write((*self.raw()).weft);
 
-                (&raw mut (*ptr).reg).write(memmgt::Region::new(
-                    r_zone_ord.unwrap_or(memmgt::Region::zn_ord((&raw const (*self.raw()).reg))),
-                ));
-                (&raw mut (*ptr).reg).init();
+                (&raw mut (*ptr).reg)
+                    .write(memmgt::Region::new(r_zone_ord.unwrap_or(
+                        memmgt::Region::zn_ord(Hdl::new(&raw mut (*self.raw()).reg)),
+                    )));
+                Hdl::new(&raw mut (*ptr).reg).init();
 
                 (&raw mut (*ptr).qin).write(queue::Inlet::new(&raw mut (*ptr).reg));
                 (&raw mut (*ptr).tenv).write(super::env_make(&raw mut (*ptr).reg));
@@ -772,10 +773,9 @@ impl Vessel {
         unsafe { (&raw mut *(*self.raw()).weft).context() }
     }
 
-    // TODO: again, switch to a handle type
     /// Returns handle to this Vessel's memory region
-    pub fn region(self: Hdl<Self>) -> *mut memmgt::Region {
-        unsafe { (&raw mut (*self.raw()).reg) }
+    pub fn region(self: Hdl<Self>) -> Hdl<memmgt::Region> {
+        unsafe { Hdl::new(&raw mut (*self.raw()).reg) }
     }
 
     /// Returns handle to this Vessel's queue inlet

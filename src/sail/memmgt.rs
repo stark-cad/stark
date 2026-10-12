@@ -19,7 +19,7 @@
 
 // <>
 
-use super::util;
+use super::util::{Hdl, Lock, LockToken};
 use super::{HEAD_LEN, NUM_32_LEN, SlHead};
 
 use std::alloc;
@@ -333,14 +333,14 @@ pub const fn cap(cfg: super::Cfg) -> u32 {
 }
 
 /// Returns a pointer to `sz` unused bytes somewhere in the region `reg`
-unsafe fn acquire_raw(reg: *mut Region, sz: u32) -> *mut u8 {
+unsafe fn acquire_raw(reg: Hdl<Region>, sz: u32) -> *mut u8 {
     unsafe {
         let mut zone = reg.get_list_head();
         if zone.is_null() {
             zone = reg.add_zone();
         }
 
-        if (1usize << reg.zn_ord() as usize) <= sz as usize {
+        if reg.zone_size() as usize <= sz as usize {
             panic!("zone order too low for objects of size {sz}");
         }
 
@@ -371,7 +371,7 @@ unsafe fn acquire_raw(reg: *mut Region, sz: u32) -> *mut u8 {
     }
 }
 
-pub fn copy_direct(src: *mut SlHead, into: *mut Region, rc: u8) -> *mut SlHead {
+pub fn copy_direct(into: Hdl<Region>, src: *mut SlHead, rc: u8) -> *mut SlHead {
     assert!(rc > 0);
 
     let sz = lblk_get_len(src);
@@ -415,15 +415,13 @@ pub fn copy_direct(src: *mut SlHead, into: *mut Region, rc: u8) -> *mut SlHead {
 }
 
 /// Allocates space in the given region for a Sail object, and preinitializes it
-pub unsafe fn alloc(region: *mut Region, size: u32, typ_id: u32) -> *mut SlHead {
+pub unsafe fn alloc(region: Hdl<Region>, size: u32, typ_id: u32) -> *mut SlHead {
     //!
     //! Parameter Notes:
     //! **region** - the memory region wherein to allocate the object
     //! **size** - the object's size in bytes, after the head (full range)
     //! **typ_id** - the object's type identifier; MSB of 1 indicates
     //! core type, then *cfg* must be the least significant 6 bits
-
-    assert_ne!(region, ptr::null_mut());
 
     let maybe_cfg = ((typ_id & 0b111111) as u8) << 2;
 
@@ -509,7 +507,7 @@ macro_rules! znlck {
 }
 
 /// Return the next zone in a region, creating one if none exists
-unsafe fn zone_advance(reg: *mut Region, zone: *mut Zone) -> *mut Zone {
+unsafe fn zone_advance(reg: Hdl<Region>, zone: *mut Zone) -> *mut Zone {
     unsafe {
         match (*zone).next.as_mut() {
             Some(refer) => refer,
@@ -681,6 +679,7 @@ pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
             (HEAD_LEN + (type_fld_p as u32 * NUM_32_LEN) + (size_fld_p as u32 * NUM_32_LEN)) + size;
 
         let (c_regn, c_zone) = which_mem_area(obj);
+        let c_regn = Hdl::new(c_regn);
 
         let mut ret_ptr = obj;
 
@@ -720,11 +719,7 @@ pub unsafe fn realloc(obj: *mut SlHead, size: u32) -> *mut SlHead {
             );
 
             // free all space not required for redirect (> 8 bytes)
-            reclaim_raw(
-                which_mem_area(obj).0,
-                old_ptr.add(HEAD_LEN as _),
-                cur_len - HEAD_LEN,
-            );
+            reclaim_raw(c_regn, old_ptr.add(HEAD_LEN as _), cur_len - HEAD_LEN);
         }
 
         if size_fld_p {
@@ -747,10 +742,12 @@ fn lblk_get_len(blk: *mut SlHead) -> u32 {
         + super::raw_size(blk)
 }
 
+// TODO: batch items (in a list?) to be fully reclaimed later
+
 /// Begin accounting a previously-allocated span in a region as free space
-unsafe fn reclaim_raw(reg: *mut Region, ptr: *mut u8, sz: u32) {
+unsafe fn reclaim_raw(reg: Hdl<Region>, ptr: *mut u8, sz: u32) {
     unsafe {
-        assert!((sz as usize) < (1usize << reg.zn_ord()));
+        assert!((sz as usize) < reg.zone_size() as usize);
         assert!(!ptr.is_null());
 
         let zone = match reg.resident_p(ptr) {
@@ -1057,7 +1054,7 @@ pub unsafe fn dealloc(val: *mut SlHead) {
             println!("O {obj_id} RECLAIM")
         }
 
-        let reg = which_mem_area(val).0;
+        let reg = Hdl::new(which_mem_area(val).0);
         reclaim_raw(reg, val as _, lblk_get_len(val))
     }
 }
@@ -1476,7 +1473,7 @@ mod free_tree_tests {
 
         unsafe {
             let mut region = Region::new(10);
-            let reg = &raw mut region;
+            let reg = Hdl::new(&raw mut region);
 
             let obj = alloc(reg, 0, cap(Cfg::B0BoolT));
             let adrs = obj as usize;
@@ -1519,7 +1516,6 @@ mod free_tree_tests {
     }
 }
 
-
 #[cfg(test)]
 mod zone_test {
     use super::*;
@@ -1529,17 +1525,17 @@ mod zone_test {
         const O: u8 = 8;
 
         let (mut r1, mut r2) = (Region::new(O), Region::new(O));
-        let (r1p, r2p) = (&raw mut r1, &raw mut r2);
+        let (r1h, r2h) = (Hdl::new(&raw mut r1), Hdl::new(&raw mut r2));
         let (mut r1z, mut r2z) = (vec![], vec![]);
 
         for _ in 0..3 {
-            r1z.push(r1p.add_zone());
-            r2z.push(r2p.add_zone());
+            r1z.push(r1h.add_zone());
+            r2z.push(r2h.add_zone());
 
             println!();
-            r1p.depict_tree();
+            r1h.depict_tree();
             println!();
-            r2p.depict_tree();
+            r2h.depict_tree();
             println!();
         }
 
@@ -1568,15 +1564,15 @@ mod zone_test {
         for o in r1o {
             println!("r1: {:0x}", o as usize);
 
-            assert!(!r2p.resident_p(o as _).is_some());
-            assert!(r1p.resident_p(o as _).is_some());
+            assert!(!r2h.resident_p(o as _).is_some());
+            assert!(r1h.resident_p(o as _).is_some());
         }
 
         for o in r2o {
             println!("r2: {:0x}", o as usize);
 
-            assert!(!r1p.resident_p(o as _).is_some());
-            assert!(r2p.resident_p(o as _).is_some());
+            assert!(!r1h.resident_p(o as _).is_some());
+            assert!(r2h.resident_p(o as _).is_some());
         }
     }
 
@@ -1588,15 +1584,14 @@ mod zone_test {
         // is copied for queue send at once (or chance races)
 
         let mut reg = Region::new(O);
-        let rp = &raw mut reg;
+        let rh = Hdl::new(&raw mut reg);
 
         let zkeep = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
 
-        fn create(r: util::Hdl<Region>, a: std::sync::Arc<std::sync::Mutex<Vec<usize>>>, c: i32) {
-            let rp = r.raw();
+        fn create(r: Hdl<Region>, a: std::sync::Arc<std::sync::Mutex<Vec<usize>>>, c: i32) {
             let mut locz = vec![];
             for _ in 0..c {
-                locz.push(rp.add_zone() as usize);
+                locz.push(r.add_zone() as usize);
             }
 
             // safely write zone info out to parent thread
@@ -1606,9 +1601,8 @@ mod zone_test {
         // bunch of threads creating new Zones at the same time
         let mut thrs = vec![];
         for _ in 0..10 {
-            let rhdl = rp.hdl();
             let vhdl = zkeep.clone();
-            thrs.push(std::thread::spawn(move || create(rhdl, vhdl, 5)))
+            thrs.push(std::thread::spawn(move || create(rh, vhdl, 5)))
         }
 
         for t in thrs.drain(..) {
@@ -1624,7 +1618,7 @@ mod zone_test {
 
         // check that every zone we added is in the linked list
         for p in &zones {
-            let mut cz = rp.get_list_head();
+            let mut cz = rh.get_list_head();
             loop {
                 if cz as usize == *p {
                     break;
@@ -1639,7 +1633,7 @@ mod zone_test {
             }
         }
 
-        rp.depict_tree();
+        rh.depict_tree();
 
         // check that =residence_p= recognizes objects from every
         // single zone
@@ -1650,7 +1644,7 @@ mod zone_test {
 
                 let o = (p + offset) as *mut SlHead;
 
-                assert!(rp.resident_p(o as _).is_some());
+                assert!(rh.resident_p(o as _).is_some());
             }
         }
     }
@@ -1732,12 +1726,18 @@ pub struct Region {
     // TODO: list of big separate objects?
 }
 
+impl Lock for Region {
+    fn lock_pos(self: Hdl<Self>) -> *mut u8 {
+        unsafe { &raw mut (*self.raw()).tree_lock }
+    }
+}
+
 impl std::fmt::Debug for Region {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let sp = self as *const Self;
-        let zn_top = sp.get_list_head();
-        let zn_ord = sp.zn_ord();
-        let tree = sp.get_tree_root().map_or(ptr::null_mut(), |p| p.as_ptr());
+        let sh = Hdl::new((self as *const Self).cast_mut());
+        let zn_top = sh.get_list_head();
+        let zn_ord = sh.zn_ord();
+        let tree = sh.get_tree_root().map_or(ptr::null_mut(), |p| p.as_ptr());
         write!(
             f,
             "{{ zone order: {}; top zone addr: {:x}; tree addr: {:x} }}",
@@ -1747,11 +1747,6 @@ impl std::fmt::Debug for Region {
 }
 
 impl Region {
-    pub fn hdl(self: *mut Self) -> util::Hdl<Region> {
-        // reference count?
-        util::Hdl::new(self)
-    }
-
     pub fn new(zone_order: u8) -> Self {
         match zone_order {
             8..=31 => (),
@@ -1766,98 +1761,63 @@ impl Region {
         }
     }
 
-    pub fn init(self: *mut Self) {
+    pub fn init(self: Hdl<Self>) {
         assert_eq!(self.get_list_head(), ptr::null_mut());
         self.add_zone();
     }
 
     /// Returns *previous* head zone
-    fn set_head_zone(self: *mut Self, p: *mut Zone) -> *mut Zone {
+    fn set_head_zone(self: Hdl<Self>, p: *mut Zone) -> *mut Zone {
         debug_assert!(p as usize & u8::MAX as usize == 0);
         unsafe {
-            (*p).next = ptr::null_mut();
+            let mut top = self.get_list_head();
             loop {
-                let top = self.get_list_head();
                 (*p).next = top;
 
-                if std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
-                    &raw mut (*self).list_head,
+                let res = std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
+                    &raw mut (*self.raw()).list_head,
                     top,
                     p,
-                )
-                .1
-                {
+                );
+
+                if res.1 {
                     break top;
+                } else {
+                    top = res.0;
                 }
             }
         }
     }
 
-    fn get_list_head(self: *const Self) -> *mut Zone {
+    fn get_list_head(self: Hdl<Self>) -> *mut Zone {
         unsafe {
             std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(
-                &raw const ((*self).list_head),
+                &raw const ((*self.raw()).list_head),
             )
         }
     }
 
-    pub fn zn_ord(self: *const Self) -> u8 {
-        unsafe { (*self).zone_order }
+    pub fn zn_ord(self: Hdl<Self>) -> u8 {
+        unsafe { (*self.raw()).zone_order }
     }
 
-    pub fn zone_size(self: *const Self) -> u32 {
+    pub fn zone_size(self: Hdl<Self>) -> u32 {
         1u32 << self.zn_ord()
     }
 
-    fn set_tree_root(self: *mut Self, ptr: *mut AddrPfxNode) {
-        if !self.chk_tree_lck() {
-            panic!("tree not locked");
-        }
-
+    fn set_tree_root(self: Hdl<Self>, ptr: *mut AddrPfxNode, _lt: &LockToken<Self>) {
         unsafe {
-            (*self).tree_root = ptr::NonNull::new(ptr);
+            (*self.raw()).tree_root = ptr::NonNull::new(ptr);
         }
     }
 
-    fn get_tree_root(self: *const Self) -> Option<ptr::NonNull<AddrPfxNode>> {
-        unsafe { (*self).tree_root }
-    }
-
-    #[inline(always)]
-    fn acq_tree_lck(self: *mut Self) {
-        unsafe {
-            while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
-                &raw mut (*self).tree_lock,
-                false as u8,
-                true as u8,
-            )
-            .1
-            {
-                std::hint::spin_loop();
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn rel_tree_lck(self: *mut Self) {
-        unsafe {
-            std::intrinsics::atomic_store::<_, { AO::Release }, false>(
-                &raw mut (*self).tree_lock,
-                false as u8,
-            );
-        }
-    }
-
-    fn chk_tree_lck(self: *mut Self) -> bool {
-        unsafe {
-            std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(&raw mut (*self).tree_lock)
-                != 0
-        }
+    fn get_tree_root(self: Hdl<Self>) -> Option<ptr::NonNull<AddrPfxNode>> {
+        unsafe { (*self.raw()).tree_root }
     }
 
     // TODO: this function must be reentrant
     /// Adds a zone to the top of the Region's list. Returns a pointer to the new zone.
-    pub fn add_zone(self: *mut Self) -> *mut Zone {
+    pub fn add_zone(self: Hdl<Self>) -> *mut Zone {
         if cfg!(feature = "memdbg") {
             log::debug!("Creating mem zone");
         }
@@ -1865,7 +1825,7 @@ impl Region {
         debug_assert_eq!(1usize.highest_one(), Some(0));
         debug_assert_eq!(usize::MAX.highest_one(), Some(PTR_BIT_W as u32 - 1));
 
-        let size = 1usize << (self.zn_ord());
+        let size = self.zone_size() as usize;
 
         let new_zone_ptr = unsafe {
             let layout = alloc::Layout::from_size_align_unchecked(size, size);
@@ -1907,7 +1867,7 @@ impl Region {
         // tree has been mutated
         let next_zone = self.set_head_zone(new_zone_ptr);
 
-        self.acq_tree_lck();
+        let tree_locked = self.take_lock();
 
         fn fresh_node(pfx: PfxInfo, slots: [PfxTgt; 2]) -> *mut AddrPfxNode {
             let datum = AddrPfxNode { pfx, slots };
@@ -1942,7 +1902,7 @@ impl Region {
 
                     let new_root = fresh_node(pfx, slots);
 
-                    self.set_tree_root(new_root);
+                    self.set_tree_root(new_root, &tree_locked);
                 }
                 Some(rnn) => {
                     let mut root_node = rnn;
@@ -1986,7 +1946,7 @@ impl Region {
 
                             // if we need to replace the root node, do it separately
                             if root_node.as_ptr() == node_ptr {
-                                self.set_tree_root(new_node)
+                                self.set_tree_root(new_node, &tree_locked);
                             } else {
                                 unsafe {
                                     ptr::write(cur_node, ptr::NonNull::new_unchecked(new_node))
@@ -2055,12 +2015,12 @@ impl Region {
         // println!("{:x}", self as usize);
         // self.depict_tree();
 
-        self.rel_tree_lck();
+        self.release_lock(tree_locked);
 
         new_zone_ptr
     }
 
-    fn depict_tree(self: *const Self) {
+    fn depict_tree(self: Hdl<Self>) {
         let tree = self.get_tree_root();
 
         if tree.is_none() {
@@ -2094,7 +2054,7 @@ impl Region {
         depict_tree_1(tree.unwrap(), 0)
     }
 
-    fn resident_p(self: *const Self, loc: *mut u8) -> Option<ptr::NonNull<Zone>> {
+    pub fn resident_p(self: Hdl<Self>, loc: *mut u8) -> Option<ptr::NonNull<Zone>> {
         if self.get_list_head().is_null() {
             return None;
         }
@@ -2159,9 +2119,10 @@ impl Drop for Region {
         // (self as *const Self).depict_tree();
 
         unsafe {
+            let hdl = Hdl::new(self);
+
             // free the zones
-            let (cur_top_zone, zone_order) = (Self::get_list_head(self), Self::zn_ord(self));
-            let size = 1usize << zone_order as usize;
+            let (cur_top_zone, size) = (hdl.get_list_head(), hdl.zone_size() as usize);
 
             let z_layout = alloc::Layout::from_size_align_unchecked(size, size);
             let mut next = cur_top_zone;
@@ -2178,7 +2139,7 @@ impl Drop for Region {
 
             // free the residence tree
             let mut nodes = vec![];
-            let fst_node = (self as *const Self).get_tree_root();
+            let fst_node = hdl.get_tree_root();
             if !fst_node.is_none() {
                 nodes.push(fst_node.unwrap());
             }

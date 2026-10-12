@@ -28,6 +28,7 @@ use std::intrinsics::AtomicOrdering as AO;
 
 use super::NativeFn;
 use super::memmgt::{self, Region};
+use super::util::Hdl;
 
 /// Core type assertion
 #[macro_export]
@@ -1112,7 +1113,7 @@ mod refc_tests {
     fn up_down() {
         unsafe {
             let mut region = memmgt::Region::new(8);
-            let reg = &raw mut region;
+            let reg = Hdl::new(&raw mut region);
             let item = memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0BoolF));
 
             let adrs = item as usize;
@@ -1144,7 +1145,7 @@ mod refc_tests {
     fn stack_refs() {
         unsafe {
             let mut region = memmgt::Region::new(10);
-            let reg = &raw mut region;
+            let reg = Hdl::new(&raw mut region);
 
             let dme = env_make(reg);
 
@@ -1572,13 +1573,13 @@ pub fn get_next_list_elt(loc: SlHndl) -> Option<SlHndl> {
 }
 
 #[inline(always)]
-pub fn ref_make(reg: *mut Region) -> SlHndl {
+pub fn ref_make(reg: Hdl<Region>) -> SlHndl {
     crate::report_site!("reference obj alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr))) }
 }
 
 #[inline(always)]
-pub fn ref_init(reg: *mut Region, val: SlHndl) -> SlHndl {
+pub fn ref_init(reg: Hdl<Region>, val: SlHndl) -> SlHndl {
     unsafe {
         crate::report_site!("reference obj alloc");
         let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8Ptr)));
@@ -1591,20 +1592,20 @@ pub fn ref_init(reg: *mut Region, val: SlHndl) -> SlHndl {
 }
 
 #[inline(always)]
-pub fn sym_make(reg: *mut Region) -> SlHndl {
+pub fn sym_make(reg: Hdl<Region>) -> SlHndl {
     crate::report_site!("symbol obj alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, SYMBOL_LEN, memmgt::cap(Cfg::B4Sym))) }
 }
 
 #[inline(always)]
-pub fn sym_init(reg: *mut Region, val: SlSym) -> SlHndl {
+pub fn sym_init(reg: Hdl<Region>, val: SlSym) -> SlHndl {
     let out = sym_make(reg);
     unsafe { write_field_unchecked(out.clone(), 0, val) };
     out
 }
 
 #[inline(always)]
-pub fn stdvec_make(reg: *mut Region, cap: u32) -> SlHndl {
+pub fn stdvec_make(reg: Hdl<Region>, cap: u32) -> SlHndl {
     // cap, len, (pointer * cap)
     unsafe {
         let size = vec_size(NUM_32_LEN * 2, PTR_LEN, cap);
@@ -1619,7 +1620,7 @@ pub fn stdvec_make(reg: *mut Region, cap: u32) -> SlHndl {
 }
 
 #[inline(always)]
-pub fn stdvec_init(reg: *mut Region, val: &[SlHndl]) -> SlHndl {
+pub fn stdvec_init(reg: Hdl<Region>, val: &[SlHndl]) -> SlHndl {
     let len = val.len() as u32;
     let out = stdvec_make(reg, len);
     unsafe { write_field_unchecked(out.clone(), 4, len) }
@@ -1635,7 +1636,7 @@ pub fn stdvec_init(reg: *mut Region, val: &[SlHndl]) -> SlHndl {
 }
 
 #[inline(always)]
-pub fn string_make(reg: *mut Region, cap: u32) -> SlHndl {
+pub fn string_make(reg: Hdl<Region>, cap: u32) -> SlHndl {
     // cap, len, (byte * cap)
     unsafe {
         let size = vec_size(NUM_32_LEN * 2, NUM_8_LEN, cap);
@@ -1650,7 +1651,7 @@ pub fn string_make(reg: *mut Region, cap: u32) -> SlHndl {
 }
 
 #[inline(always)]
-pub fn string_init(reg: *mut Region, val: &str) -> SlHndl {
+pub fn string_init(reg: Hdl<Region>, val: &str) -> SlHndl {
     let len = val.len();
     let mut out = string_make(reg, len.try_into().unwrap());
 
@@ -1667,7 +1668,7 @@ pub fn string_init(reg: *mut Region, val: &str) -> SlHndl {
     out
 }
 
-pub fn sympath_make(reg: *mut Region, len: u32) -> SlHndl {
+pub fn sympath_make(reg: Hdl<Region>, len: u32) -> SlHndl {
     let size = vec_size(NUM_32_LEN, NUM_32_LEN, len);
     crate::report_site!("symbol path alloc");
     unsafe {
@@ -1677,7 +1678,7 @@ pub fn sympath_make(reg: *mut Region, len: u32) -> SlHndl {
     }
 }
 
-pub fn sympath_init(reg: *mut Region, seq: &[SlSym]) -> SlHndl {
+pub fn sympath_init(reg: Hdl<Region>, seq: &[SlSym]) -> SlHndl {
     let len = seq.len();
     let out = sympath_make(reg, len.try_into().unwrap());
 
@@ -1696,7 +1697,7 @@ pub fn sympath_init(reg: *mut Region, seq: &[SlSym]) -> SlHndl {
 }
 
 #[inline(always)]
-pub fn hashvec_make(reg: *mut Region, size: u32) -> SlHndl {
+pub fn hashvec_make(reg: Hdl<Region>, size: u32) -> SlHndl {
     // size, fill, (pointer * size)
     unsafe {
         let top_size = vec_size(NUM_32_LEN * 2, PTR_LEN, size);
@@ -1717,7 +1718,7 @@ pub fn hashvec_make(reg: *mut Region, size: u32) -> SlHndl {
 }
 
 #[inline(always)]
-pub fn proc_lambda_make(reg: *mut Region, argct: u16) -> SlHndl {
+pub fn proc_lambda_make(reg: Hdl<Region>, argct: u16) -> SlHndl {
     // argct, pointer, (symbol * argct)
     unsafe {
         let size = proc_lambda_size(argct);
@@ -1733,7 +1734,7 @@ pub fn proc_lambda_make(reg: *mut Region, argct: u16) -> SlHndl {
 }
 
 #[inline(always)]
-pub fn proc_native_make(reg: *mut Region, argct: u16) -> SlHndl {
+pub fn proc_native_make(reg: Hdl<Region>, argct: u16) -> SlHndl {
     // argct, pointer
     unsafe {
         let size = proc_native_size();
@@ -1748,7 +1749,7 @@ pub fn proc_native_make(reg: *mut Region, argct: u16) -> SlHndl {
     }
 }
 
-pub fn proc_native_init(reg: *mut Region, argct: u16, fun: NativeFn) -> SlHndl {
+pub fn proc_native_init(reg: Hdl<Region>, argct: u16, fun: NativeFn) -> SlHndl {
     let out = proc_native_make(reg, argct);
     unsafe { write_field_unchecked(out.clone(), 2, fun as u64) };
     out
@@ -1863,7 +1864,7 @@ fn write_correct_pos_next(loc: *mut SlHead) {
 mod redir_test {
     use super::*;
 
-    fn redir_gen(reg: *mut memmgt::Region, tgt: SlHndl) -> SlHndl {
+    fn redir_gen(reg: Hdl<Region>, tgt: SlHndl) -> SlHndl {
         unsafe {
             let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0Redir)));
             inc_refc(tgt.get_raw());
@@ -1882,7 +1883,7 @@ mod redir_test {
     #[test]
     fn chain_follow() {
         let mut region = memmgt::Region::new(10);
-        let reg = &raw mut region;
+        let reg = Hdl::new(&raw mut region);
 
         let gt = bool_init(reg, true);
 
@@ -1890,35 +1891,35 @@ mod redir_test {
         let r2 = redir_gen(reg, r1.clone());
         let r3 = redir_gen(reg, r2.clone());
 
-        assert_eq!(true_obj(gt.clone()).raw, gt.clone().raw);
-        assert_eq!(true_obj(r1).raw, gt.clone().raw);
-        assert_eq!(true_obj(r2).raw, gt.clone().raw);
-        assert_eq!(true_obj(r3).raw, gt.raw);
+        assert_eq!(true_obj(gt.clone()).inner, gt.clone().inner);
+        assert_eq!(true_obj(r1).inner, gt.clone().inner);
+        assert_eq!(true_obj(r2).inner, gt.clone().inner);
+        assert_eq!(true_obj(r3).inner, gt.inner);
     }
 
     #[test]
     fn ow_norm() {
         let mut region = memmgt::Region::new(10);
-        let reg = &raw mut region;
+        let reg = Hdl::new(&raw mut region);
 
         let gt = bool_init(reg, true);
 
         let re = redir_gen(reg, gt.clone());
 
-        let mut slot: *mut SlHead = re.raw;
+        let mut slot: *mut SlHead = re.inner.as_ptr();
         inc_refc(slot);
 
-        assert_ne!(slot, gt.raw);
+        assert_ne!(slot, gt.inner.as_ptr());
 
         write_correct_pos_slot(&mut slot);
 
-        assert_eq!(slot, gt.raw);
+        assert_eq!(slot, gt.inner.as_ptr());
     }
 
     #[test]
     fn ow_next() {
         let mut region = memmgt::Region::new(10);
-        let reg = &raw mut region;
+        let reg = Hdl::new(&raw mut region);
 
         let gt = bool_init(reg, true);
 
@@ -1927,12 +1928,15 @@ mod redir_test {
 
         let fr = bool_init(reg, false);
 
-        inc_refc(r2.raw);
+        inc_refc(r2.inner.as_ptr());
         unsafe { set_next_list_elt_unsafe_unchecked(fr.clone(), r2) };
 
-        write_correct_pos_next(fr.raw);
+        write_correct_pos_next(fr.inner.as_ptr());
 
-        assert_eq!(get_next_list_elt(fr).unwrap().raw, gt.raw);
+        assert_eq!(
+            get_next_list_elt(fr).unwrap().inner.as_ptr(),
+            gt.inner.as_ptr()
+        );
     }
 }
 
@@ -2102,7 +2106,7 @@ fn str_hash(slice: &str) -> u32 {
 
 // TODO: automatically resize as needed (probably as an option) (need "fill" field in subhead)
 // TODO: clean up shadowed entries sometime
-pub fn hash_map_insert(reg: *mut Region, loc: SlHndl, key: SlHndl, val: SlHndl) {
+pub fn hash_map_insert(reg: Hdl<Region>, loc: SlHndl, key: SlHndl, val: SlHndl) {
     let entry = core_cons_copy(reg, key.clone(), val);
 
     let size = hashvec_get_size(loc.clone());
@@ -2122,7 +2126,7 @@ pub fn hash_map_insert(reg: *mut Region, loc: SlHndl, key: SlHndl, val: SlHndl) 
     }
 }
 
-// fn alist_map_insert(reg: *mut Region, loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
+// fn alist_map_insert(reg: Hdl<Region>, loc: *mut SlHead, key: *mut SlHead, val: *mut SlHead) {
 //     let entry = core_cons_copy(reg, key, val);
 //     let next = core_read_field(loc, 0);
 //     if !nil_p(next) {
@@ -2174,7 +2178,7 @@ pub fn proc_lambda_set_arg(mut loc: SlHndl, idx: u16, arg: u32) {
 }
 
 #[inline(always)]
-pub fn proc_lambda_get_arg(reg: *mut Region, loc: SlHndl, idx: u16) -> SlHndl {
+pub fn proc_lambda_get_arg(reg: Hdl<Region>, loc: SlHndl, idx: u16) -> SlHndl {
     sym_init(reg, proc_lambda_get_arg_id(loc, idx))
 }
 
@@ -2217,7 +2221,7 @@ pub fn proc_native_get_body(mut loc: SlHndl) -> NativeFn {
 /// Copies the value from a Sail object of a core type into a newly
 /// allocated object
 #[inline(always)]
-pub fn core_copy_val(reg: *mut Region, mut src: SlHndl) -> SlHndl {
+pub fn core_copy_val(reg: Hdl<Region>, mut src: SlHndl) -> SlHndl {
     let (siz, cfg) = (src.size(), src.cfg_byte());
 
     unsafe {
@@ -2237,7 +2241,7 @@ pub fn core_copy_val(reg: *mut Region, mut src: SlHndl) -> SlHndl {
 /// Copies the values from a pair of Sail objects of core types into a
 /// two element list structure
 #[inline(always)]
-fn core_cons_copy(reg: *mut Region, car: SlHndl, cdr: SlHndl) -> SlHndl {
+fn core_cons_copy(reg: Hdl<Region>, car: SlHndl, cdr: SlHndl) -> SlHndl {
     let new_cdr = core_copy_val(reg, cdr);
     let new_car = core_copy_val(reg, car);
 
@@ -2301,7 +2305,7 @@ const ENV_MAX_PROBES: u32 = 5;
 // incidental tags, shall ye know them.
 
 /// Returns a fresh environment scope (symbol binding dictionary)
-pub fn env_make(reg: *mut Region) -> SlHndl {
+pub fn env_make(reg: Hdl<Region>) -> SlHndl {
     crate::report_site!("env layer alloc");
     // TODO: prevent the technically unnecessary `mut`
     let mut layer = unsafe {
@@ -2383,14 +2387,14 @@ pub fn env_mut_entry_by_id(env: SlHndl, sym_id: SlSym, obj: SlHndl) -> bool {
 /// Inserts the given symbol into the environment, bound to the given
 /// object
 #[inline(always)]
-pub fn env_ins(reg: *mut Region, env: SlHndl, mut sym: SlHndl, obj: SlHndl) -> bool {
+pub fn env_ins(reg: Hdl<Region>, env: SlHndl, mut sym: SlHndl, obj: SlHndl) -> bool {
     coretypck!(sym ; Symbol);
     env_ins_by_id(reg, env, sym_get_id(sym), obj)
 }
 
 /// Inserts a symbol with the given ID into the environment, bound to
 /// the given object; true if replacing an existing local binding
-pub fn env_ins_by_id(reg: *mut Region, mut env: SlHndl, sym_id: SlSym, obj: SlHndl) -> bool {
+pub fn env_ins_by_id(reg: Hdl<Region>, mut env: SlHndl, sym_id: SlSym, obj: SlHndl) -> bool {
     coretypck!(env ; EnvLayer);
 
     if mode_of_sym(sym_id) == SymbolMode::Keyword {
@@ -2501,13 +2505,13 @@ fn env_get_binding_loc(mut env: SlHndl, sym_id: SlSym) -> Option<*mut *mut SlHea
 }
 
 #[inline(always)]
-fn u8_make(reg: *mut Region) -> SlHndl {
+fn u8_make(reg: Hdl<Region>) -> SlHndl {
     crate::report_site!("u8 alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_8_LEN, memmgt::cap(Cfg::B1U8))) }
 }
 
 #[inline(always)]
-pub fn u8_init(reg: *mut Region, val: u8) -> SlHndl {
+pub fn u8_init(reg: Hdl<Region>, val: u8) -> SlHndl {
     let ptr = u8_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2526,12 +2530,12 @@ pub fn u8_get(mut loc: SlHndl) -> u8 {
 }
 
 #[inline(always)]
-fn u16_make(reg: *mut Region) -> SlHndl {
+fn u16_make(reg: Hdl<Region>) -> SlHndl {
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_16_LEN, memmgt::cap(Cfg::B2U16))) }
 }
 
 #[inline(always)]
-fn u16_init(reg: *mut Region, val: u16) -> SlHndl {
+fn u16_init(reg: Hdl<Region>, val: u16) -> SlHndl {
     let ptr = u16_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2550,13 +2554,13 @@ fn _u16_get(mut loc: SlHndl) -> u16 {
 }
 
 #[inline(always)]
-pub fn u32_make(reg: *mut Region) -> SlHndl {
+pub fn u32_make(reg: Hdl<Region>) -> SlHndl {
     crate::report_site!("u32 alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4U32))) }
 }
 
 #[inline(always)]
-pub fn u32_init(reg: *mut Region, val: u32) -> SlHndl {
+pub fn u32_init(reg: Hdl<Region>, val: u32) -> SlHndl {
     let ptr = u32_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2575,12 +2579,12 @@ pub fn u32_get(mut loc: SlHndl) -> u32 {
 }
 
 #[inline(always)]
-fn u64_make(reg: *mut Region) -> SlHndl {
+fn u64_make(reg: Hdl<Region>) -> SlHndl {
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8U64))) }
 }
 
 #[inline(always)]
-fn u64_init(reg: *mut Region, val: u64) -> SlHndl {
+fn u64_init(reg: Hdl<Region>, val: u64) -> SlHndl {
     let ptr = u64_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2599,14 +2603,14 @@ pub fn u64_get(mut loc: SlHndl) -> u64 {
 }
 
 #[inline(always)]
-fn u128_make(reg: *mut Region) -> SlHndl {
+fn u128_make(reg: Hdl<Region>) -> SlHndl {
     unsafe {
         SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_128_LEN, memmgt::cap(Cfg::B16U128)))
     }
 }
 
 #[inline(always)]
-fn u128_init(reg: *mut Region, val: u128) -> SlHndl {
+fn u128_init(reg: Hdl<Region>, val: u128) -> SlHndl {
     let ptr = u128_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2625,12 +2629,12 @@ fn _u128_get(mut loc: SlHndl) -> u128 {
 }
 
 #[inline(always)]
-fn i8_make(reg: *mut Region) -> SlHndl {
+fn i8_make(reg: Hdl<Region>) -> SlHndl {
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_8_LEN, memmgt::cap(Cfg::B1I8))) }
 }
 
 #[inline(always)]
-fn i8_init(reg: *mut Region, val: i8) -> SlHndl {
+fn i8_init(reg: Hdl<Region>, val: i8) -> SlHndl {
     let ptr = i8_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2649,12 +2653,12 @@ fn _i8_get(mut loc: SlHndl) -> i8 {
 }
 
 #[inline(always)]
-fn i16_make(reg: *mut Region) -> SlHndl {
+fn i16_make(reg: Hdl<Region>) -> SlHndl {
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_16_LEN, memmgt::cap(Cfg::B2I16))) }
 }
 
 #[inline(always)]
-fn i16_init(reg: *mut Region, val: i16) -> SlHndl {
+fn i16_init(reg: Hdl<Region>, val: i16) -> SlHndl {
     let ptr = i16_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2673,12 +2677,12 @@ fn _i16_get(mut loc: SlHndl) -> i16 {
 }
 
 #[inline(always)]
-fn i32_make(reg: *mut Region) -> SlHndl {
+fn i32_make(reg: Hdl<Region>) -> SlHndl {
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4I32))) }
 }
 
 #[inline(always)]
-fn i32_init(reg: *mut Region, val: i32) -> SlHndl {
+fn i32_init(reg: Hdl<Region>, val: i32) -> SlHndl {
     let ptr = i32_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2697,13 +2701,13 @@ fn _i32_get(mut loc: SlHndl) -> i32 {
 }
 
 #[inline(always)]
-pub fn i64_make(reg: *mut Region) -> SlHndl {
+pub fn i64_make(reg: Hdl<Region>) -> SlHndl {
     crate::report_site!("i64 alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8I64))) }
 }
 
 #[inline(always)]
-pub fn i64_init(reg: *mut Region, val: i64) -> SlHndl {
+pub fn i64_init(reg: Hdl<Region>, val: i64) -> SlHndl {
     let ptr = i64_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2722,14 +2726,14 @@ pub fn i64_get(mut loc: SlHndl) -> i64 {
 }
 
 #[inline(always)]
-fn i128_make(reg: *mut Region) -> SlHndl {
+fn i128_make(reg: Hdl<Region>) -> SlHndl {
     unsafe {
         SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_128_LEN, memmgt::cap(Cfg::B16I128)))
     }
 }
 
 #[inline(always)]
-fn i128_init(reg: *mut Region, val: i128) -> SlHndl {
+fn i128_init(reg: Hdl<Region>, val: i128) -> SlHndl {
     let ptr = i128_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2748,13 +2752,13 @@ fn _i128_get(mut loc: SlHndl) -> i128 {
 }
 
 #[inline(always)]
-pub fn f32_make(reg: *mut Region) -> SlHndl {
+pub fn f32_make(reg: Hdl<Region>) -> SlHndl {
     crate::report_site!("f32 alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_32_LEN, memmgt::cap(Cfg::B4F32))) }
 }
 
 #[inline(always)]
-pub fn f32_init(reg: *mut Region, val: f32) -> SlHndl {
+pub fn f32_init(reg: Hdl<Region>, val: f32) -> SlHndl {
     let ptr = f32_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2773,13 +2777,13 @@ pub fn f32_get(mut loc: SlHndl) -> f32 {
 }
 
 #[inline(always)]
-pub fn f64_make(reg: *mut Region) -> SlHndl {
+pub fn f64_make(reg: Hdl<Region>) -> SlHndl {
     crate::report_site!("f64 alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, NUM_64_LEN, memmgt::cap(Cfg::B8F64))) }
 }
 
 #[inline(always)]
-pub fn f64_init(reg: *mut Region, val: f64) -> SlHndl {
+pub fn f64_init(reg: Hdl<Region>, val: f64) -> SlHndl {
     let ptr = f64_make(reg);
     unsafe { write_field_unchecked(ptr.clone(), 0, val) };
     ptr
@@ -2798,13 +2802,13 @@ pub fn f64_get(mut loc: SlHndl) -> f64 {
 }
 
 #[inline(always)]
-pub fn bool_make(reg: *mut Region) -> SlHndl {
+pub fn bool_make(reg: Hdl<Region>) -> SlHndl {
     crate::report_site!("bool alloc");
     unsafe { SlHndl::from_raw_unchecked(memmgt::alloc(reg, 0, memmgt::cap(Cfg::B0BoolF))) }
 }
 
 #[inline(always)]
-pub fn bool_init(reg: *mut Region, val: bool) -> SlHndl {
+pub fn bool_init(reg: Hdl<Region>, val: bool) -> SlHndl {
     crate::report_site!("bool alloc");
     unsafe {
         SlHndl::from_raw_unchecked(memmgt::alloc(
