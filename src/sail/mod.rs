@@ -489,7 +489,7 @@ pub fn structure_copy(tgt: Hdl<memmgt::Region>, root: SlHndl) -> *mut SlHead {
     // println!("{src_int_refs:?}");
 
     for (i, p) in src_ptrs.into_iter().enumerate().rev() {
-        let this_new_obj = memmgt::copy_direct(p, tgt, new_rcs[i]);
+        let this_new_obj = memmgt::copy_direct(tgt, p, new_rcs[i]);
         new_ptrs[i] = this_new_obj;
 
         // insert correct new addresses in next element slot and

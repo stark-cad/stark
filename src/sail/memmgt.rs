@@ -773,9 +773,6 @@ unsafe fn reclaim_raw(reg: Hdl<Region>, ptr: *mut u8, sz: u32) {
                 if newblk as usize + sz as usize == (*zone).top as usize {
                     // TODO: change these operations (multiple) to atomic?
                     (*zone).top = newblk as _;
-
-                    // std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, sz);
-
                     (*zone).used -= sz;
                 } else {
                     fblk_set_len(newblk, sz);
@@ -791,17 +788,7 @@ unsafe fn reclaim_raw(reg: Hdl<Region>, ptr: *mut u8, sz: u32) {
 
                     // TODO: more clearly specify concurrency needs for zones
 
-                    // let (chkt, done) = std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
-                    //     &raw mut (*zone).free,
-                    //     ptr::null_mut(),
-                    //     newblk,
-                    // );
-                    // debug_assert!(done, "{:x}", chkt as u64);
-
                     (*zone).free = newblk;
-
-                    // std::intrinsics::atomic_xsub_acqrel(&mut (*zone).used, sz);
-
                     (*zone).used -= sz;
                 }
                 break 'lb
@@ -1252,17 +1239,24 @@ unsafe fn fblk_get_next_ofs(block: *const FreeBlock) -> u32 {
     }
 }
 
+unsafe fn fblk_in_zone(zone: *const Zone, block: *const FreeBlock) -> bool {
+    unsafe {
+        let (bot, top) = ((*zone).bot, (*zone).top);
+        block as usize >= bot as usize && (block as usize) < top as usize
+    }
+}
+
 /// Set which block a free block points to as the prior block
 unsafe fn fblk_set_prev_blk(zone: *const Zone, block: *mut FreeBlock, prev: *const FreeBlock) {
     unsafe {
-        debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+        debug_assert!(fblk_in_zone(zone, block));
 
         if prev.is_null() {
             fblk_set_prev_ofs(block, FBLK_NULL_OFFSET);
             return;
         }
 
-        debug_assert_eq!(which_mem_area(prev as *mut _).1 as *const _, zone);
+        debug_assert!(fblk_in_zone(zone, prev));
 
         let start = (*zone).bot;
         let prev_ofs = prev as u64 - start as u64;
@@ -1276,7 +1270,7 @@ unsafe fn fblk_set_prev_blk(zone: *const Zone, block: *mut FreeBlock, prev: *con
 /// Get the block a free block points to as the prior block
 unsafe fn fblk_get_prev_blk(zone: *const Zone, block: *const FreeBlock) -> *mut FreeBlock {
     unsafe {
-        debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+        debug_assert!(fblk_in_zone(zone, block));
 
         let start = (*zone).bot;
         let prev_ofs = fblk_get_prev_ofs(block);
@@ -1288,7 +1282,7 @@ unsafe fn fblk_get_prev_blk(zone: *const Zone, block: *const FreeBlock) -> *mut 
         assert!(prev_ofs < FBLK_NULL_OFFSET);
 
         let out = (start as u64 + prev_ofs as u64) as *mut FreeBlock;
-        debug_assert_eq!(which_mem_area(out as *mut _).1 as *const _, zone);
+        debug_assert!(fblk_in_zone(zone, out));
         out
     }
 }
@@ -1296,14 +1290,14 @@ unsafe fn fblk_get_prev_blk(zone: *const Zone, block: *const FreeBlock) -> *mut 
 /// Set which block a free block points to as the following block
 unsafe fn fblk_set_next_blk(zone: *const Zone, block: *mut FreeBlock, next: *const FreeBlock) {
     unsafe {
-        debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+        debug_assert!(fblk_in_zone(zone, block));
 
         if next.is_null() {
             fblk_set_next_ofs(block, FBLK_NULL_OFFSET);
             return;
         }
 
-        debug_assert_eq!(which_mem_area(next as *mut _).1 as *const _, zone);
+        debug_assert!(fblk_in_zone(zone, next));
 
         let start = (*zone).bot;
         let next_ofs = next as u64 - start as u64;
@@ -1317,7 +1311,7 @@ unsafe fn fblk_set_next_blk(zone: *const Zone, block: *mut FreeBlock, next: *con
 /// Get the block a free block points to as the following block
 unsafe fn fblk_get_next_blk(zone: *const Zone, block: *const FreeBlock) -> *mut FreeBlock {
     unsafe {
-        debug_assert_eq!(which_mem_area(block as *mut _).1 as *const _, zone);
+        debug_assert!(fblk_in_zone(zone, block));
 
         let start = (*zone).bot;
         let next_ofs = fblk_get_next_ofs(block);
@@ -1329,7 +1323,7 @@ unsafe fn fblk_get_next_blk(zone: *const Zone, block: *const FreeBlock) -> *mut 
         assert!(next_ofs < FBLK_NULL_OFFSET);
 
         let out = (start as u64 + next_ofs as u64) as *mut FreeBlock;
-        debug_assert_eq!(which_mem_area(out as *mut _).1 as *const _, zone);
+        debug_assert!(fblk_in_zone(zone, out));
         out
     }
 }
