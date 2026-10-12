@@ -203,78 +203,82 @@ sail_fn! {
     }
 
     "=" [fst, snd] {
-        let reg = _vsl.region();
         let result = i64_get(fst) == i64_get(snd);
-        // if result {
-        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        // } else {
-        //     env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
-        // }
-        return bool_init(reg, result);
+
+        if result {
+            env_lookup_by_id(_vsl.top_env(), super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_vsl.top_env(), super::S_F_INTERN.0).unwrap()
+        }
+        // let reg = _vsl.region();
+        // return bool_init(reg, result);
     }
 
     ">=" [fst, snd] {
-        let reg = _vsl.region();
         let result = i64_get(fst) >= i64_get(snd);
-        // if result {
-        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        // } else {
-        //     env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
-        // }
-        return bool_init(reg, result);
+
+        if result {
+            env_lookup_by_id(_vsl.top_env(), super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_vsl.top_env(), super::S_F_INTERN.0).unwrap()
+        }
+        // let reg = _vsl.region();
+        // return bool_init(reg, result);
     }
 
     "<=" [fst, snd] {
-        let reg = _vsl.region();
         let result = i64_get(fst) <= i64_get(snd);
-        // if result {
-        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        // } else {
-        //     env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
-        // }
-        return bool_init(reg, result);
+
+        if result {
+            env_lookup_by_id(_vsl.top_env(), super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_vsl.top_env(), super::S_F_INTERN.0).unwrap()
+        }
+        // let reg = _vsl.region();
+        // return bool_init(reg, result);
     }
 
     "eq" [fst, snd] {
-        let reg = _vsl.region();
         let result = core_eq(fst, snd);
-        // if result {
-        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        // } else {
-        //     env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
-        // }
-        return bool_init(reg, result);
+
+        if result {
+            env_lookup_by_id(_vsl.top_env(), super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_vsl.top_env(), super::S_F_INTERN.0).unwrap()
+        }
+        // let reg = _vsl.region();
+        // return bool_init(reg, result);
     }
 
     "not" [val] {
-        let reg = _vsl.region();
-        // if val.truthy() {
-        // env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
-        // } else {
-        // env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        // }
-        return bool_init(reg, !val.truthy());
+        if val.truthy() {
+        env_lookup_by_id(_vsl.top_env(), super::S_F_INTERN.0).unwrap()
+        } else {
+        env_lookup_by_id(_vsl.top_env(), super::S_T_INTERN.0).unwrap()
         }
+        // let reg = _vsl.region();
+        // return bool_init(reg, !val.truthy());
+    }
 
     // TODO: and and or as macros or, special forms for short-circuit
     "and" [lhs, rhs] {
-        let reg = _vsl.region();
-        // if lhs.truthy() && rhs.truthy() {
-        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        // } else {
-        //     env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
-        // }
-        return bool_init(reg, lhs.truthy() && rhs.truthy());
+        if lhs.truthy() && rhs.truthy() {
+            env_lookup_by_id(_vsl.top_env(), super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_vsl.top_env(), super::S_F_INTERN.0).unwrap()
+        }
+        // let reg = _vsl.region();
+        // return bool_init(reg, lhs.truthy() && rhs.truthy());
     }
 
     "or" [lhs, rhs] {
-        let reg = _vsl.region();
-        // if lhs.truthy() || rhs.truthy() {
-        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        // } else {
-        //     env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
-        // }
-        return bool_init(reg, lhs.truthy() || rhs.truthy());
+        if lhs.truthy() || rhs.truthy() {
+            env_lookup_by_id(_vsl.top_env(), super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_vsl.top_env(), super::S_F_INTERN.0).unwrap()
+        }
+        // let reg = _vsl.region();
+        // return bool_init(reg, lhs.truthy() || rhs.truthy());
     }
 
     "own-hdl" [] {
@@ -326,12 +330,12 @@ sail_fn! {
     }
 
     "qtx" [vsref, item] {
-        // let reg = _vsl.region();
         let id = _vsl.id();
 
-        // env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        return bool_init(reg, true);
         super::vsl_ref_send(vsref, id, item);
+        env_lookup_by_id(_vsl.top_env(), super::S_T_INTERN.0).unwrap()
+        // let reg = _vsl.region();
+        // return bool_init(reg, true);
     }
 
     "qrx" [] {
@@ -345,8 +349,8 @@ sail_fn! {
                 id
             }
             None => {
-                // env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap();
-                return bool_init(reg, false);
+                env_lookup_by_id(_vsl.top_env(), super::S_F_INTERN.0).unwrap()
+                // return bool_init(reg, false);
             }
         }
     }
@@ -354,13 +358,13 @@ sail_fn! {
     // TODO: adjust memmgt so we can efficiently get new bool objects
     // NOTE: 'empty list predicate'
     "elp" [loc] {
-        let reg = _vsl.region();
-        // if coretypp!(loc ; Ref) && !loc.nnil_ref_p() {
-        //     env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
-        // } else {
-        //     env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
-        // }
-        return bool_init(reg, coretypp!(loc ; Ref) && !loc.nnil_ref_p());
+        if coretypp!(loc ; Ref) && !loc.nnil_ref_p() {
+            env_lookup_by_id(_vsl.top_env(), super::S_T_INTERN.0).unwrap()
+        } else {
+            env_lookup_by_id(_vsl.top_env(), super::S_F_INTERN.0).unwrap()
+        }
+        // let reg = _vsl.region();
+        // return bool_init(reg, coretypp!(loc ; Ref) && !loc.nnil_ref_p());
     }
 
     "push" [loc, item] {
@@ -620,20 +624,20 @@ sail_fn! {
 
     "tmp-vec-match" [target, item] {
         coretypck!(target ; VecStd);
-        let reg = _vsl.region();
 
         for i in 0..super::stdvec_get_len(target.clone()) {
             let this = super::stdvec_idx(target.clone(), i);
             if super::i64_get(this.clone()) == super::i64_get(item.clone()) {
                 return match get_next_list_elt(this.clone()) {
                     Some(t) => t,
-                    None => bool_init(reg, false),
+                    None => break,
                 }
             }
         }
+        env_lookup_by_id(_vsl.top_env(), super::S_F_INTERN.0).unwrap()
 
-        // env_lookup_by_id(_env, super::S_F_INTERN.0).unwrap()
-        bool_init(reg, false)
+        // let reg = _vsl.region();
+        // bool_init(reg, false)
     }
 
     "tmp-coord-log" [tgt] {

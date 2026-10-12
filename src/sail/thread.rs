@@ -730,6 +730,13 @@ impl Vessel {
         vhdl
     }
 
+    /// Binds selected special symbols for runtime use
+    fn intern(self: Hdl<Self>) {
+        // no point in creating myriad single-use 8-byte allocations
+        self.bind_sym(super::S_T_INTERN.0, super::bool_init(self.region(), true));
+        self.bind_sym(super::S_F_INTERN.0, super::bool_init(self.region(), false));
+    }
+
     // TODO: special handle exclusively allowing `advance`?
     /// Calling thread claims this Vessel for its own management
     pub fn claim(self: Hdl<Self>, th: std::thread::Thread) -> *mut atomic::AtomicBool {

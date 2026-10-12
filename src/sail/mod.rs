@@ -328,8 +328,8 @@ incl_symbols! {
     S_RENDER      "rdr"     Basic;
     S_RDR_HDL     "rdr-vsl" Basic;
     S_ENGINE      "engine"  Basic;
-    // S_T_INTERN    "%true"   Basic;
-    // S_F_INTERN    "%false"  Basic;
+    S_T_INTERN    "%true"   Basic;
+    S_F_INTERN    "%false"  Basic;
     S_FR_DIMS     "fr-dims" Basic;
     S_CUR_POS     "cur-pos" Basic;
     K_CX_DESTR    "cx-dstr" Keyword;
