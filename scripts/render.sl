@@ -11,13 +11,13 @@
 
 ;; <>
 
-;; scripts/rndr.sl
+;; scripts/render.sl
 
 ;; Main loop for the rendering vessel of STARK's full graphical mode.
 
 ;; <>
 
-(def rndr (fn []
+(def rdr (fn []
 
 (def source ())
 (def input ())
@@ -43,17 +43,17 @@
      (if found entry ())))
 
 (def for-each (fn [coll f]
-     (def idx 0)
-     (while (not (= idx (vec-len coll)))
-            (f (vec-get coll idx))
-            (set idx (+ 1 idx)))))
+                  (def idx 0)
+                  (while (not (>= idx (vec-len coll)))
+                    (f (vec-get coll idx))
+                    (set idx (+ 1 idx)))))
 
 (def windows [])
 
 ;(bg-col engine (as-f32 0.0) (as-f32 0.0) (as-f32 0.0))
 (redraw engine)
 
-(print mgr-id)
+(print (vsl-id gov-vsl))
 (print "prepared for render loop")
 
 (def reported-pt ())
@@ -69,31 +69,31 @@
 
 ; TODO: fix insane variable shadowing
 (while alive
-       (set source (qrx))
+       (set source (qb))
        (set input (rest source))
 
        (cond
          (not source) ()
 
-         (and (= source mgr-id) (eq input :get-win)) (do
-           (def for-id (rest input))
-           (print (rest input))
-           (print for-id)
+         (and (= source (vsl-id gov-vsl)) (eq input :get-win)) (do
+           (def for-id (vsl-id (rest input)))
            (def new-win (create-window engine))
            (def acc (as-f32 -1.0))
            (def hgt (/ (as-f32 2.0) (as-f32 (vec-len windows))))
-           (for-each windows (fn [w] (modify-window engine w (as-f32 0.0) acc (as-f32 1.0) (+ acc hgt))
-                                     (set acc (+ acc hgt))))
+           (for-each windows (fn [w]
+                                 (modify-window engine w (as-f32 0.0) acc (as-f32 1.0) (+ acc hgt))
+                                 (set acc (+ hgt acc))))
+
 
            (modify-window engine new-win (as-f32 -1.0) (as-f32 -1.0) (as-f32 0.0) (as-f32 1.0))
-           (vec-push windows (link new-win for-id))
-           (qtx mgr-tgt (link wr-sig new-win))
+           (vec-push windows (link new-win (link for-id (rest input))))
+           (qtx gov-vsl (link wr-sig new-win))
            (redraw engine))
 
-         (and (= source mgr-id) (eq input :hit-win)) (do
+         (and (= source (vsl-id gov-vsl)) (eq input :hit-win)) (do
            (set reported-pt (rest input))
            (set ht-result (hit-test engine (arr-vec-get reported-pt 0) (arr-vec-get reported-pt 1)))
-           (qtx mgr-tgt (link ht-sig ht-result)))
+           (qtx gov-vsl (link ht-sig ht-result)))
 
            ;TODO: linking :win-hit to ht-result ONLY works the first time (???)
            ;TODO: linking through a symbol works fine (???)
@@ -145,7 +145,7 @@
          (eq input :cx-crmv) (do
            (set ht-result (hit-test engine (rest input)))
            (if (not (= ht-last ht-result)) (do
-               (qtx mgr-tgt (link ht-sig ht-result))
+               (qtx gov-vsl (link ht-sig ht-result))
                (set ht-cur (vec-find windows (fn [e] (= e ht-result))))) ())
            (set ht-last ht-result)
            (if ht-cur (qtx (rest (rest ht-cur)) (link cm-sig (rest ht-result))) ()))
