@@ -60,34 +60,51 @@ impl<T> Hdl<T> {
 }
 
 // TODO: autorelease or panic if dropped?
-struct LockToken(*mut u8);
+pub struct LockToken<T>(*mut u8, std::marker::PhantomData<T>);
 
-// TODO: support more than one lock? (symtab)
-trait Lock
+#[inline(always)]
+pub(crate) fn take_lock_at(lock: *mut u8) -> LockToken<()> {
+    unsafe {
+        while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
+            lock,
+            false as u8,
+            true as u8,
+        )
+        .1
+        {
+            std::hint::spin_loop();
+        }
+    }
+    LockToken(lock, std::marker::PhantomData)
+}
+
+#[inline(always)]
+pub(crate) fn release_lock_at(token: LockToken<()>) {
+    let lock = token.0;
+    unsafe {
+        std::intrinsics::atomic_store::<_, { AO::Release }, false>(lock, false as u8);
+    }
+}
+
+#[inline(always)]
+pub(crate) fn locked_p_at(lock: *const u8) -> bool {
+    unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(lock) != false as u8 }
+}
+
+pub trait Lock
 where
     Self: Sized,
 {
     fn lock_pos(self: Hdl<Self>) -> *mut u8;
 
     #[must_use]
-    fn take_lock(self: Hdl<Self>) -> LockToken {
+    fn take_lock(self: Hdl<Self>) -> LockToken<Self> {
         let lock = self.lock_pos();
-        unsafe {
-            while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
-                lock,
-                false as u8,
-                true as u8,
-            )
-            .1
-            {
-                std::hint::spin_loop();
-            }
-        }
-        LockToken(lock)
+        LockToken(take_lock_at(lock).0, std::marker::PhantomData)
     }
 
     #[must_use]
-    fn take_lock_nb(self: Hdl<Self>) -> Option<LockToken> {
+    fn take_lock_nb(self: Hdl<Self>) -> Option<LockToken<Self>> {
         let lock = self.lock_pos();
         unsafe {
             if std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
@@ -97,23 +114,23 @@ where
             )
             .1
             {
-                Some(LockToken(lock))
+                Some(LockToken(lock, std::marker::PhantomData))
             } else {
                 None
             }
         }
     }
 
-    fn release_lock(self: Hdl<Self>, token: LockToken) {
+    fn release_lock(self: Hdl<Self>, token: LockToken<Self>) {
         assert_eq!(token.0, self.lock_pos());
-        let lock = token.0;
-        unsafe {
-            std::intrinsics::atomic_store::<_, { AO::Release }, false>(lock, false as u8);
-        }
+        release_lock_at(LockToken(token.0, std::marker::PhantomData))
     }
 
     fn locked_p(self: Hdl<Self>) -> bool {
         let lock = self.lock_pos();
-        unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(lock) != 0 }
+        locked_p_at(lock)
+    }
+}
+
     }
 }

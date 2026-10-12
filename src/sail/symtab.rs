@@ -26,6 +26,7 @@
 use std::{alloc, mem, ptr, slice};
 
 use super::Hdl;
+use super::util::{self, Lock, LockToken};
 
 use std::intrinsics::AtomicOrdering as AO;
 
@@ -58,6 +59,12 @@ pub struct SymbolTable {
 
 unsafe impl Send for SymbolTable {}
 unsafe impl Sync for SymbolTable {}
+
+impl Lock for SymbolTable {
+    fn lock_pos(self: Hdl<Self>) -> *mut u8 {
+        unsafe { &raw mut (*self.raw()).ins_lock }
+    }
+}
 
 struct _SymEntry {
     id: u32,
@@ -141,18 +148,7 @@ impl SymbolTable {
 
     // TODO: resize according to a progression of known primes!
     // NOTE: hashing is FAR slower with sizes not known at compile
-    fn resize(self: Hdl<Self>, factor: usize) {
-        // acquire insertion lock
-        // unsafe {
-        //     while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
-        //         &raw mut (*self.raw()).ins_lock,
-        //         false as u8,
-        //         true as u8,
-        //     )
-        //     .1
-        //     {}
-        // }
-
+    fn resize(self: Hdl<Self>, factor: usize, _lt: &LockToken<Self>) {
         let (old_tab_size, old_zone_size, old_ta_ptr, old_tb_ptr, old_ez_ptr) = unsafe {
             (
                 (*self.raw()).map_len * USA,
@@ -225,14 +221,7 @@ impl SymbolTable {
         }
 
         unsafe {
-            // acquire resize lock
-            while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
-                &raw mut (*self.raw()).rsz_lock,
-                false as u8,
-                true as u8,
-            )
-            .1
-            {}
+            let rsz_tok = util::take_lock_at(&raw mut (*self.raw()).rsz_lock);
 
             // replace table pointers, entry zone pointers, and map len
             (*self.raw()).id_to_nm = ntapt as _;
@@ -244,48 +233,27 @@ impl SymbolTable {
 
             (*self.raw()).map_len = new_tab_len;
 
-            // release resize lock
-            std::intrinsics::atomic_store::<_, { AO::Release }, false>(
-                &raw mut (*self.raw()).rsz_lock,
-                false as u8,
-            )
-        };
+            util::release_lock_at(rsz_tok);
+        }
 
-        // release insertion lock
         unsafe {
-            // std::intrinsics::atomic_store::<_, { AO::Release }, false>(
-            //     &raw mut (*self.raw()).ins_lock,
-            //     false as u8,
-            // );
-
             let old_tab_layout = alloc::Layout::from_size_align_unchecked(old_tab_size, USA);
             let old_zone_layout = alloc::Layout::from_size_align_unchecked(old_zone_size, USA);
 
             alloc::dealloc(old_ta_ptr as *mut u8, old_tab_layout);
             alloc::dealloc(old_tb_ptr as *mut u8, old_tab_layout);
             alloc::dealloc(old_ez_ptr, old_zone_layout);
-        };
+        }
     }
 
     pub fn get_id(self: Hdl<Self>, name: &[u8]) -> u32 {
         // look up name, then insert with next available ID if not found
-
         if let Some(id) = self.lookup_by_name(name) {
             return id;
         }
 
         // TODO: give up after some iteration count (deadlock)
-
-        // acquire lock
-        unsafe {
-            while !std::intrinsics::atomic_cxchg::<_, { AO::Acquire }, { AO::Acquire }>(
-                &raw mut (*self.raw()).ins_lock,
-                false as u8,
-                true as u8,
-            )
-            .1
-            {}
-        }
+        let tok = self.take_lock();
 
         let out_id = if let Some(cur_id) = self.lookup_by_name(name) {
             cur_id
@@ -296,7 +264,7 @@ impl SymbolTable {
                     || (*self.raw()).btop as usize + name.len()
                         > (*self.raw()).entries as usize + (*self.raw()).espace
                 {
-                    self.resize(2);
+                    self.resize(2, &tok);
                 }
 
                 // direct_insert using next_id
@@ -310,34 +278,22 @@ impl SymbolTable {
             }
         };
 
-        // release lock
-        unsafe {
-            assert!((*self.raw()).next_id <= !(0b11_u32.reverse_bits()));
+        unsafe { assert!((*self.raw()).next_id <= !(0b11_u32.reverse_bits())) }
 
-            std::intrinsics::atomic_store::<_, { AO::Release }, false>(
-                &raw mut (*self.raw()).ins_lock,
-                false as u8,
-            );
-        };
+        // release lock
+        self.release_lock(tok);
 
         out_id
     }
 
     // TODO: check that tables are the same size after lookup as before
-
     pub fn lookup_by_name(self: Hdl<Self>, name: &[u8]) -> Option<u32> {
-        // hash input, then search appropriate table until either
-        // entry or zero found
-
         // NOTE: watch for issues caused by resize during lookup
         // TODO: actually take the resize lock here?
-        while unsafe {
-            std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(
-                &raw const (*self.raw()).rsz_lock,
-            )
-        } != 0
-        {}
+        while unsafe { util::locked_p_at(&raw const (*self.raw()).rsz_lock) } {}
 
+        // hash input, then search appropriate table until either
+        // entry or zero found
         unsafe {
             let tgt = Self::hash_name(name) % (*self.raw()).map_len;
 
@@ -350,17 +306,10 @@ impl SymbolTable {
 
     // TODO: version of Vec with no allocations if under a certain length? (like 12)
     pub fn lookup_by_id(self: Hdl<Self>, id: u32) -> Option<&'static [u8]> {
+        while unsafe { util::locked_p_at(&raw const (*self.raw()).rsz_lock) } {}
+
         // hash input, then search appropriate table until either
         // entry or zero found
-
-        // NOTE: would like to keep as an immutable reference though
-        while unsafe {
-            std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(
-                &raw const (*self.raw()).rsz_lock,
-            )
-        } != 0
-        {}
-
         unsafe {
             let tgt = Self::hash_id(id) % (*self.raw()).map_len;
 
@@ -435,7 +384,6 @@ impl SymbolTable {
         let mut csn = tgt;
 
         loop {
-            // let cur = unsafe { ptr::read(map.add(csn)) };
             let cur =
                 unsafe { std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(map.add(csn)) };
 
@@ -601,7 +549,9 @@ mod tests {
         let id2 = tref.get_id(b"mesa");
         let id3 = tref.get_id(b"droll");
 
-        tref.resize(4);
+        let tok = tref.take_lock();
+        tref.resize(4, &tok);
+        tref.release_lock(tok);
 
         assert_eq!(tab.map_len, 200);
 
