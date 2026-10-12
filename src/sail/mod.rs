@@ -159,45 +159,36 @@ fn make_val_type_mfst(
 // These should have global type IDs, type symbol bindings in the
 // environment tree, and manifests.
 
-// TODO: probably track how many have handles to a queue
-pub fn send_hdl_init(reg: *mut memmgt::Region, tgt: queue::InletHdl) -> SlHndl {
-    unsafe {
-        crate::report_site!("send handle alloc");
-        let out =
-            SlHndl::from_raw_unchecked(memmgt::alloc(reg, PTR_LEN, memmgt::cap(Cfg::B8SendHdl)));
 
-        write_field_unchecked(out.clone(), 0, mem::transmute::<queue::InletHdl, u64>(tgt));
-        out
-    }
-}
-
-fn send_hdl_tx(mut loc: SlHndl, msg: SlHndl, from: usize) {
-    coretypck!(loc ; SendHdl);
-    unsafe { (loc.value_ptr() as *mut queue::InletHdl).as_mut_unchecked() }.transmit(from, msg)
-}
-
-fn vessel_ref_init(reg: *mut memmgt::Region, tgt: Hdl<thread::Vessel>) -> SlHndl {
+pub fn vsl_ref_init(reg: Hdl<memmgt::Region>, tgt: Hdl<thread::Vessel>) -> SlHndl {
     unsafe {
         crate::report_site!("vessel reference alloc");
-        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 8, T_VSL_REF_ID.0));
+        let out = SlHndl::from_raw_unchecked(memmgt::alloc(reg, 8, memmgt::cap(Cfg::B8VslHdl)));
         write_field_unchecked(out.clone(), 0, tgt.raw() as u64);
         out
     }
 }
 
-fn vessel_ref_get(mut loc: SlHndl) -> Hdl<thread::Vessel> {
-    assert_eq!(loc.type_id(), T_VSL_REF_ID.0);
+fn vsl_ref_get(mut loc: SlHndl) -> Hdl<thread::Vessel> {
+    coretypck!(loc ; VslHdl);
     let addrs: u64 = read_field(loc, 0);
     Hdl::new(addrs as _)
 }
 
-fn vessel_ref_join(reg: *mut memmgt::Region, loc: SlHndl) -> SlHndl {
-    let vs_ref = vessel_ref_get(loc);
+// TODO: dude we need to be able to block on joins too
+fn vsl_ref_join(reg: Hdl<memmgt::Region>, loc: SlHndl) -> SlHndl {
+    let vs_ref = vsl_ref_get(loc);
 
     // TODO: real thread management without spinloops
     while !vs_ref.done_p() {}
 
     unsafe { SlHndl::from_raw_unchecked(structure_copy(reg, vs_ref.result().unwrap())) }
+}
+
+// TODO: handles with special capabilities?
+fn vsl_ref_send(loc: SlHndl, source: usize, msg: SlHndl) {
+    let hdl = vsl_ref_get(loc);
+    hdl.msg_tmit(source, msg)
 }
 
 fn arrvec_make<T: SizedBase + Copy>(
@@ -318,7 +309,6 @@ incl_symbols! {
     T_ENG_HDL     "eng-hdl" Type;
     T_ENV         "env"     Type;
     T_ENV_LYR     "env-lyr" Type;
-    T_VSL_REF     "vsl-hdl" Type;
     M_BASE        "base"    Module;
     SP_AND        "and"     Basic;
     SP_COND       "cond"    Basic;
@@ -331,13 +321,12 @@ incl_symbols! {
     SP_QUOTE      "quote"   Basic;
     SP_SET        "set"     Basic;
     SP_WHILE      "while"   Basic;
-    S_MAIN        "main"    Basic;
-    S_MGR_TGT     "mgr-tgt" Basic;
-    S_MGR_ID      "mgr-id"  Basic;
+    SP_QRX_WAIT   "qb"      Basic;
+    S_GOVERNOR    "gov"     Basic;
+    S_GOV_HDL     "gov-vsl" Basic;
     S_FRAME       "frame"   Basic;
-    S_RNDR        "rndr"    Basic;
-    S_RDR_TGT     "rdr-tgt" Basic;
-    S_RDR_ID      "rdr-id"  Basic;
+    S_RENDER      "rdr"     Basic;
+    S_RDR_HDL     "rdr-vsl" Basic;
     S_ENGINE      "engine"  Basic;
     // S_T_INTERN    "%true"   Basic;
     // S_F_INTERN    "%false"  Basic;
@@ -377,8 +366,7 @@ macro_rules! incl_types {
 incl_types! {
     TID_COUNT:
     T_FRM_HDL_ID  T_FRM_HDL;
-    T_ENG_HDL_ID  T_ENG_HDL;
-    T_VSL_REF_ID  T_VSL_REF
+    T_ENG_HDL_ID  T_ENG_HDL
 }
 
 pub fn structure_copy(tgt: Hdl<memmgt::Region>, root: SlHndl) -> *mut SlHead {

@@ -277,11 +277,9 @@ sail_fn! {
         return bool_init(reg, lhs.truthy() || rhs.truthy());
     }
 
-    "own-tx-hdl" [] {
+    "own-hdl" [] {
         let reg = _vsl.region();
-        let tq = _vsl.inlet_hdl() ;
-
-        super::send_hdl_init(reg, tq)
+        super::vsl_ref_init(reg, _vsl)
     }
 
     "vsl-spawn" [fun, args] {
@@ -310,40 +308,35 @@ sail_fn! {
             panic!()
         }
 
-        let nq = new.inlet_hdl();
-
-        let send_tgt = super::send_hdl_init(reg, nq);
-        let new_hdl = super::vessel_ref_init(reg, new);
-
-        set_next_list_elt(_env, new_hdl.clone(), send_tgt);
+        let new_hdl = super::vsl_ref_init(reg, new);
 
         new_hdl
     }
 
     "vsl-join" [vsref] {
         let reg = _vsl.region();
-        super::vessel_ref_join(reg, vsref)
+        super::vsl_ref_join(reg, vsref)
     }
 
     "vsl-id" [vsref] {
         let reg = _vsl.region();
 
-        let vs_ref = super::vessel_ref_get(vsref);
+        let vs_ref = super::vsl_ref_get(vsref);
         super::i64_init(reg, vs_ref.id() as _)
     }
 
-    "qtx" [sender, item] {
-        let reg = _vsl.region();
+    "qtx" [vsref, item] {
+        // let reg = _vsl.region();
         let id = _vsl.id();
 
-        super::send_hdl_tx(sender, item, id);
         // env_lookup_by_id(_env, super::S_T_INTERN.0).unwrap()
         return bool_init(reg, true);
+        super::vsl_ref_send(vsref, id, item);
     }
 
     "qrx" [] {
         let reg = _vsl.region();
-        let msg = _vsl.msg_recv() ;
+        let msg = _vsl.msg_recv();
 
         match msg.1 {
             Some(r) => {

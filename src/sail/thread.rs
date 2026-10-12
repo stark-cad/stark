@@ -544,16 +544,16 @@ impl Weft {
     }
 }
 
-// TODO: vessels could contain their own prev and next pointers for
-// worker target tracking; then they'd be 128 bytes (2 cache lines)
+// NOTE: prefer to keep Vessel within 128 bytes (2 cache lines)
 
-// NOTE: or we could expand Region by up to two words for large object
-// accounting and possibly easier handling
 /// Runtime data for a single strand of Sail execution
 #[repr(C)]
 pub struct Vessel {
-    /// identifier (index in weft)
+    /// unique identifier
     id: usize,
+
+    /// TODO: how many know
+    refct: usize,
 
     /// tracker for all extant vessels
     weft: Hdl<Weft>,
@@ -601,8 +601,8 @@ impl Vessel {
                 (&raw mut (*ptr).reg).write(memmgt::Region::new(r_zone_ord));
                 Hdl::new(&raw mut (*ptr).reg).init();
 
-                (&raw mut (*ptr).qin).write(queue::Inlet::new(&raw mut (*ptr).reg));
-                (&raw mut (*ptr).tenv).write(super::env_make(&raw mut (*ptr).reg));
+                (&raw mut (*ptr).qin).write(queue::Inlet::new());
+                (&raw mut (*ptr).tenv).write(super::env_make(Hdl::new(&raw mut (*ptr).reg)));
                 (&raw mut (*ptr).eval).write(eval::EvalStack::new(s_init_size));
 
                 (&raw mut (*ptr).out).write(ptr::null_mut());
@@ -635,10 +635,10 @@ impl Vessel {
                     )));
                 Hdl::new(&raw mut (*ptr).reg).init();
 
-                (&raw mut (*ptr).qin).write(queue::Inlet::new(&raw mut (*ptr).reg));
-                (&raw mut (*ptr).tenv).write(super::env_make(&raw mut (*ptr).reg));
+                (&raw mut (*ptr).qin).write(queue::Inlet::new());
+                (&raw mut (*ptr).tenv).write(super::env_make(Hdl::new(&raw mut (*ptr).reg)));
                 (&raw mut (*ptr).eval).write(eval::EvalStack::new(
-                    s_init_size.unwrap_or((&raw const (*self.raw()).eval).size()),
+                    s_init_size.unwrap_or(eval::size(&raw mut (*self.raw()).eval)),
                 ));
 
                 (&raw mut (*ptr).out).write(ptr::null_mut());
@@ -677,17 +677,15 @@ impl Vessel {
         unsafe { Hdl::new(&raw mut (*self.raw()).reg) }
     }
 
-    /// Returns handle to this Vessel's queue inlet
-    pub fn inlet_hdl(self: Hdl<Self>) -> queue::InletHdl {
+    /// Transmits a message along this Vessel's queue
+    pub fn msg_tmit(self: Hdl<Self>, source: usize, msg: SlHndl) {
         unsafe {
-            // this works
-            queue::InletHdl::new((&raw mut (*self.raw()).reg) as *mut queue::_SendFields)
         }
     }
 
     /// Returns top message from this Vessel's incoming queue
     pub fn msg_recv(self: Hdl<Self>) -> (usize, Option<SlHndl>) {
-        unsafe { (&raw mut (*self.raw()).qin).receive() }
+        unsafe { queue::receive(&raw mut (*self.raw()).qin) }
     }
 
     /// Returns top-level local environment for this Vessel

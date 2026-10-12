@@ -428,7 +428,7 @@ enum_and_tryfrom! {
         B8I64 = 0b10000100,
         B8F64 = 0b10001000,
         B8Ptr = 0b10001100,
-        B8SendHdl = 0b10010000,
+        B8VslHdl = 0b10010000,
         // B8FileHdl = 0b10010100,
         // B8SockHdl = 0b10011000,
         B8Other = 0b10011100,
@@ -528,8 +528,8 @@ pub enum CoreType {
     /// 8-byte pointer, ONLY 48 bits used
     Ref,
 
-    /// Pointer into a Vessel
-    SendHdl,
+    /// Pointer to a Vessel
+    VslHdl,
 
     TyDsc,
 
@@ -582,7 +582,7 @@ impl TryFrom<Cfg> for CoreType {
             Cfg::B8I64 => Ok(Self::I64),
             Cfg::B8F64 => Ok(Self::F64),
             Cfg::B8Ptr => Ok(Self::Ref),
-            Cfg::B8SendHdl => Ok(Self::SendHdl),
+            Cfg::B8VslHdl => Ok(Self::VslHdl),
             Cfg::B16U128 => Ok(Self::U128),
             Cfg::B16I128 => Ok(Self::I128),
             Cfg::B16TyDsc => Ok(Self::TyDsc),

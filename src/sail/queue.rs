@@ -24,11 +24,11 @@
 
 use std::ptr;
 
-use super::{core::*, memmgt};
+use super::{core::*, memmgt, util};
 
 #[derive(Clone, Copy, PartialEq)]
 #[repr(transparent)]
-pub struct Qptr(usize);
+struct Qptr(usize);
 
 impl Qptr {
     fn make(p: *mut QueueNode, c: u16) -> Self {
@@ -42,37 +42,42 @@ impl Qptr {
     }
 }
 
-#[repr(C)]
-pub struct Inlet {
-    tail: Qptr,
-    // TODO: keep atomic reference count of senders
-    refct: usize,
-    // TODO: maintain a stack of existing nodes for reuse
-    nodes: *mut QueueNode,
-
-    head: Qptr,
-}
-
-impl Drop for Inlet {
-    fn drop(&mut self) {
-        eprintln!("DROP queue Inlet");
-
-        while (self as *mut Self).receive().1.is_some() {}
-
-        unsafe {
-            drop(Box::from_raw(self.head.get().0));
-        }
-    }
-}
-
 struct QueueNode {
     source: usize,
     payload: Option<SlHndl>,
     next: Qptr,
 }
 
+#[repr(C)]
+pub struct Inlet {
+    head: Qptr,
+    tail: Qptr,
+
+    free_nodes: Qptr,
+}
+
+impl Drop for Inlet {
+    fn drop(&mut self) {
+        eprintln!("DROP queue Inlet");
+
+        while receive(self as *mut Self).1.is_some() {}
+
+        unsafe {
+            let mut nodes = 1;
+            while let Some(n) = node_pop(self as *mut Self) {
+                drop(Box::from_raw(n.as_ptr()));
+                nodes += 1;
+            }
+
+            drop(Box::from_raw(self.head.get().0));
+
+            eprintln!("({nodes} nodes)");
+        }
+    }
+}
+
 impl Inlet {
-    pub fn new(_target_region: *mut memmgt::Region) -> Self {
+    pub fn new() -> Self {
         // TODO: allocate queue nodes in inlet's region?
         let dummy_node = Box::into_raw(Box::new(QueueNode {
             source: 0,
@@ -81,116 +86,106 @@ impl Inlet {
         }));
 
         Self {
-            // region: target_region,
-            tail: Qptr::make(dummy_node, 0),
-            refct: 0,
-            nodes: ptr::null_mut(),
             head: Qptr::make(dummy_node, 0),
+            tail: Qptr::make(dummy_node, 0),
+            free_nodes: Qptr::make(ptr::null_mut(), 0),
         }
     }
+}
 
-    // pub fn transmit(&mut self, from: usize, msg: SlHndl) {
-    //     tx_impl(self.region, &mut self.tail, from, msg)
-    // }
+/// Receives a message from the given inlet's queue; returns it and
+/// the source identifier it came with
+pub fn receive(inlet: *mut Inlet) -> (usize, Option<SlHndl>) {
+    let mut out;
+    unsafe {
+        let mut head;
+        loop {
+            head = atom_ops::load(&raw const (*inlet).head);
+            let tail = atom_ops::load(&raw const (*inlet).tail);
+            let next = atom_ops::load(&raw const (*head.get().0).next);
 
-    pub fn receive(self: *mut Self) -> (usize, Option<SlHndl>) {
-        let mut out;
-        unsafe {
-            let mut head;
-            loop {
-                head = atom_ops::load(&raw const (*self).head);
-                let tail = atom_ops::load(&raw const (*self).tail);
-                let next = atom_ops::load(&raw const (*head.get().0).next);
-
-                if head == atom_ops::load(&raw const (*self).head) {
-                    if head.get().0 == tail.get().0 {
-                        if next.get().0 == ptr::null_mut() {
-                            return (0, None);
-                        }
-                        atom_ops::cxcg(
-                            &raw mut (*self).tail,
-                            tail,
-                            Qptr::make(next.get().0, u16::wrapping_add(tail.get().1, 1)),
-                        );
-                    } else {
-                        out = ((*next.get().0).source, (*next.get().0).payload.take());
-                        if atom_ops::cxcg(
-                            &raw mut (*self).head,
-                            head,
-                            Qptr::make(next.get().0, u16::wrapping_add(head.get().1, 1)),
-                        )
-                        .1
-                        {
-                            break;
-                        }
+            if head == atom_ops::load(&raw const (*inlet).head) {
+                if head.get().0 == tail.get().0 {
+                    if next.get().0 == ptr::null_mut() {
+                        return (0, None);
+                    }
+                    atom_ops::cxcg(
+                        &raw mut (*inlet).tail,
+                        tail,
+                        Qptr::make(next.get().0, u16::wrapping_add(tail.get().1, 1)),
+                    );
+                } else {
+                    out = ((*next.get().0).source, (*next.get().0).payload.take());
+                    if atom_ops::cxcg(
+                        &raw mut (*inlet).head,
+                        head,
+                        Qptr::make(next.get().0, u16::wrapping_add(head.get().1, 1)),
+                    )
+                    .1
+                    {
+                        break;
                     }
                 }
             }
-            // let _node_to_drop = Box::from_raw(head.get().0);
-            drop(Box::from_raw(head.get().0));
         }
-
-        debug_assert!(out.1.is_some());
-        out
-
-        // Core queue algorithm from (Michael & Scott, 1998)
-    }
-}
-
-/// Handle that only permits sends
-#[derive(Clone)]
-#[repr(transparent)]
-pub struct InletHdl(*mut _SendFields);
-
-unsafe impl Send for InletHdl {}
-
-/// Window into part of the Vessel struct
-#[repr(C)]
-pub struct _SendFields {
-    reg: memmgt::Region,
-    tail: Qptr,
-    refct: usize,
-    nodes: *mut QueueNode,
-}
-
-impl InletHdl {
-    pub fn new(tgt: *mut _SendFields) -> Self {
-        Self(tgt)
+        node_push(inlet, head.get().0);
+        // drop(Box::from_raw(head.get().0));
     }
 
-    pub fn transmit(&self, from: usize, msg: SlHndl) {
-        tx_impl(
-            unsafe { (&raw mut (*self.0).reg) },
-            unsafe { (&raw mut (*self.0).tail) },
-            from,
-            msg,
-        )
-    }
+    debug_assert!(out.1.is_some());
+    out
+
+    // Core queue algorithm from (Michael & Scott, 1998)
 }
 
-fn tx_impl(reg: *mut memmgt::Region, q_tail: *mut Qptr, from: usize, msg: SlHndl) {
-    let new_loc = super::structure_copy(reg, msg.clone());
-
+/// Transmits a message to the given inlet's queue; may return true if
+/// the queue was empty prior to sending
+pub fn transmit(
+    inlet: *mut Inlet,
+    reg: util::Hdl<memmgt::Region>,
+    source: usize,
+    msg: SlHndl,
+) -> bool {
     // create a queue node which points at msg in the new region
-    let fresh_node = Box::into_raw(Box::new(QueueNode {
-        source: from,
-        payload: Some(unsafe { SlHndl::from_raw_unchecked(new_loc) }),
-        next: Qptr::make(ptr::null_mut(), 0),
-    }));
+    let node = {
+        let payload = {
+            let new_loc = super::structure_copy(reg, msg.clone());
+            Some(unsafe { SlHndl::from_raw_unchecked(new_loc) })
+        };
+        let next = Qptr::make(ptr::null_mut(), 0);
+
+        match node_pop(inlet) {
+            Some(n) => {
+                let ptr = n.as_ptr();
+                unsafe {
+                    (*ptr).source = source;
+                    (*ptr).payload = payload;
+                    (*ptr).next = next;
+                }
+                ptr
+            }
+            None => Box::into_raw(Box::new(QueueNode {
+                source,
+                payload,
+                next,
+            })),
+        }
+    };
 
     // proceed to add the freshly instantiated node to the queue
     unsafe {
+        // inlet head not accessed by core algorithm
         let mut tail;
         loop {
-            tail = atom_ops::load(q_tail);
+            tail = atom_ops::load(&raw const (*inlet).tail);
             let next = atom_ops::load(&raw const (*tail.get().0).next);
 
-            if tail == atom_ops::load(q_tail) {
+            if tail == atom_ops::load(&raw const (*inlet).tail) {
                 if next.get().0.is_null() {
                     if atom_ops::cxcg(
                         &raw mut (*tail.get().0).next,
                         next,
-                        Qptr::make(fresh_node, u16::wrapping_add(next.get().1, 1)),
+                        Qptr::make(node, u16::wrapping_add(next.get().1, 1)),
                     )
                     .1
                     {
@@ -198,7 +193,7 @@ fn tx_impl(reg: *mut memmgt::Region, q_tail: *mut Qptr, from: usize, msg: SlHndl
                     }
                 } else {
                     atom_ops::cxcg(
-                        q_tail,
+                        &raw mut (*inlet).tail,
                         tail,
                         Qptr::make(next.get().0, u16::wrapping_add(tail.get().1, 1)),
                     );
@@ -206,14 +201,62 @@ fn tx_impl(reg: *mut memmgt::Region, q_tail: *mut Qptr, from: usize, msg: SlHndl
             }
         }
 
-        atom_ops::cxcg(
-            q_tail,
+        let head = atom_ops::load(&raw const (*inlet).head);
+        let tail = atom_ops::cxcg(
+            &raw mut (*inlet).tail,
             tail,
-            Qptr::make(fresh_node, u16::wrapping_add(tail.get().1, 1)),
-        );
+            Qptr::make(node, u16::wrapping_add(tail.get().1, 1)),
+        )
+        .0;
+
+        head == tail
     }
 
     // Core queue algorithm from (Michael & Scott, 1998)
+}
+
+fn node_push(inlet: *mut Inlet, node: *mut QueueNode) {
+    unsafe {
+        (*node).next = Qptr::make(ptr::null_mut(), 0);
+        loop {
+            let top = atom_ops::load(&raw const (*inlet).free_nodes);
+            (*node).next = Qptr::make(top.get().0, 0);
+            if atom_ops::cxcg(
+                &raw mut (*inlet).free_nodes,
+                top,
+                Qptr::make(node, u16::wrapping_add(top.get().1, 1)),
+            )
+            .1
+            {
+                break;
+            }
+        }
+    }
+}
+
+fn node_pop(inlet: *mut Inlet) -> Option<ptr::NonNull<QueueNode>> {
+    unsafe {
+        let mut top;
+        loop {
+            top = atom_ops::load(&raw const (*inlet).free_nodes);
+            if top.get().0.is_null() {
+                return None;
+            }
+            if atom_ops::cxcg(
+                &raw mut (*inlet).free_nodes,
+                top,
+                Qptr::make(
+                    (*top.get().0).next.get().0,
+                    u16::wrapping_add(top.get().1, 1),
+                ),
+            )
+            .1
+            {
+                break;
+            }
+        }
+        Some(ptr::NonNull::new_unchecked(top.get().0))
+    }
 }
 
 mod atom_ops {
@@ -244,7 +287,7 @@ mod atom_ops {
 
 #[cfg(test)]
 mod inlet_tests {
-    use super::super::{Hdl, debug, parser};
+    use super::super::{debug, parser};
     use super::*;
 
     #[repr(C)]
@@ -253,67 +296,81 @@ mod inlet_tests {
         qin: Inlet,
     }
 
-    fn test_queue(zo: u8) -> *mut TestQueueData {
-        let it = {
-            let mut uninit = Box::<TestQueueData>::new_uninit();
-            let ptr = uninit.as_mut_ptr();
+    const TQL: std::alloc::Layout = std::alloc::Layout::new::<TestQueueData>();
 
+    struct SendHdl(ptr::NonNull<TestQueueData>);
+
+    unsafe impl Send for SendHdl {}
+
+    impl SendHdl {
+        fn tx(&self, source: usize, msg: SlHndl) {
             unsafe {
-                (&raw mut (*ptr).reg).write(memmgt::Region::new(zo));
-                (&raw mut (*ptr).reg).init();
-                (&raw mut (*ptr).qin).write(Inlet::new(&raw mut (*ptr).reg));
+                transmit(
+                    &raw mut (*self.0.as_ptr()).qin,
+                    util::Hdl::new(&raw mut (*self.0.as_ptr()).reg),
+                    source,
+                    msg,
+                );
             }
+        }
+    }
 
-            unsafe { uninit.assume_init() }
-        };
+    fn test_queue(zo: u8) -> *mut TestQueueData {
+        unsafe {
+            let ptr = std::alloc::alloc(TQL) as *mut TestQueueData;
+            (&raw mut (*ptr).reg).write(memmgt::Region::new(zo));
+            util::Hdl::new(&raw mut (*ptr).reg).init();
+            (&raw mut (*ptr).qin).write(Inlet::new());
 
-        Box::into_raw(it)
+            ptr
+        }
     }
 
     fn tq_destroy(ptr: *mut TestQueueData) {
         unsafe {
-            drop(Box::from_raw(ptr));
+            ptr.drop_in_place();
+            std::alloc::dealloc(ptr as _, TQL);
         }
     }
 
-    fn test_hdl(qd: *mut TestQueueData) -> InletHdl {
-        InletHdl(qd as *mut _SendFields)
+    fn test_hdl(qd: *mut TestQueueData) -> SendHdl {
+        SendHdl(ptr::NonNull::new(qd).unwrap())
     }
 
     #[test]
     fn basic() {
         let mut region = memmgt::Region::new(8);
-        let tx_reg = &raw mut region;
+        let tx_reg = util::Hdl::new(&raw mut region);
 
         let rx_in = test_queue(8);
         let tx_hdl = test_hdl(rx_in);
 
         let qin = unsafe { &raw mut (*rx_in).qin };
 
-        assert!(qin.receive().1.is_none());
+        assert!(receive(qin).1.is_none());
 
-        tx_hdl.transmit(1, i64_init(tx_reg, 7));
-        tx_hdl.transmit(1, i64_init(tx_reg, 14));
+        tx_hdl.tx(1, i64_init(tx_reg, 7));
+        tx_hdl.tx(1, i64_init(tx_reg, 14));
 
-        assert_eq!(i64_get(qin.receive().1.unwrap()), 7);
-        assert_eq!(i64_get(qin.receive().1.unwrap()), 14);
+        assert_eq!(i64_get(receive(qin).1.unwrap()), 7);
+        assert_eq!(i64_get(receive(qin).1.unwrap()), 14);
 
-        tx_hdl.transmit(1, i64_init(tx_reg, 21));
+        tx_hdl.tx(1, i64_init(tx_reg, 21));
 
-        assert_eq!(i64_get(qin.receive().1.unwrap()), 21);
+        assert_eq!(i64_get(receive(qin).1.unwrap()), 21);
 
-        assert!(qin.receive().1.is_none());
-        assert!(qin.receive().1.is_none());
+        assert!(receive(qin).1.is_none());
+        assert!(receive(qin).1.is_none());
 
-        tx_hdl.transmit(1, i64_init(tx_reg, 28));
-        tx_hdl.transmit(1, i64_init(tx_reg, 35));
-        tx_hdl.transmit(1, i64_init(tx_reg, 42));
+        tx_hdl.tx(1, i64_init(tx_reg, 28));
+        tx_hdl.tx(1, i64_init(tx_reg, 35));
+        tx_hdl.tx(1, i64_init(tx_reg, 42));
 
-        assert_eq!(i64_get(qin.receive().1.unwrap()), 28);
-        assert_eq!(i64_get(qin.receive().1.unwrap()), 35);
-        assert_eq!(i64_get(qin.receive().1.unwrap()), 42);
+        assert_eq!(i64_get(receive(qin).1.unwrap()), 28);
+        assert_eq!(i64_get(receive(qin).1.unwrap()), 35);
+        assert_eq!(i64_get(receive(qin).1.unwrap()), 42);
 
-        assert!(qin.receive().1.is_none());
+        assert!(receive(qin).1.is_none());
 
         tq_destroy(rx_in);
     }
@@ -323,16 +380,17 @@ mod inlet_tests {
         let mut table = super::super::Stab::new(51);
         let mut region = memmgt::Region::new(8);
 
-        let tref = Hdl::new(&raw mut table);
-        let tx_reg = &raw mut region;
+        // TODO: macro: hdl!()
+        let tref = util::Hdl::new(&raw mut table);
+        let tx_reg = util::Hdl::new(&raw mut region);
         let rx_in = test_queue(8);
 
         let exp = String::from("(+ (() 42 (e) #T) #F 2.1 e)");
         let ogv = parser::parse_text(tx_reg, tref, exp.clone().into_bytes(), None).unwrap();
 
-        test_hdl(rx_in).transmit(1, ogv);
+        test_hdl(rx_in).tx(1, ogv);
 
-        let cpv = unsafe { &raw mut (*rx_in).qin }.receive().1.unwrap();
+        let cpv = receive(unsafe { &raw mut (*rx_in).qin }).1.unwrap();
         let res = debug::bundle(tref, cpv).to_string();
 
         assert_eq!(exp, res);
@@ -345,19 +403,13 @@ mod inlet_tests {
         const THCT: u32 = 4; // 7
         const SPAN: u32 = 500; // 5000
 
-        fn send(
-            id: usize,
-            start: i64,
-            extent: i64,
-            // src_reg: super::super::Hdl<memmgt::Region>,
-            tgt: InletHdl,
-        ) {
+        fn send(id: usize, start: i64, extent: i64, tgt: SendHdl) {
             // NOTE: zone order can be calculated...
             let mut region = memmgt::Region::new(13);
-            let tsr = (&raw mut region).hdl();
+            let tsr = util::Hdl::new(&raw mut region);
 
             for i in start..start + extent {
-                tgt.transmit(id, i64_init(tsr.raw(), i));
+                tgt.tx(id, i64_init(tsr, i));
                 // println!("{id} transmitted {i}");
             }
             println!("{id} done sending");
@@ -380,7 +432,7 @@ mod inlet_tests {
         let mut recvd = 0;
 
         while recvd < THCT * SPAN {
-            match unsafe { (&raw mut (*rx_in).qin) }.receive().1 {
+            match receive(unsafe { (&raw mut (*rx_in).qin) }).1 {
                 Some(h) => {
                     recvd += 1;
                     let val = i64_get(h);

@@ -95,72 +95,60 @@ fn main() {
     // NOTE: global source debug data collection switch currently here
     let mut global_weft = sail::thread::Weft::create(global_interact, true);
 
-    let main_vsl = sail::thread::Vessel::summon(&mut global_weft, 10000, 20);
-    let main_qin = main_vsl.inlet_hdl();
+    let gov_vsl = sail::thread::Vessel::summon(&mut global_weft, 10000, 20);
+    let rdr_vsl = gov_vsl.spawn(None, None);
 
-    let rndr_vsl = main_vsl.spawn(None, None);
-    let rndr_qin = rndr_vsl.inlet_hdl();
-
-    let base_mod = sail::env_make(main_vsl.region());
+    // module containing general procedures
+    let base_mod = sail::env_make(gov_vsl.region());
     sail::insert_native_procs(
-        main_vsl.region(),
-        main_vsl.context().symtab(),
+        gov_vsl.region(),
+        gov_vsl.context().symtab(),
         base_mod.clone(),
         sail::stdenv::ENVFNS,
     );
 
-    main_vsl.bind_sym(sail::M_BASE.0, base_mod.clone());
-    rndr_vsl.bind_sym(sail::M_BASE.0, base_mod);
-
-    // global_weft.assign_special(main_vsl.id);
-    // global_weft.assign_special(rndr_vsl.id);
+    gov_vsl.bind_sym(sail::M_BASE.0, base_mod.clone());
+    rdr_vsl.bind_sym(sail::M_BASE.0, base_mod);
 
     // TODO: match available parallelism or setting
-    let rdr_tgt_obj = sail::send_hdl_init(main_vsl.region(), rndr_qin.clone());
-    main_vsl.bind_sym(sail::S_RDR_TGT.0, rdr_tgt_obj);
-
-    let rdr_id_obj = sail::i64_init(main_vsl.region(), rndr_vsl.id() as _);
-    main_vsl.bind_sym(sail::S_RDR_ID.0, rdr_id_obj);
     global_weft.hdl().add_worker();
     global_weft.hdl().add_worker();
 
-    let mgr_tgt_obj = sail::send_hdl_init(rndr_vsl.region(), main_qin.clone());
-    rndr_vsl.bind_sym(sail::S_MGR_TGT.0, mgr_tgt_obj);
+    let rdr_obj = sail::vsl_ref_init(gov_vsl.region(), rdr_vsl);
+    gov_vsl.bind_sym(sail::S_RDR_HDL.0, rdr_obj);
 
-    let mgr_id_obj = sail::i64_init(rndr_vsl.region(), main_vsl.id() as _);
-    rndr_vsl.bind_sym(sail::S_MGR_ID.0, mgr_id_obj);
+    let gov_obj = sail::vsl_ref_init(rdr_vsl.region(), gov_vsl);
+    rdr_vsl.bind_sym(sail::S_GOV_HDL.0, gov_obj);
 
-    let fr_dims = sail::arrvec_init::<u32>(main_vsl.region(), sail::T_U32.0, 2, &[0, 0]);
-    let cur_pos = sail::arrvec_init::<f32>(main_vsl.region(), sail::T_F32.0, 2, &[0.0, 0.0]);
+    let fr_dims = sail::arrvec_init::<u32>(gov_vsl.region(), sail::T_U32.0, 2, &[0, 0]);
+    let cur_pos = sail::arrvec_init::<f32>(gov_vsl.region(), sail::T_F32.0, 2, &[0.0, 0.0]);
 
-    main_vsl.bind_sym(sail::S_FR_DIMS.0, fr_dims.clone());
-    main_vsl.bind_sym(sail::S_CUR_POS.0, cur_pos.clone());
+    gov_vsl.bind_sym(sail::S_FR_DIMS.0, fr_dims.clone());
+    gov_vsl.bind_sym(sail::S_CUR_POS.0, cur_pos.clone());
 
     // This thread renders to the graphical frame: the output interface
     let render = thread::Builder::new()
         .name("render".to_string())
-        .spawn(move || graphics::render_loop(NAME, handles, rndr_vsl))
+        .spawn(move || graphics::render_loop(NAME, handles, rdr_vsl))
         .unwrap();
 
     // This thread manages the program, treating the actual main thread as a source of user input
-    let manager = thread::Builder::new()
-        .name("manager".to_string())
-        .spawn(move || manager_loop(frame, main_vsl))
+    let governor = thread::Builder::new()
+        .name("governor".to_string())
+        .spawn(move || manager_loop(frame, gov_vsl))
         .unwrap();
-
-    // let (sl_main_qin, sl_rndr_qin) = (main_qin as usize, rndr_qin as usize);
 
     // This loop gets input from the user and detects changes to the context
     // Completely takes over the main thread; no code after this will run
     context::run_loop(
         event_loop,
-        vec![manager, render].into_iter(),
+        vec![governor, render].into_iter(),
         global_weft,
-        main_qin,
-        rndr_qin,
+        gov_vsl,
+        rdr_vsl,
         fr_dims,
         cur_pos,
-    );
+    )
 }
 
 /// Accepts an input stream and runs a read - evaluate - print loop perpetually

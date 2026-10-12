@@ -21,8 +21,6 @@
 
 use crate::{Frame, sail};
 
-// TODO: update to latest version of winit
-
 // use png;
 use winit::{
     dpi,
@@ -61,8 +59,8 @@ pub fn run_loop<Ij: 'static>(
     event_loop: EventLoop<()>,
     threads: Ij,
     sl_weft: sail::thread::WeftOwner,
-    main_tx: sail::queue::InletHdl,
-    rndr_tx: sail::queue::InletHdl,
+    gov_vsl: sail::util::Hdl<sail::thread::Vessel>,
+    rdr_vsl: sail::util::Hdl<sail::thread::Vessel>,
     fr_dims: sail::SlHndl,
     cur_pos: sail::SlHndl,
 ) where
@@ -71,19 +69,16 @@ pub fn run_loop<Ij: 'static>(
     let mut joins = Some(threads);
 
     let mut sl_reg = sail::memmgt::Region::new(10);
-    let reg_r = &raw mut sl_reg;
-    let reg_h = reg_r.hdl();
+    let reg_r = sail::util::Hdl::new(&raw mut sl_reg);
 
     let dummy_env = sail::env_make(reg_r);
     let dm_env_ax = dummy_env.clone();
 
-    let mtx = main_tx.clone();
+    let mtx = gov_vsl.clone();
 
     let _stdin = thread::Builder::new()
         .name("stdin".to_string())
         .spawn(move || {
-            let reg_r = reg_h.raw();
-
             let mut buffer = String::new();
 
             let shell = sail::sym_init(reg_r, sail::K_CX_SHELL.0);
@@ -95,7 +90,7 @@ pub fn run_loop<Ij: 'static>(
                 let strin = sail::string_init(reg_r, &buffer);
                 sail::set_next_list_elt(dm_env_ax.clone(), shell.clone(), strin);
 
-                mtx.transmit(1, shell.clone());
+                mtx.msg_tmit(1, shell.clone());
             }
         })
         .unwrap();
@@ -122,13 +117,13 @@ pub fn run_loop<Ij: 'static>(
 
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::RedrawRequested => {
-                        rndr_tx.transmit(1, ks_redrw.clone());
+                        rdr_vsl.msg_tmit(1, ks_redrw.clone());
                     }
                     WindowEvent::CloseRequested => {
                         elwt.exit();
 
-                        rndr_tx.transmit(1, ks_destr.clone());
-                        main_tx.transmit(1, ks_destr.clone());
+                        rdr_vsl.msg_tmit(1, ks_destr.clone());
+                        gov_vsl.msg_tmit(1, ks_destr.clone());
                     }
                     WindowEvent::Focused(f) => {
                         focus = f;
@@ -137,7 +132,7 @@ pub fn run_loop<Ij: 'static>(
                         frame_dims = [dims.width, dims.height];
                         sail::arrvec_rplc(fr_dims.clone(), &[dims.width, dims.height]);
 
-                        rndr_tx.transmit(1, ks_resiz.clone());
+                        rdr_vsl.msg_tmit(1, ks_resiz.clone());
                     }
                     WindowEvent::MouseInput {
                         state, button: _, ..
@@ -146,7 +141,7 @@ pub fn run_loop<Ij: 'static>(
                         // otherwise rely on shared-memory updates
 
                         if state == ElementState::Pressed {
-                            main_tx.transmit(1, ks_recrd.clone());
+                            gov_vsl.msg_tmit(1, ks_recrd.clone());
                         }
                     }
                     WindowEvent::CursorMoved {
@@ -171,7 +166,7 @@ pub fn run_loop<Ij: 'static>(
                             )
                         };
 
-                        rndr_tx.transmit(1, ks_moved.clone());
+                        rdr_vsl.msg_tmit(1, ks_moved.clone());
                     }
                     WindowEvent::KeyboardInput {
                         event:
@@ -230,13 +225,13 @@ pub fn run_loop<Ij: 'static>(
                                 _ => None,
                             };
                             if let Some(ks) = key_sym {
-                                main_tx.transmit(1, ks)
+                                gov_vsl.msg_tmit(1, ks)
                             }
                         }
                         Key::Named(n) => match n {
                             NamedKey::Space => {
                                 // enter the point
-                                main_tx.transmit(1, ks_recrd.clone());
+                                gov_vsl.msg_tmit(1, ks_recrd.clone());
                             }
                             _ => {}
                         },
