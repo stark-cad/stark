@@ -23,7 +23,8 @@ use std::{alloc, ptr};
 use std::intrinsics::AtomicOrdering as AO;
 
 use super::{Hdl, SlHndl, SlSym, Stab, Styc};
-use super::{debug, eval, memmgt, parser, queue};
+use super::{debug, eval, memmgt, parser, queue, util};
+use util::Lock;
 
 /// Global context data for inter-thread and human interaction
 pub struct Tact {
@@ -695,7 +696,7 @@ impl Vessel {
 
     /// Returns reference to relevant source-level debug data
     pub fn src_dbg_info(self: Hdl<Self>) -> Option<&'static mut debug::SrcInfo> {
-        unsafe { (&raw mut (*(*self.raw()).weft).temp_debug).as_mut_unchecked() }.as_mut()
+        unsafe { (&raw mut (*(*self.raw()).weft.raw()).temp_debug).as_mut_unchecked() }.as_mut()
     }
 
     /// Binds symbol in this Vessel's top-level local environment
@@ -718,7 +719,7 @@ impl Vessel {
 
         assert!(self.inert_p());
         unsafe {
-            (&raw mut (*self.raw()).eval).start(&raw mut (*self.raw()).out, self.top_env(), sexp);
+            eval::start(self.esp(), &raw mut (*self.raw()).out, self.top_env(), sexp);
         }
 
         Ok(())
@@ -745,7 +746,8 @@ impl Vessel {
 
         assert!(self.inert_p());
         unsafe {
-            (&raw mut (*self.raw()).eval).start(
+            eval::start(
+                self.esp(),
                 &raw mut (*self.raw()).out,
                 self.top_env(),
                 expr_sexp,
@@ -760,7 +762,8 @@ impl Vessel {
         coretypck!(proc ; ProcLambda);
         assert!(self.inert_p());
         unsafe {
-            (&raw mut (*self.raw()).eval).start_proc(
+            eval::start_proc(
+                self.esp(),
                 &raw mut (*self.raw()).out,
                 self.top_env(),
                 proc,
@@ -775,13 +778,17 @@ impl Vessel {
         self.load_proc_immed(proc, &[])
     }
 
-    // TODO: somehow assert that code to run is in local region
-
     /// Loads Sail expression for immediate evaluation
     pub fn load_direct(self: Hdl<Self>, sexp: SlHndl) {
         assert!(self.inert_p());
+        assert!(
+            self.region()
+                .resident_p(unsafe { sexp.get_raw() as _ })
+                .is_some()
+        );
+
         unsafe {
-            (&raw mut (*self.raw()).eval).start(&raw mut (*self.raw()).out, self.top_env(), sexp);
+            eval::start(self.esp(), &raw mut (*self.raw()).out, self.top_env(), sexp);
         }
     }
 
@@ -792,14 +799,15 @@ impl Vessel {
 
     /// True if the evaluator is empty of code
     pub fn inert_p(self: Hdl<Self>) -> bool {
-        unsafe { (&raw const (*self.raw()).eval) }.is_empty()
+        eval::empty_p(self.esp())
     }
 
     // TODO: stack is Vessel's core; move to methods on Vessel itself?
     // define Vessel in eval?
+
     /// Advances evaluator by one stack frame
     pub fn advance(self: Hdl<Self>) -> bool {
-        unsafe { (&raw mut (*self.raw()).eval) }.iter_once(self)
+        eval::iter_once(self)
     }
 
     /// Returns final result of this Vessel
@@ -819,9 +827,15 @@ impl Vessel {
     }
 
     // TODO: this could be done much better (get it?)
+
     /// True if execution has finished with a result
     pub fn done_p(self: Hdl<Self>) -> bool {
         self.inert_p() && self.result().is_some()
+    }
+
+    /// Returns pointer to contained eval tracking structure
+    pub fn esp(self: Hdl<Self>) -> *mut eval::EvalStack {
+        unsafe { &raw mut (*self.raw()).eval }
     }
 
     // pub fn insert_native_procs(&mut self, fns: &[(&str, super::NativeFn, u16)]) {

@@ -30,10 +30,9 @@
 
 #![allow(internal_features)]
 #![feature(arbitrary_self_types)]
-// TODO: remove below feature, only above needed
-#![feature(arbitrary_self_types_pointers)]
 #![feature(core_intrinsics)]
 #![feature(macro_metavar_expr)]
+#![feature(ptr_mask)]
 #![feature(random)]
 #![feature(variant_count)]
 
