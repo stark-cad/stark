@@ -38,7 +38,6 @@ macro_rules! report_site {
 }
 
 static mut OBJECT_ID_CTR: u32 = 0;
-
 static mut ZONE_ID_CTR: u32 = 0;
 
 // TODO: allow the programmer to handle atomic operations if needed?
@@ -47,17 +46,13 @@ static mut ZONE_ID_CTR: u32 = 0;
 static mut REGION_TABLE: RegionTable = RegionTable::new(64);
 
 pub fn init() {
-    unsafe { RegionTable::init(&raw mut REGION_TABLE) }
+    unsafe { Hdl::new(&raw mut REGION_TABLE).init() }
 }
 
 /// Keeps track of memory zones and which regions they belong to using
 /// parallel arrays
 struct RegionTable {
-    /// Dynamic array of memory zone low ends
-    low_array: *mut usize,
-    /// Dynamic array of memory zone high ends
-    high_array: *mut usize,
-    /// Dynamic array of memory zones corresponding to above ranges
+    /// Dynamic array of memory zones; orders in low bits
     zone_array: *mut *mut Zone,
     /// Dynamic array of memory regions corresponding to above zones
     region_array: *mut *mut Region,
@@ -69,19 +64,18 @@ struct RegionTable {
     lock: u8,
 }
 
-// TODO: test by prefix! search tree of zones, return region
+impl Lock for RegionTable {
+    fn lock_pos(self: Hdl<Self>) -> *mut u8 {
+        unsafe { &raw mut (*self.raw()).lock }
+    }
+}
 
 // TODO: define region table concurrency characteristics
-// NOTE: possibly excessive locking currently
-
-// TODO: suspect rare failures connected to this data structure at present
 
 impl RegionTable {
     /// Create a new region table
     const fn new(cap: usize) -> Self {
         Self {
-            low_array: ptr::null_mut(),
-            high_array: ptr::null_mut(),
             zone_array: ptr::null_mut(),
             region_array: ptr::null_mut(),
             len: 0,
@@ -90,170 +84,187 @@ impl RegionTable {
         }
     }
 
-    unsafe fn init(tgt: *mut Self) {
+    unsafe fn init(self: Hdl<Self>) {
         unsafe {
-            let this = tgt.as_mut().unwrap();
+            if (*self.raw()).zone_array.is_null() {
+                assert!((*self.raw()).region_array.is_null());
 
-            if this.low_array.is_null() {
-                assert!(
-                    this.low_array.is_null()
-                        && this.high_array.is_null()
-                        && this.zone_array.is_null()
-                        && this.region_array.is_null()
+                let layout = alloc::Layout::from_size_align_unchecked(
+                    (*self.raw()).cap * super::PTR_LEN as usize,
+                    super::PTR_LEN as usize,
                 );
 
-                let layout = alloc::Layout::from_size_align_unchecked(this.cap * 8, 8);
-
-                this.low_array = alloc::alloc(layout) as *mut usize;
-                this.high_array = alloc::alloc(layout) as *mut usize;
-                this.zone_array = alloc::alloc(layout) as *mut *mut Zone;
-                this.region_array = alloc::alloc(layout) as *mut *mut Region;
+                (*self.raw()).zone_array = alloc::alloc(layout) as *mut *mut Zone;
+                (*self.raw()).region_array = alloc::alloc(layout) as *mut *mut Region;
             }
         }
     }
 
-    unsafe fn len(tgt: *mut Self) -> usize {
+    // unsafe fn len(self: Hdl<Self>) -> usize {
+    //     let out;
+    //     let tok = self.take_lock();
+    //     unsafe {
+    //         out = (*self.raw()).len;
+    //     }
+    //     self.release_lock(tok);
+    //     out
+    // }
+
+    /// Resize the table, reallocating as necessary
+    unsafe fn resize(self: Hdl<Self>, cap: usize, _lt: &LockToken<Self>) {
         unsafe {
-            let lock: *mut u8 = &raw mut (*tgt).lock;
-            while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
-                lock,
-                false as u8,
-                true as u8,
-            )
-            .1
-            {
-                std::hint::spin_loop();
-            }
+            if (*self.raw()).cap != cap {
+                let current_layout =
+                    alloc::Layout::from_size_align_unchecked((*self.raw()).cap * 8, 8);
 
-            let out = (*tgt).len;
-
-            std::intrinsics::atomic_store::<_, { AO::Release }, false>(lock, false as u8);
-
-            out
-        }
-    }
-
-    /// Resize the table, reallocating as necessary (must be locked)
-    unsafe fn resize(tgt: *mut Self, cap: usize) {
-        unsafe {
-            // let lock: *mut u8 = &mut self.lock;
-            // while !std::intrinsics::atomic_cxchg_acqrel_acquire(lock, false as u8, true as u8).1 {
-            //     std::hint::spin_loop();
-            // }
-
-            if (*tgt).cap != cap {
-                let current_layout = alloc::Layout::from_size_align_unchecked((*tgt).cap * 8, 8);
-
-                (*tgt).low_array =
-                    alloc::realloc((*tgt).low_array as *mut u8, current_layout, cap * 8)
-                        as *mut usize;
-                (*tgt).high_array =
-                    alloc::realloc((*tgt).high_array as *mut u8, current_layout, cap * 8)
-                        as *mut usize;
-                (*tgt).zone_array =
-                    alloc::realloc((*tgt).zone_array as *mut u8, current_layout, cap * 8)
+                (*self.raw()).zone_array =
+                    alloc::realloc((*self.raw()).zone_array as *mut u8, current_layout, cap * 8)
                         as *mut *mut Zone;
-                (*tgt).region_array =
-                    alloc::realloc((*tgt).region_array as *mut u8, current_layout, cap * 8)
-                        as *mut *mut Region;
+                (*self.raw()).region_array = alloc::realloc(
+                    (*self.raw()).region_array as *mut u8,
+                    current_layout,
+                    cap * 8,
+                ) as *mut *mut Region;
 
-                (*tgt).cap = cap;
+                (*self.raw()).cap = cap;
             }
-
-            // std::intrinsics::atomic_store_release(lock, false as u8);
         }
+    }
+
+    /// Remove all entries associated with a certain region
+    unsafe fn remove_region(self: Hdl<Self>, region: *mut Region) {
+        let tok = self.take_lock();
+        unsafe {
+            // compact non-matching entries into contiguous span
+            let mut compact_idx = 0;
+            for i in 0..(*self.raw()).len {
+                if self.index(i, &tok).0 == region {
+                    continue;
+                }
+                if i != compact_idx {
+                    ptr::write(
+                        (*self.raw()).zone_array.add(compact_idx),
+                        ptr::read((*self.raw()).zone_array.add(i)),
+                    );
+                    ptr::write(
+                        (*self.raw()).region_array.add(compact_idx),
+                        ptr::read((*self.raw()).region_array.add(i)),
+                    );
+                }
+                compact_idx += 1;
+            }
+            (*self.raw()).len = compact_idx;
+        }
+        self.release_lock(tok);
     }
 
     /// Add a new entry to the table
-    unsafe fn append(
-        tgt: *mut Self,
-        start: usize,
-        end: usize,
-        zone: *mut Zone,
-        region: *mut Region,
-    ) {
+    unsafe fn append(self: Hdl<Self>, region: *mut Region, zone: *mut Zone, zo: u8) {
+        let tok = self.take_lock();
         unsafe {
-            let lock: *mut u8 = &raw mut (*tgt).lock;
-            while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
-                lock,
-                false as u8,
-                true as u8,
-            )
-            .1
-            {
-                std::hint::spin_loop();
-            }
-
-            if (*tgt).low_array.is_null() {
+            if (*self.raw()).zone_array.is_null() {
                 if cfg!(test) {
-                    Self::init(tgt)
+                    self.init()
                 } else {
                     panic!("region table not initialized")
                 }
             }
 
-            let old_len = (*tgt).len;
+            let old_len = (*self.raw()).len;
 
-            if old_len >= (*tgt).cap {
-                Self::resize(tgt, (*tgt).cap * 2);
+            if old_len >= (*self.raw()).cap {
+                self.resize((*self.raw()).cap * 2, &tok);
             }
 
-            (*tgt).len += 1;
+            (*self.raw()).len += 1;
 
-            ptr::write((*tgt).low_array.add(old_len), start);
-            ptr::write((*tgt).high_array.add(old_len), end);
-            ptr::write((*tgt).zone_array.add(old_len), zone);
-            ptr::write((*tgt).region_array.add(old_len), region);
+            assert!(zo <= 0b00011111);
+            assert_eq!(zone as usize & u8::MAX as usize, 0);
 
-            std::intrinsics::atomic_store::<_, { AO::Release }, false>(lock, false as u8);
+            let ze = zone.map_addr(|p| p | zo as usize);
 
-            println!("registered {:x} to {:x}", start, end);
+            ptr::write((*self.raw()).zone_array.add(old_len), ze);
+            ptr::write((*self.raw()).region_array.add(old_len), region);
 
-            // if cfg!(feature = "memdbg") {
+            // keep this thing sorted
+            let mut idx = old_len;
+            loop {
+                if idx == 0 {
+                    break;
+                }
+                if self.index(idx - 1, &tok).1 > zone {
+                    ptr::swap(
+                        (*self.raw()).zone_array.add(idx),
+                        (*self.raw()).zone_array.add(idx - 1),
+                    );
+                    ptr::swap(
+                        (*self.raw()).region_array.add(idx),
+                        (*self.raw()).region_array.add(idx - 1),
+                    );
+                } else {
+                    break;
+                }
+                idx -= 1;
+            }
 
-            // println!("- Zone added -");
-            // for i in 0..self.len {
-            //     let entry = self.index(i);
-            //     if !entry.2.is_null() {
-            //         println!(
-            //             "Zone {}, idx {}: {:x} to {:x}",
-            //             (*entry.2).id,
-            //             i,
-            //             entry.0,
-            //             entry.1
-            //         )
-            //     }
-            // }
-            // println!()
-
+            // for i in 0..(*self.raw()).len {
+            //     println!("{:x}", self.index(i, &tok).1 as usize);
             // }
         }
+        self.release_lock(tok);
+
+        println!("registered {:x}", zone as usize);
     }
 
     /// Gets a table entry by index
-    unsafe fn index(tgt: *mut Self, idx: usize) -> (usize, usize, *mut Zone, *mut Region) {
+    unsafe fn index(
+        self: Hdl<Self>,
+        idx: usize,
+        _lt: &LockToken<Self>,
+    ) -> (*mut Region, *mut Zone, u8) {
         unsafe {
-            let lock: *mut u8 = &raw mut (*tgt).lock;
-            while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
-                lock,
-                false as u8,
-                true as u8,
-            )
-            .1
-            {
-                std::hint::spin_loop();
+            assert!(idx < (*self.raw()).len);
+
+            let ze = ptr::read((*self.raw()).zone_array.add(idx));
+            let region = ptr::read((*self.raw()).region_array.add(idx));
+
+            const ZMASK: usize = !(u8::MAX as usize);
+            let zo = (ze.addr() & 0b00011111) as u8;
+            let zone = ze.mask(ZMASK);
+
+            (region, zone, zo)
+        }
+    }
+
+    /// Returns the details of the zone matching the pointer
+    unsafe fn search(
+        self: Hdl<Self>,
+        ptr: *mut (),
+        _lt: &LockToken<Self>,
+    ) -> Option<(*mut Region, *mut Zone)> {
+        assert!(!ptr.is_null());
+        unsafe {
+            let len = (*self.raw()).len;
+            // indices (0, len-1) are mapped to (1, len)
+            let (mut l, mut r) = (0, len + 1);
+            loop {
+                if l + 1 >= r {
+                    return None;
+                }
+                let idx = ((r - l) / 2) + l;
+
+                let (reg, zcp, zco) = self.index(idx - 1, _lt);
+                let mask = !((1usize << zco as usize) - 1);
+
+                // binary search from ~center
+                if ptr as usize & mask == zcp as usize & mask {
+                    return Some((reg, zcp));
+                } else if ptr as usize & mask < zcp as usize & mask {
+                    r = idx;
+                } else {
+                    l = idx;
+                }
             }
-
-            assert!(idx < (*tgt).len);
-
-            let start = ptr::read((*tgt).low_array.add(idx));
-            let end = ptr::read((*tgt).high_array.add(idx));
-            let zone = ptr::read((*tgt).zone_array.add(idx));
-            let region = ptr::read((*tgt).region_array.add(idx));
-
-            std::intrinsics::atomic_store::<_, { AO::Release }, false>(lock, false as u8);
-
-            (start, end, zone, region)
         }
     }
 }
@@ -261,19 +272,11 @@ impl RegionTable {
 impl Drop for RegionTable {
     fn drop(&mut self) {
         eprintln!("DROP Region Table");
-        let mut last_reg = ptr::null_mut();
         unsafe {
-            for i in 0..self.len {
-                let cur_reg = ptr::read(self.region_array.add(i));
-                if cur_reg != last_reg {
-                    drop(Box::from_raw(cur_reg));
-                    last_reg = cur_reg;
-                }
-            }
-
-            let layout = alloc::Layout::from_size_align_unchecked(self.cap * 8, 8);
-            alloc::dealloc(self.low_array as *mut u8, layout);
-            alloc::dealloc(self.high_array as *mut u8, layout);
+            let layout = alloc::Layout::from_size_align_unchecked(
+                self.cap * super::PTR_LEN as usize,
+                super::PTR_LEN as usize,
+            );
             alloc::dealloc(self.zone_array as *mut u8, layout);
             alloc::dealloc(self.region_array as *mut u8, layout);
         }
@@ -282,7 +285,7 @@ impl Drop for RegionTable {
 
 #[cfg(test)]
 mod table_tests {
-    use super::RegionTable;
+    use super::{Lock, RegionTable};
 
     // TODO: test table operations
 
@@ -291,29 +294,31 @@ mod table_tests {
         static mut TABLE: RegionTable = RegionTable::new(8);
 
         unsafe {
-            RegionTable::init(&raw mut TABLE);
+            let t_h = super::Hdl::new(&raw mut TABLE);
 
             for i in 1..13 {
-                RegionTable::append(
-                    &raw mut TABLE,
-                    i,
-                    i * 2,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                );
+                t_h.append((i * 512) as _, (i * 1024) as _, 8);
             }
 
             assert_eq!((*(&raw const TABLE)).cap, 16);
 
-            match RegionTable::index(&raw mut TABLE, 2) {
-                (3, 6, _, _) => (),
+            let tok = t_h.take_lock();
+            match t_h.index(2, &tok) {
+                (r, z, 8) => {
+                    assert_eq!(r as usize, 3 * 512);
+                    assert_eq!(z as usize, 3 * 1024);
+                }
                 _ => panic!(),
             }
 
-            match RegionTable::index(&raw mut TABLE, 10) {
-                (11, 22, _, _) => (),
+            match t_h.index(10, &tok) {
+                (r, z, 8) => {
+                    assert_eq!(r as usize, 11 * 512);
+                    assert_eq!(z as usize, 11 * 1024);
+                }
                 _ => panic!(),
             }
+            t_h.release_lock(tok);
         }
     }
 }
@@ -1838,13 +1843,7 @@ impl Region {
             let start = (new_zone_ptr as *mut u8).add(MEM_ZONE_HEAD_SIZE);
             let end = (new_zone_ptr as *mut u8).add(size as _);
 
-            RegionTable::append(
-                &raw mut REGION_TABLE,
-                start as usize,
-                end as usize,
-                new_zone_ptr,
-                self,
-            );
+            Hdl::new(&raw mut REGION_TABLE).append(self.raw(), new_zone_ptr, self.zn_ord());
 
             let zn_id =
                 std::intrinsics::atomic_xadd::<u32, u32, { AO::AcqRel }>(&raw mut ZONE_ID_CTR, 1);
@@ -1877,8 +1876,6 @@ impl Region {
                 ptr
             }
         }
-
-        // TODO: region tree instead of region table
 
         // TODO: break tree insertion out into another function
         if !next_zone.is_null() {
@@ -2121,6 +2118,9 @@ impl Drop for Region {
         unsafe {
             let hdl = Hdl::new(self);
 
+            // don't leave misleading cruft in the index
+            Hdl::new(&raw mut REGION_TABLE).remove_region(hdl.raw());
+
             // free the zones
             let (cur_top_zone, size) = (hdl.get_list_head(), hdl.zone_size() as usize);
 
@@ -2208,28 +2208,18 @@ struct FreeBlock {
 
 const MEM_ZONE_HEAD_SIZE: usize = mem::size_of::<Zone>();
 
-// TODO: this tests every zone, no logic; we can do better!
 /// Returns the region and zone in which a given Sail object is stored
 unsafe fn which_mem_area(ptr: *mut SlHead) -> (*mut Region, *mut Zone) {
+    let result;
+    let t_h = Hdl::new(&raw mut REGION_TABLE);
     unsafe {
-        assert_ne!(ptr, ptr::null_mut());
+        let tok = t_h.take_lock();
+        result = t_h.search(ptr as _, &tok);
+        t_h.release_lock(tok);
+    }
 
-        let pos = ptr as usize;
-
-        let mut idx = 0;
-        loop {
-            if idx >= RegionTable::len(&raw mut REGION_TABLE) {
-                break;
-            }
-
-            let entry = RegionTable::index(&raw mut REGION_TABLE, idx);
-            if pos >= entry.0 && pos < entry.1 {
-                return (entry.3, entry.2);
-            }
-
-            idx += 1;
-        }
-
-        panic!("INVALID memory area for {:x}", ptr as usize)
+    match result {
+        Some(t) => t,
+        None => panic!("INVALID memory area for {:x}", ptr as usize),
     }
 }
