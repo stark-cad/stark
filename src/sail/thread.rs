@@ -148,11 +148,18 @@ fn worker_runtime(local_data: WorkerData) {
 
 /// Handle representing ownership of a Sail multi-thread runtime manager
 pub struct WeftOwner {
-    pub raw: *mut Weft,
+    raw: *mut Weft,
+}
+
+impl WeftOwner {
+    pub fn hdl(&self) -> Hdl<Weft> {
+        Hdl::new(self.raw)
+    }
 }
 
 impl Drop for WeftOwner {
     fn drop(&mut self) {
+        eprintln!("DROP Weft owner");
         unsafe {
             ptr::drop_in_place(self.raw);
 
@@ -175,24 +182,33 @@ pub struct Weft {
     append_lock: u8,
     nxt_vsl_id: usize,
 
-    /// OS threads used as workers
-    warp: RawVec<ThreadItems>,
-
     /// Straight-line Sail execution contexts
-    fleet: RawVec<ExecItems>,
+    fleet: util::RawVec<ExecEntry>,
+
+    /// OS threads used as workers
+    warp: util::RawVec<WorkerEntry>,
+
+    /// Non-worker OS threads that need parking support
+    special: util::RawVec<ThreadEntry>,
 
     temp_debug: Option<debug::SrcInfo>,
 }
 
+impl Lock for Weft {
+    fn lock_pos(self: Hdl<Self>) -> *mut u8 {
+        unsafe { &raw mut (*self.raw()).append_lock }
+    }
+}
+
 /// Weft-specific owning Vessel entry
-struct ExecItems {
+struct ExecEntry {
     vessel: ptr::NonNull<Vessel>,
     node: ptr::NonNull<WorkTgtNode>,
     /// if true, not to be assigned
     ignore: bool,
 }
 
-impl Drop for ExecItems {
+impl Drop for ExecEntry {
     fn drop(&mut self) {
         // the weft owns these structures
         unsafe {
@@ -207,13 +223,13 @@ impl Drop for ExecItems {
 }
 
 /// Weft-specific owning OS thread entry
-struct ThreadItems {
+struct WorkerEntry {
     os_thr_hdl: Option<std::thread::JoinHandle<()>>,
     sentinel: ptr::NonNull<WorkTgtNode>,
     semaphore: ptr::NonNull<WorkSemaphore>,
 }
 
-impl Drop for ThreadItems {
+impl Drop for WorkerEntry {
     fn drop(&mut self) {
         // the weft owns these structures
         unsafe {
@@ -224,7 +240,7 @@ impl Drop for ThreadItems {
 
             let thr_hdl = self.os_thr_hdl.take().unwrap();
             thr_hdl.thread().unpark();
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(2));
             // if thr_hdl.is_finished() {
             thr_hdl.join().unwrap();
             // } else {
@@ -244,113 +260,9 @@ impl Drop for ThreadItems {
     }
 }
 
-// TODO: the below belongs in a util module or similar
-
-/// All ops raw
-struct RawVec<T> {
-    ptr: *mut T,
-    len: usize,
-    cap: usize,
 }
 
-impl<T> RawVec<T> {
-    /// Creates a new heap-allocated vector with capacity
-    fn new(cap: usize) -> Self {
-        let init_layout = std::alloc::Layout::from_size_align(
-            cap * std::mem::size_of::<T>(),
-            std::mem::align_of::<T>(),
-        )
-        .unwrap();
-
-        let ptr = unsafe { std::alloc::alloc(init_layout) as *mut T };
-
-        Self { ptr, len: 0, cap }
-    }
-
-    /// Returns vector length
-    fn len(self: *mut Self) -> usize {
-        unsafe { (*self).len }
-    }
-
-    /// Gives vector new capacity, possibly moving memory
-    fn resize(self: *mut Self, ncap: usize) {
-        unsafe {
-            let (len, ocap) = ((*self).len, (*self).cap);
-            assert!(len < ncap);
-            if ocap == ncap {
-                return;
-            }
-
-            let new_layout = std::alloc::Layout::from_size_align(
-                ncap * std::mem::size_of::<T>(),
-                std::mem::align_of::<T>(),
-            )
-            .unwrap();
-
-            let optr = (*self).ptr;
-            let nptr = std::alloc::alloc(new_layout) as *mut T;
-
-            std::ptr::copy_nonoverlapping(optr, nptr, (*self).len);
-
-            (*self).ptr = nptr;
-
-            let old_layout = std::alloc::Layout::from_size_align(
-                ocap * std::mem::size_of::<T>(),
-                std::mem::align_of::<T>(),
-            )
-            .unwrap();
-
-            std::alloc::dealloc(optr as *mut _, old_layout);
-        }
-    }
-
-    /// Adds value to the end of the vector
-    fn push(self: *mut Self, item: T) {
-        unsafe {
-            let len = (*self).len;
-            if len == (*self).cap {
-                self.resize(len * 2);
-            }
-
-            ptr::write((*(&raw mut (*self).ptr)).add(len), item);
-            (*self).len += 1;
-        }
-    }
-
-    /// Returns pointer to value at offset i
-    fn index(self: *mut Self, i: usize) -> *mut T {
-        unsafe { (*self).ptr.add(i) }
-    }
-}
-
-impl<T> Drop for RawVec<T> {
-    fn drop(&mut self) {
-        let layout = std::alloc::Layout::from_size_align(
-            self.cap * std::mem::size_of::<T>(),
-            std::mem::align_of::<T>(),
-        )
-        .unwrap();
-
-        // Drop contents
-        for i in 0..self.len {
-            unsafe { std::ptr::drop_in_place(self.ptr.add(i)) }
-        }
-
-        unsafe {
-            std::alloc::dealloc(self.ptr as *mut _, layout);
-        }
-    }
-}
-
-impl Drop for Weft {
-    // invoked when WeftHandle gets dropped
-    fn drop(&mut self) {
-        eprintln!("DROP Weft");
-        // anything special to do here?
-    }
-}
-
-/// Methods to be received by *mut Self exclusively
+/// Methods to be received by Hdl<Weft> exclusively
 impl Weft {
     // TODO: load initial interned symbols and stuff here
     /// Returns owning handle to a fresh Weft
@@ -360,10 +272,12 @@ impl Weft {
             append_lock: false as u8,
             nxt_vsl_id: 2,
 
-            fleet: RawVec::new(10),
+            fleet: util::RawVec::new(10),
 
             // NOTE: warp size should be limited by processor count
-            warp: RawVec::new(4),
+            warp: util::RawVec::new(4),
+
+            special: util::RawVec::new(2),
 
             temp_debug: {
                 if enable_prototype_src_debug {
@@ -388,45 +302,44 @@ impl Weft {
     }
 
     /// Returns handle to symbol table and type layout counter together
-    pub fn context(self: *mut Self) -> Hdl<Tact> {
-        unsafe { Hdl::new(&raw mut (*self).tact) }
+    pub fn context(self: Hdl<Self>) -> Hdl<Tact> {
+        unsafe { Hdl::new(&raw mut (*self.raw()).tact) }
     }
 
     /// Returns next Vessel ID while advancing counter
-    fn get_vsl_id(self: *mut Self) -> usize {
+    fn get_vsl_id(self: Hdl<Self>) -> usize {
         unsafe {
             std::intrinsics::atomic_xadd::<usize, usize, { AO::AcqRel }>(
-                &raw mut (*self).nxt_vsl_id,
+                &raw mut (*self.raw()).nxt_vsl_id,
                 1,
             )
         }
+    }
+
+    fn fleet_ref(self: Hdl<Self>) -> util::RVH<ExecEntry> {
+        unsafe { util::RVH(&raw mut (*self.raw()).fleet) }
+    }
+
+    fn warp_ref(self: Hdl<Self>) -> util::RVH<WorkerEntry> {
+        unsafe { util::RVH(&raw mut (*self.raw()).warp) }
+    }
+
+    fn special_ref(self: Hdl<Self>) -> util::RVH<ThreadEntry> {
+        unsafe { util::RVH(&raw mut (*self.raw()).special) }
     }
 
     // NOTE: ptr^.field and ptr^.method() are a good syntax idea for
     // ergonomic raw-pointer deref and use
 
     /// Adds provided Vessel to the Weft, taking ownership of it
-    fn add_vessel(self: *mut Self, vsl: *mut Vessel) -> Hdl<Vessel> {
-        // TODO: lock trait for these runtime structures
+    fn add_vessel(self: Hdl<Self>, vsl: Hdl<Vessel>) {
+        let tok = self.take_lock();
         unsafe {
-            let lock: *mut u8 = &raw mut (*self).append_lock;
-            while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
-                lock,
-                false as u8,
-                true as u8,
-            )
-            .1
-            {
-                std::hint::spin_loop();
-            }
-
-            let vsl_hdl = Hdl::new(vsl);
-
             let node = {
                 let datum = WorkTgtNode {
                     next: ptr::null_mut(),
                     prev: ptr::null_mut(),
-                    vsl: Some(vsl_hdl),
+                    vsl: Some(vsl),
                 };
                 let layout = alloc::Layout::new::<WorkTgtNode>();
                 let ptr = alloc::alloc(layout) as *mut WorkTgtNode;
@@ -434,22 +347,18 @@ impl Weft {
                 ptr
             };
 
-            let vsl_pack = ExecItems {
-                vessel: ptr::NonNull::new_unchecked(vsl_hdl.raw()),
+            let vsl_pack = ExecEntry {
+                vessel: ptr::NonNull::new_unchecked(vsl.raw()),
                 node: ptr::NonNull::new(node).unwrap(),
                 ignore: true,
             };
 
-            (&raw mut (*self).fleet).push(vsl_pack);
-
-            std::intrinsics::atomic_store::<_, { AO::Release }, false>(lock, false as u8);
-
-            vsl_hdl
+            self.fleet_ref().push(vsl_pack);
         }
+        self.release_lock(tok);
     }
 
-    // TODO: orderly wind-down and destruction of Sail runtime
-    // fn rmv_vessel(self: *mut Self, vsl_ptr: SlVslHdl) {
+    // fn rmv_vessel(self: Hdl<Self>, vsl_ptr: SlVslHdl) {
     //     unsafe {
     //         let idx = match (*self)
     //             .fleet
@@ -461,28 +370,19 @@ impl Weft {
     //             None => return,
     //         };
 
-    //         let lock: *mut u8 = &raw mut (*self).append_lock;
-    //         while !std::intrinsics::atomic_cxchg::<_, { AO::AcqRel }, { AO::Acquire }>(
-    //             lock,
-    //             false as u8,
-    //             true as u8,
-    //         )
-    //         .1
-    //         {
-    //             std::hint::spin_loop();
-    //         }
+    //         let tok = self.take_lock();
 
     //         let removed = (*self).fleet.remove(idx);
     //         // TODO: remove all traces of the vessel in the structure
 
-    //         std::intrinsics::atomic_store::<_, { AO::Release }, false>(lock, false as u8);
+    //         self.release_lock(tok);
 
     //         drop(removed);
     //     }
     // }
 
     /// Adds worker OS thread to the Weft
-    pub fn add_worker(self: *mut Self) {
+    pub fn add_worker(self: Hdl<Self>) {
         // TODO: maybe add reentry protection? who might add a worker?
 
         let sentinel = unsafe {
@@ -513,6 +413,19 @@ impl Weft {
             semaphore,
         };
 
+        let new_thr = std::thread::Builder::new()
+            .name(format!("worker {}", self.warp_ref().len()))
+            .spawn(move || worker_runtime(push_data))
+            .unwrap();
+
+        let thr_pack = WorkerEntry {
+            os_thr_hdl: Some(new_thr),
+            sentinel: ptr::NonNull::new(sentinel).unwrap(),
+            semaphore: ptr::NonNull::new(semaphore).unwrap(),
+        };
+
+        self.warp_ref().push(thr_pack);
+    }
         unsafe {
             let new_thr = std::thread::Builder::new()
                 .name(format!("worker {}", (&raw mut (*self).warp).len()))
@@ -530,14 +443,14 @@ impl Weft {
     }
 
     /// Assigns free Vessels to worker OS threads for execution
-    fn apportion_work(self: *mut Self) {
+    fn apportion_work(self: Hdl<Self>) {
         // new vessels may appear in the weft at any time
         let mut live_nodes = vec![];
         unsafe {
-            let fleet_ptr = &raw mut (*self).fleet;
-            for i in 0..fleet_ptr.len() {
-                if !(*fleet_ptr.index(i)).ignore {
-                    live_nodes.push((*fleet_ptr.index(i)).node)
+            let fleet_ref = self.fleet_ref();
+            for i in 0..fleet_ref.len() {
+                if !(*fleet_ref.index(i)).ignore {
+                    live_nodes.push((*fleet_ref.index(i)).node)
                 }
             }
         }
@@ -549,9 +462,9 @@ impl Weft {
         let mut assigned_nodes = std::collections::BTreeSet::new();
         let mut assign_counts = vec![];
         unsafe {
-            let warp_ptr = &raw mut (*self).warp;
-            for i in 0..warp_ptr.len() {
-                let this_sent = (*warp_ptr.index(i)).sentinel;
+            let warp_ref = self.warp_ref();
+            for i in 0..warp_ref.len() {
+                let this_sent = (*warp_ref.index(i)).sentinel;
                 debug_assert!((*this_sent.as_ptr()).vsl.is_none());
 
                 let mut count = 0;
@@ -582,9 +495,9 @@ impl Weft {
             .0;
 
         unsafe {
-            let warp_ptr = &raw mut (*self).warp;
+            let warp_ref = self.warp_ref();
             for node in live_nodes {
-                let insert_point = (*warp_ptr.index(worker)).sentinel.as_ptr();
+                let insert_point = (*warp_ref.index(worker)).sentinel.as_ptr();
 
                 (*node.as_ptr()).next = (*insert_point).next;
                 (*node.as_ptr()).prev = insert_point;
@@ -597,56 +510,31 @@ impl Weft {
                     node.as_ptr(),
                 );
 
-                (*warp_ptr.index(worker))
+                (*warp_ref.index(worker))
                     .os_thr_hdl
                     .as_ref()
                     .unwrap()
                     .thread()
                     .unpark();
 
-                worker = (worker + 1) % warp_ptr.len();
+                worker = (worker + 1) % warp_ref.len();
             }
         }
 
         // TODO: remove assignments of any finished vessels (?)
     }
 
-    // NOTE: maybe just don't thaw it
-    // pub fn assign_special(self: *mut Self, id: usize) {
-    //     unsafe {
-    //         let tgt_idx = (*self)
-    //             .fleet
-    //             .iter()
-    //             .enumerate()
-    //             .find_map(|(i, t)| if (**t).id == id { Some(i) } else { None })
-    //             .unwrap();
-
-    //         (*self).special.push(tgt_idx);
-
-    //         // TODO: what if already assigned to a worker?
-    //         match (*self)
-    //             .frozen
-    //             .iter()
-    //             .enumerate()
-    //             .find_map(|(fi, ti)| if *ti == tgt_idx { Some(fi) } else { None })
-    //         {
-    //             Some(fi) => assert_eq!((*self).frozen.swap_remove(fi), tgt_idx),
-    //             None => (),
-    //         }
-    //     }
-    // }
-
     // TODO: prevent "thawing" of special vessels
     // TODO: by what value is it best to find a vessel?
     /// Free a Vessel entry for worker assignment
-    fn thaw(self: *mut Self, id: usize) -> bool {
+    fn thaw(self: Hdl<Self>, id: usize) -> bool {
         unsafe {
-            let fleet_ptr = &raw mut (*self).fleet;
-            for i in 0..fleet_ptr.len() {
-                if (*(*fleet_ptr.index(i)).vessel.as_ptr()).id == id {
-                    (*fleet_ptr.index(i)).ignore = false;
+            let fleet_ref = self.fleet_ref();
+            for i in 0..fleet_ref.len() {
+                if (*(*fleet_ref.index(i)).vessel.as_ptr()).id == id {
+                    (*fleet_ref.index(i)).ignore = false;
 
-                    assert!((&raw mut (*self).warp).len() > 0);
+                    assert!(self.warp_ref().len() > 0);
                     self.apportion_work();
                     return true;
                 }
@@ -668,7 +556,7 @@ pub struct Vessel {
     id: usize,
 
     /// tracker for all extant vessels
-    weft: *mut Weft,
+    weft: Hdl<Weft>,
 
     /// final return location
     out: *mut super::SlHead,
@@ -707,8 +595,8 @@ impl Vessel {
             let ptr = uninit.as_mut_ptr();
 
             unsafe {
-                (&raw mut (*ptr).id).write(weft.raw.get_vsl_id());
-                (&raw mut (*ptr).weft).write(weft.raw);
+                (&raw mut (*ptr).id).write(weft.hdl().get_vsl_id());
+                (&raw mut (*ptr).weft).write(weft.hdl());
 
                 (&raw mut (*ptr).reg).write(memmgt::Region::new(r_zone_ord));
                 Hdl::new(&raw mut (*ptr).reg).init();
@@ -723,8 +611,12 @@ impl Vessel {
             unsafe { uninit.assume_init() }
         });
 
+        let vhdl = Hdl::new(it);
+        vhdl.intern();
+
         // the result is always registered to the weft
-        weft.raw.add_vessel(it)
+        weft.hdl().add_vessel(vhdl);
+        vhdl
     }
 
     /// Creates new Vessel based on one existing (same Weft)
@@ -755,8 +647,16 @@ impl Vessel {
             unsafe { uninit.assume_init() }
         });
 
+        let vhdl = Hdl::new(it);
+        vhdl.intern();
+
         // the result is always registered to the weft
-        unsafe { (*self.raw()).weft.add_vessel(it) }
+        unsafe {
+            (*self.raw()).weft.add_vessel(vhdl);
+        }
+        vhdl
+    }
+
     }
 
     /// Returns unique Vessel identifier
@@ -764,13 +664,12 @@ impl Vessel {
         unsafe { (*self.raw()).id }
     }
 
-
     #[inline(always)]
     /// Returns relevant symbol table and type layout counter
     pub fn context(self: Hdl<Self>) -> Hdl<Tact> {
         // the TAble and CounTer will always outlive all vessels
         // self^.weft~tact
-        unsafe { (&raw mut *(*self.raw()).weft).context() }
+        unsafe { (*self.raw()).weft.context() }
     }
 
     /// Returns handle to this Vessel's memory region

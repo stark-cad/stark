@@ -116,14 +116,13 @@ fn main() {
     // global_weft.assign_special(rndr_vsl.id);
 
     // TODO: match available parallelism or setting
-    global_weft.raw.add_worker();
-    global_weft.raw.add_worker();
-
     let rdr_tgt_obj = sail::send_hdl_init(main_vsl.region(), rndr_qin.clone());
     main_vsl.bind_sym(sail::S_RDR_TGT.0, rdr_tgt_obj);
 
     let rdr_id_obj = sail::i64_init(main_vsl.region(), rndr_vsl.id() as _);
     main_vsl.bind_sym(sail::S_RDR_ID.0, rdr_id_obj);
+    global_weft.hdl().add_worker();
+    global_weft.hdl().add_worker();
 
     let mgr_tgt_obj = sail::send_hdl_init(rndr_vsl.region(), main_qin.clone());
     rndr_vsl.bind_sym(sail::S_MGR_TGT.0, mgr_tgt_obj);
@@ -184,7 +183,7 @@ fn repl(stream_in: std::io::Stdin) -> ! {
 
         let expr = match sail::parser::parse_text(
             region,
-            weft.raw.context().symtab(),
+            weft.hdl().context().symtab(),
             input.as_bytes().to_vec(),
             None,
         ) {
@@ -201,7 +200,7 @@ fn repl(stream_in: std::io::Stdin) -> ! {
 
         println!(
             "{}\n",
-            sail::debug::bundle(weft.raw.context().symtab(), vsl.result().unwrap())
+            sail::debug::bundle(weft.hdl().context().symtab(), vsl.result().unwrap())
         );
     }
 }

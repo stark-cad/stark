@@ -132,5 +132,114 @@ where
     }
 }
 
+/// Raw vector handle
+#[repr(transparent)]
+pub struct RVH<T>(pub *mut RawVec<T>);
+
+impl<T> Clone for RVH<T> {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+
+impl<T> Copy for RVH<T> {}
+
+impl<T> ops::Receiver for RVH<T> {
+    type Target = RawVec<T>;
+}
+
+/// All ops raw
+pub struct RawVec<T> {
+    ptr: *mut T,
+    len: usize,
+    cap: usize,
+}
+
+impl<T> RawVec<T> {
+    /// Creates a new heap-allocated vector with capacity
+    pub fn new(cap: usize) -> Self {
+        let init_layout = std::alloc::Layout::from_size_align(
+            cap * std::mem::size_of::<T>(),
+            std::mem::align_of::<T>(),
+        )
+        .unwrap();
+
+        let ptr = unsafe { std::alloc::alloc(init_layout) as *mut T };
+
+        Self { ptr, len: 0, cap }
+    }
+
+    /// Returns vector length
+    pub fn len(self: RVH<T>) -> usize {
+        unsafe { (*self.0).len }
+    }
+
+    /// Gives vector new capacity, possibly moving memory
+    fn resize(self: RVH<T>, ncap: usize) {
+        unsafe {
+            let (len, ocap) = ((*self.0).len, (*self.0).cap);
+            assert!(len < ncap);
+            if ocap == ncap {
+                return;
+            }
+
+            let new_layout = std::alloc::Layout::from_size_align(
+                ncap * std::mem::size_of::<T>(),
+                std::mem::align_of::<T>(),
+            )
+            .unwrap();
+
+            let optr = (*self.0).ptr;
+            let nptr = std::alloc::alloc(new_layout) as *mut T;
+
+            std::ptr::copy_nonoverlapping(optr, nptr, (*self.0).len);
+
+            (*self.0).ptr = nptr;
+
+            let old_layout = std::alloc::Layout::from_size_align(
+                ocap * std::mem::size_of::<T>(),
+                std::mem::align_of::<T>(),
+            )
+            .unwrap();
+
+            std::alloc::dealloc(optr as *mut _, old_layout);
+        }
+    }
+
+    /// Adds value to the end of the vector
+    pub fn push(self: RVH<T>, item: T) {
+        unsafe {
+            let len = (*self.0).len;
+            if len == (*self.0).cap {
+                self.resize(len * 2);
+            }
+
+            ptr::write((*(&raw mut (*self.0).ptr)).add(len), item);
+            (*self.0).len += 1;
+        }
+    }
+
+    /// Returns pointer to value at offset i
+    pub fn index(self: RVH<T>, i: usize) -> *mut T {
+        unsafe { (*self.0).ptr.add(i) }
+    }
+}
+
+impl<T> Drop for RawVec<T> {
+    fn drop(&mut self) {
+        let layout = std::alloc::Layout::from_size_align(
+            self.cap * std::mem::size_of::<T>(),
+            std::mem::align_of::<T>(),
+        )
+        .unwrap();
+
+        // Drop contents
+        for i in 0..self.len {
+            unsafe { std::ptr::drop_in_place(self.ptr.add(i)) }
+        }
+
+        unsafe {
+            std::alloc::dealloc(self.ptr as *mut _, layout);
+        }
     }
 }
