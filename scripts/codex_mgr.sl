@@ -42,7 +42,7 @@
 
          ;; responsible for instantiating record keepers
          (while #T
-           (set input (qrx))
+           (set input (qb))
 
            )
          ))

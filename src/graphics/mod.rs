@@ -268,11 +268,13 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: Hdl<Vessel>
     engine.setup();
     engine.set_clear([1.0, 1.0, 1.0, 1.0]);
 
-    vsl_ptr.load_from_file("scripts/rndr.sl").unwrap();
+    vsl_ptr.load_from_file("scripts/render.sl").unwrap();
+
+    let park = vsl_ptr.claim(std::thread::current());
 
     while vsl_ptr.advance() {}
 
-    vsl_ptr.load_proc_by_sym(sail::S_RNDR.0);
+    vsl_ptr.load_proc_by_sym(sail::S_RENDER.0);
 
     loop {
         if engine.need_surface_cfg {
@@ -282,8 +284,16 @@ pub fn render_loop(name: &'static str, frame: FrameHandles, vsl_ptr: Hdl<Vessel>
         }
 
         if !vsl_ptr.advance() {
-            println!("render thread ended");
-            break;
+            if vsl_ptr.inert_p() {
+                println!("render thread ended");
+                break;
+            } else {
+                unsafe { (*park).store(true, std::sync::atomic::Ordering::Release) };
+
+                std::thread::park_timeout(std::time::Duration::from_secs(1));
+
+                unsafe { (*park).store(false, std::sync::atomic::Ordering::Release) };
+            }
         }
     }
 
@@ -297,9 +307,6 @@ struct Window {
     w: f32,
     h: f32,
 }
-
-// TODO: update to latest version of ash, ash-window,
-// and raw-window-handle
 
 /// Sail-specific graphics engine state
 pub struct Engine {
@@ -815,6 +822,8 @@ impl Engine {
             self.device
                 .wait_for_fences(&self.fences, true, 1_000_000_000)
                 .unwrap();
+
+            self.device.queue_wait_idle(self.present_queue).unwrap();
         }
 
         let (old_swapchain, old_framebuffer) = (self.swapchain, self.framebuffer);

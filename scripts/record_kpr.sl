@@ -59,12 +59,12 @@
          ;; TODO: resolve the `set` and `def` mess
          (def input ())
          (while #T
-           (set input (qrx))
+           (set input (qb))
 
            (if (not input) ()
              (do
-              (def source (fst qrx))
-              (def request (rest qrx))
+              (def source (fst input))
+              (def request (rest input))
 
               ;; (def match (vec-find interface (fn [e] (= (vec-get e 1) request))))
 

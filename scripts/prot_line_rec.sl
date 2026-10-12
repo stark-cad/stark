@@ -85,7 +85,7 @@
 ; main loop
 (while alive
        ;; TODO: Sail equivalent to match
-       (set input (rest (qrx)))
+       (set input (rest (qb)))
 
        (cond
          (eq input :cx-crmv) (do

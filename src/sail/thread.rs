@@ -18,7 +18,7 @@
 
 // <>
 
-use std::{alloc, ptr};
+use std::{alloc, ptr, sync::atomic};
 
 use std::intrinsics::AtomicOrdering as AO;
 
@@ -70,9 +70,10 @@ struct WorkTgtNode {
     vsl: Option<Hdl<Vessel>>,
 }
 
-/// Flags for immediate communication to OS threads
+/// Flags for immediate communication with OS threads
 struct WorkSemaphore {
-    halt: bool,
+    halt: atomic::AtomicBool,
+    park: atomic::AtomicBool,
 }
 
 /// Pointers to objects which must be visible to a worker OS thread
@@ -83,7 +84,6 @@ struct WorkerData {
 
 unsafe impl Send for WorkerData {}
 
-// TODO: track stopped Sail vessels and thread::park when no work
 /// Code which runs in each worker OS thread to advance Sail vessels
 fn worker_runtime(local_data: WorkerData) {
     let list_sentinel = local_data.sentinel;
@@ -98,27 +98,27 @@ fn worker_runtime(local_data: WorkerData) {
     loop {
         cur_tgt = unsafe { (*cur_tgt).next };
 
-        if unsafe {
-            std::intrinsics::atomic_load::<_, { AO::Acquire }, false>(
-                &raw mut (*semaphore).halt as *const u8,
-            ) != 0
-        } {
+        if unsafe { (*semaphore).halt.load(atomic::Ordering::Acquire) } {
             break;
         }
 
         // TODO: somehow communicate when vessel done
         match unsafe { (*cur_tgt).vsl } {
             Some(vsl_ref) => {
-                // TODO: re-freeze when stack empty
                 if vsl_ref.advance() {
                     count += 1;
                 }
             }
             None => {
+                // live vessels on last loop through work list
                 last_len = count;
 
                 if last_len == 0 && count == 0 {
-                    std::thread::park()
+                    unsafe { (*semaphore).park.store(true, atomic::Ordering::Release) };
+
+                    std::thread::park();
+
+                    unsafe { (*semaphore).park.store(false, atomic::Ordering::Release) };
                 }
 
                 count = 0;
@@ -261,6 +261,11 @@ impl Drop for WorkerEntry {
     }
 }
 
+/// Weft-specific entry for a separate thread which manages a Vessel
+struct ThreadEntry {
+    os_thr_hdl: std::thread::Thread,
+    vsl_id: usize,
+    park: atomic::AtomicBool,
 }
 
 /// Methods to be received by Hdl<Weft> exclusively
@@ -402,7 +407,10 @@ impl Weft {
 
         // TODO: standard function for heap allocation?
         let semaphore = unsafe {
-            let datum = WorkSemaphore { halt: false };
+            let datum = WorkSemaphore {
+                halt: atomic::AtomicBool::new(false),
+                park: atomic::AtomicBool::new(false),
+            };
             let layout = alloc::Layout::new::<WorkSemaphore>();
             let ptr = alloc::alloc(layout) as *mut WorkSemaphore;
             ptr.write(datum);
@@ -427,19 +435,35 @@ impl Weft {
 
         self.warp_ref().push(thr_pack);
     }
+
+    /// Adds unowned OS thread entry to the Weft, returns parking flag
+    fn add_special(
+        self: Hdl<Self>,
+        th: std::thread::Thread,
+        vsl: Hdl<Vessel>,
+    ) -> *mut atomic::AtomicBool {
         unsafe {
-            let new_thr = std::thread::Builder::new()
-                .name(format!("worker {}", (&raw mut (*self).warp).len()))
-                .spawn(move || worker_runtime(push_data))
-                .unwrap();
+            let fleet_ref = self.fleet_ref();
+            for i in 0..fleet_ref.len() {
+                if (*fleet_ref.index(i)).vessel.as_ptr() == vsl.raw() {
+                    assert!((*fleet_ref.index(i)).ignore);
+                    break;
+                }
+            }
+            // TODO: ensure vessel is actually present?
+        }
 
-            let thr_pack = ThreadItems {
-                os_thr_hdl: Some(new_thr),
-                sentinel: ptr::NonNull::new(sentinel).unwrap(),
-                semaphore: ptr::NonNull::new(semaphore).unwrap(),
-            };
+        let thr_pack = ThreadEntry {
+            os_thr_hdl: th,
+            vsl_id: vsl.id(),
+            park: atomic::AtomicBool::new(false),
+        };
 
-            (&raw mut (*self).warp).push(thr_pack);
+        unsafe {
+            let tlen = self.special_ref().len();
+            self.special_ref().push(thr_pack);
+
+            &raw mut (*self.special_ref().index(tlen)).park
         }
     }
 
@@ -543,6 +567,58 @@ impl Weft {
         }
         false
     }
+
+    /// Un-park the worker the identified Vessel is assigned to
+    fn notify(self: Hdl<Self>, id: usize) {
+        // println!("notify vessel {id}");
+        unsafe {
+            // first try separately-managed threads
+            let specials = self.special_ref();
+            for i in 0..specials.len() {
+                if (*specials.index(i)).vsl_id == id {
+                    let parking = (*specials.index(i)).park.load(atomic::Ordering::Acquire);
+                    if parking {
+                        (*specials.index(i)).os_thr_hdl.unpark();
+                    }
+                    return;
+                }
+            }
+        }
+
+        unsafe {
+            let workers = self.warp_ref();
+            // find the worker
+            for i in 0..workers.len() {
+                let sentinel = (*workers.index(i)).sentinel;
+                let mut work_item = sentinel.as_ptr();
+                loop {
+                    work_item = (*work_item).next;
+                    if let Some(vsl) = (*work_item).vsl
+                        && vsl.id() == id
+                    {
+                        // check its parking token
+                        let parking = (*(*workers.index(i)).semaphore.as_ptr())
+                            .park
+                            .load(atomic::Ordering::Acquire);
+                        if parking {
+                            // unpark
+                            (*workers.index(i))
+                                .os_thr_hdl
+                                .as_ref()
+                                .unwrap()
+                                .thread()
+                                .unpark()
+                        }
+                        return;
+                    } else if work_item == sentinel.as_ptr() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        eprintln!("vessel {id} to notify not found");
+    }
 }
 
 // NOTE: prefer to keep Vessel within 128 bytes (2 cache lines)
@@ -583,10 +659,6 @@ impl Drop for Vessel {
         Hdl::new(self).clr_res();
     }
 }
-
-// TODO: implement vessels and queues to cleanly support governor,
-// codex managers, record keepers, and render thread
-
 
 impl Vessel {
     /// Creates new Vessel, adding it to a Weft
@@ -658,6 +730,10 @@ impl Vessel {
         vhdl
     }
 
+    // TODO: special handle exclusively allowing `advance`?
+    /// Calling thread claims this Vessel for its own management
+    pub fn claim(self: Hdl<Self>, th: std::thread::Thread) -> *mut atomic::AtomicBool {
+        unsafe { (*self.raw()).weft.add_special(th, self) }
     }
 
     /// Returns unique Vessel identifier
@@ -681,6 +757,10 @@ impl Vessel {
     /// Transmits a message along this Vessel's queue
     pub fn msg_tmit(self: Hdl<Self>, source: usize, msg: SlHndl) {
         unsafe {
+            // notify thread if the queue was empty
+            if queue::transmit(&raw mut (*self.raw()).qin, self.region(), source, msg) {
+                (*self.raw()).weft.notify(self.id());
+            }
         }
     }
 

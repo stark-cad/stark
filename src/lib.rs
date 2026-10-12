@@ -134,16 +134,30 @@ pub fn manager_loop(frame: Frame, vsl_ptr: Hdl<Vessel>) {
     // a way to provide the Source of text to the parser instead of it
     // being responsible for read-in?
 
-    vsl_ptr.load_from_file("scripts/main.sl").unwrap();
+    // TODO: special handles that grant the right to advance a vessel
+    // from a unique thread
+
+    vsl_ptr.load_from_file("scripts/governor.sl").unwrap();
+
+    let park = vsl_ptr.claim(std::thread::current());
 
     while vsl_ptr.advance() {}
 
-    vsl_ptr.load_proc_by_sym(sail::S_MAIN.0);
+    vsl_ptr.load_proc_by_sym(sail::S_GOVERNOR.0);
 
+    // TODO: single thread vessel handler
     loop {
         if !vsl_ptr.advance() {
-            println!("manager thread ended");
-            break;
+            if vsl_ptr.inert_p() {
+                println!("governor thread ended");
+                break;
+            } else {
+                unsafe { (*park).store(true, std::sync::atomic::Ordering::Release) };
+
+                std::thread::park();
+
+                unsafe { (*park).store(false, std::sync::atomic::Ordering::Release) };
+            }
         }
     }
 }

@@ -27,7 +27,10 @@ use super::thread;
 use super::Hdl;
 
 use super::M_BASE;
-use super::{SP_COND, SP_DEF, SP_DO, SP_EVAL, SP_FN, SP_IF, SP_QUOTE, SP_SET, SP_WHILE};
+use super::{
+    SP_COND, SP_DEF, SP_DO, SP_EVAL, SP_FN, SP_IF, SP_QRX_WAIT, SP_QUOTE, SP_SET, SP_WHILE,
+};
+// TODO: define consts for all special form IDs, for matching
 
 use std::alloc;
 use std::ptr;
@@ -869,12 +872,35 @@ pub fn iter_once(vsl: Hdl<thread::Vessel>) -> bool {
 
             if coretypp!(raw_op ; Symbol) {
                 match sym_get_id(raw_op.clone()) {
+                    id if id == SP_QRX_WAIT.0 => {
+                        // blocking receive from vessel queue inlet
+                        let (mut id, mut msg);
+                        let mut tries = 0;
+                        loop {
+                            // TODO: cleaner return pattern here?
+                            (id, msg) = vsl.msg_recv();
+                            if let Some(msg) = msg {
+                                frame_pop(stack);
+
+                                let id = i64_init(vsl.region(), id as _);
+                                set_next_list_elt(vsl.top_env(), id.clone(), msg);
+                                write_addr_to(stack, ret, id);
+
+                                return true;
                             }
+                            tries += 1;
+                            if tries >= 10 {
+                                break;
                             }
+                            std::hint::spin_loop();
                         }
 
+                        unsafe {
+                            (*stack).since_do_tail -= 1;
                         }
 
+                        // block
+                        return false;
                     }
                     id if id == SP_COND.0 => {
                         frame_fold(stack, Opcode::CondSeq);
