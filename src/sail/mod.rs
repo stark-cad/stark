@@ -58,7 +58,7 @@ pub mod util;
 pub use symtab::SymbolTable as Stab;
 pub use util::Hdl;
 
-// monotonic counter for type layout identifiers
+/// Monotonic counter for type layout identifiers
 pub struct Styc {
     inner: u32,
 }
@@ -88,6 +88,8 @@ impl Styc {
 /// - Current environment
 /// - Slice containing all Sail arguments
 pub type NativeFn = fn(Hdl<thread::Vessel>, SlHndl, &[SlHndl]) -> SlHndl;
+// TODO: the environment parameter is one isolated scope... just
+// access through the vessel handle if needed?
 
 // the below, to make a type manifest for a sized value, takes the
 // region, the type ID counter, and information on all the fields;
@@ -537,7 +539,7 @@ pub fn single_thread_setup() -> (thread::WeftOwner, Hdl<thread::Vessel>) {
     let mut weft = thread::Weft::create(tact, cfg!(feature = "memdbg"));
 
     // TODO: decide how to lay out the Weft interface
-    global_ctx_setup(weft.raw.context());
+    global_ctx_setup(weft.hdl().context());
 
     let vsl = thread::Vessel::summon(&mut weft, 10000, 17);
 
@@ -552,7 +554,7 @@ pub fn single_thread_setup() -> (thread::WeftOwner, Hdl<thread::Vessel>) {
 
     env_ins_by_id(vsl.region(), vsl.top_env(), M_BASE.0, base_mod);
 
-    weft.raw.add_worker();
+    weft.hdl().add_worker();
 
     (weft, vsl)
 }
@@ -565,7 +567,7 @@ pub fn interpret(code: &str, dolist: bool) -> Result<String, debug::SlErrCode> {
     while vsl.advance() {}
 
     let result = vsl.result().unwrap();
-    let out = debug::bundle(weft.raw.context().symtab(), result).to_string();
+    let out = debug::bundle(weft.hdl().context().symtab(), result).to_string();
     Ok(out)
 }
 

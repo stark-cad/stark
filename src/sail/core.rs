@@ -96,7 +96,7 @@ pub struct SlHead {
     pub rc: u8,
 }
 
-// TODO / NOTE: There are now two spare, unused bits in the Sail head:
+// NOTE: There are now two spare, unused bits in the Sail head:
 // the lowest two bits
 
 // TODO: potential change: add a "shared" bit to indicate that an object
@@ -119,16 +119,16 @@ struct _SlListPtr {
 }
 
 #[derive(Debug, PartialEq)]
-#[repr(C)]
+#[repr(transparent)]
 pub struct SlHndl {
-    raw: *mut SlHead,
+    inner: ptr::NonNull<SlHead>,
 }
 
 impl Clone for SlHndl {
     fn clone(&self) -> Self {
         // log::debug!("Cloning object handle");
-        inc_refc(self.raw);
-        SlHndl { raw: self.raw }
+        inc_refc(self.inner.as_ptr());
+        SlHndl { inner: self.inner }
     }
 }
 
@@ -139,8 +139,8 @@ impl Drop for SlHndl {
         if cfg!(feature = "memdbg") {
             println!("O {} DROP", self.memdbg_obj_id())
         }
-        if dec_refc(self.raw) {
-            destroy_obj_core(self.raw)
+        if dec_refc(self.inner.as_ptr()) {
+            destroy_obj_core(self.inner.as_ptr())
         }
     }
 }
@@ -153,9 +153,9 @@ unsafe impl Sync for SlHndl {}
 impl SlHndl {
     unsafe fn correct_pos(&mut self) {
         unsafe {
-            let orig = self.raw;
-            let mut loc = orig;
+            let orig = self.inner.as_ptr();
 
+            let mut loc = orig;
             while raw_cfg_byte(loc) == Cfg::B0Redir as u8 {
                 println!("-- redir hit --");
                 loc = (ptr::read_unaligned(loc as *mut usize) >> 16) as *mut SlHead;
@@ -163,7 +163,7 @@ impl SlHndl {
 
             if loc != orig {
                 inc_refc(loc);
-                ptr::write_unaligned(&mut self.raw, loc);
+                self.inner = ptr::NonNull::new(loc).unwrap();
 
                 // NOTE: in these cases we know ONLY the redir chain may
                 // be destroyed
@@ -176,7 +176,7 @@ impl SlHndl {
     }
 
     pub unsafe fn get_raw(&self) -> *mut SlHead {
-        self.raw
+        self.inner.as_ptr()
     }
 
     pub unsafe fn from_raw(loc: *mut SlHead) -> Option<Self> {
@@ -185,14 +185,18 @@ impl SlHndl {
         } else {
             // log::debug!("Creating object handle");
             inc_refc(loc);
-            Some(SlHndl { raw: loc })
+            Some(SlHndl {
+                inner: unsafe { ptr::NonNull::new_unchecked(loc) },
+            })
         }
     }
 
     pub unsafe fn from_raw_unchecked(loc: *mut SlHead) -> Self {
         debug_assert!(!nil_p(loc));
         // log::debug!("Creating object handle");
-        SlHndl { raw: loc }
+        SlHndl {
+            inner: unsafe { ptr::NonNull::new_unchecked(loc) },
+        }
     }
 
     #[inline(always)]
@@ -248,7 +252,7 @@ impl SlHndl {
 
     pub unsafe fn memdbg_obj_id_immed(&self) -> u32 {
         if cfg!(feature = "memdbg") {
-            unsafe { ptr::read_unaligned((self.raw as *mut u32).add(2)) }
+            unsafe { ptr::read_unaligned((self.inner.as_ptr() as *mut u32).add(2)) }
         } else {
             panic!("Memory debug mode not active")
         }
@@ -258,7 +262,7 @@ impl SlHndl {
         unsafe { self.correct_pos() };
 
         if cfg!(feature = "memdbg") {
-            unsafe { ptr::read_unaligned((self.raw as *mut u32).add(2)) }
+            unsafe { ptr::read_unaligned((self.inner.as_ptr() as *mut u32).add(2)) }
         } else {
             panic!("Memory debug mode not active")
         }
@@ -269,7 +273,11 @@ impl SlHndl {
         unsafe { self.correct_pos() };
 
         assert!(self.type_fld_p());
-        unsafe { ptr::read_unaligned((self.raw as *mut u8).add(HEAD_LEN as usize) as *const u32) }
+        unsafe {
+            ptr::read_unaligned(
+                (self.inner.as_ptr() as *mut u8).add(HEAD_LEN as usize) as *const u32
+            )
+        }
     }
 
     #[inline(always)]
@@ -283,7 +291,7 @@ impl SlHndl {
             assert!(self.size_fld_p());
             unsafe {
                 ptr::read_unaligned(
-                    (self.raw as *mut u8)
+                    (self.inner.as_ptr() as *mut u8)
                         .add((HEAD_LEN + (NUM_32_LEN * self.type_fld_p() as u32)) as usize)
                         as *const u32,
                 )
@@ -313,13 +321,13 @@ impl SlHndl {
     #[inline(always)]
     fn cfg_byte(&mut self) -> u8 {
         unsafe { self.correct_pos() };
-        unsafe { ptr::read(self.raw as *const u8) }
+        unsafe { ptr::read(self.inner.as_ptr() as *const u8) }
     }
 
     #[inline(always)]
     pub fn refc_byte(&mut self) -> u8 {
         unsafe { self.correct_pos() };
-        unsafe { ptr::read((self.raw as *const u8).add(1)) }
+        unsafe { ptr::read((self.inner.as_ptr() as *const u8).add(1)) }
     }
 
     #[inline(always)]
@@ -350,7 +358,7 @@ impl SlHndl {
         let offset = (HEAD_LEN
             + (self.type_fld_p() as u32 * NUM_32_LEN)
             + (self.size_fld_p() as u32 * NUM_32_LEN)) as usize;
-        unsafe { (self.raw as *mut u8).add(offset) }
+        unsafe { (self.inner.as_ptr() as *mut u8).add(offset) }
     }
 
     #[inline(always)]
@@ -441,7 +449,6 @@ enum_and_tryfrom! {
         ProcNative = 0b11100100,
         // ProcLbdaCk = 0b11101000,
         TyMfst = 0b11110000,
-        // EnvScope = 0b11110100,
         EnvLayer = 0b11111000,
         Other = 0b11111100,
     }
@@ -552,8 +559,6 @@ pub enum CoreType {
     /// Rust function pointer
     ProcNative,
 
-    // EnvScope,
-
     EnvLayer,
 }
 
@@ -587,7 +592,6 @@ impl TryFrom<Cfg> for CoreType {
             // Cfg::VecAny => Ok(Self::VecAny),
             Cfg::VecHash => Ok(Self::VecHash),
             Cfg::VecPath => Ok(Self::VecPath),
-            // Cfg::EnvScope => Ok(Self::EnvScope),
             Cfg::EnvLayer => Ok(Self::EnvLayer),
             Cfg::ProcLambda => Ok(Self::ProcLambda),
             Cfg::ProcNative => Ok(Self::ProcNative),
@@ -785,7 +789,7 @@ pub fn temp_get_size(typ: u32) -> u32 {
 }
 
 /// Initializes a Sail object from a base sized type and a pointer
-pub fn temp_init_from(reg: *mut Region, typ: u32, ptr: *const u8) -> SlHndl {
+pub fn temp_init_from(reg: Hdl<Region>, typ: u32, ptr: *const u8) -> SlHndl {
     assert!(temp_base_sized_p(typ));
     unsafe {
         match typ {
@@ -824,7 +828,6 @@ pub fn ty_manifest_size(fldct: u32) -> u32 {
 }
 
 // TODO: multiple-arity procedures (native and lambda)
-
 // TODO: generic / multi procedures (dispatch to methods) (additive complexity)
 
 /// Gives the overall size of a lambda procedure by argument count
@@ -965,11 +968,6 @@ pub fn discern_ref_offsets_core(loc: *mut SlHead) -> Vec<u32> {
             Some(CoreType::Ref) => acc.push(0),
             Some(CoreType::ProcLambda) => acc.push(2),
             Some(CoreType::TyDsc) => acc.push(8),
-            // Some(CoreType::EnvScope) => {
-            //     for l in 0..3 {
-            //         acc.push(l * PTR_LEN)
-            //     }
-            // }
             Some(CoreType::EnvLayer) => {
                 for ety in 0..ENV_LAYER_SLOTS {
                     acc.push(ety * (PTR_LEN + SYMBOL_LEN) + SYMBOL_LEN)
@@ -2284,9 +2282,6 @@ fn core_cons_copy(reg: Hdl<Region>, car: SlHndl, cdr: SlHndl) -> SlHndl {
 // TODO: should there be a small version (maybe an array with length 6
 // to 12) for procedure arguments? note need for modules and types
 
-// TODO: assess changing slot "value" for module and type dicts
-
-// tentative, might aid type checking
 pub type SlSym = u32;
 
 // elements of an environment slot
@@ -2406,7 +2401,6 @@ pub fn env_ins_by_id(reg: Hdl<Region>, mut env: SlHndl, sym_id: SlSym, obj: SlHn
     let bare_id = demodes_sym(sym_id);
     let entry_offset = bare_id % ENV_LAYER_SLOTS;
 
-    // let top_layer = unsafe { read_ptr_unchecked(env.clone(), 0) };
     let mut layer_ptr = Some(env.clone());
 
     'layer: loop {
@@ -2416,7 +2410,7 @@ pub fn env_ins_by_id(reg: Hdl<Region>, mut env: SlHndl, sym_id: SlSym, obj: SlHn
                 Some(ctl) => set_next_list_elt(env.clone(), new_layer.clone(), ctl),
                 None => clr_next_list_elt(env.clone(), new_layer.clone()),
             }
-            // write_ptr(env.clone(), env.clone(), 0, new_layer.clone());
+
             set_next_list_elt(env.clone(), env.clone(), new_layer.clone());
             layer_ptr = Some(new_layer.clone());
         }
@@ -2459,9 +2453,7 @@ pub fn env_ins_by_id(reg: Hdl<Region>, mut env: SlHndl, sym_id: SlSym, obj: SlHn
 /// Looks up the given symbol ID in the given environment, returning
 /// the location in the environment of the object it refers to; None
 /// if no binding
-fn env_get_binding_loc(mut env: SlHndl, sym_id: SlSym) -> Option<*mut *mut SlHead> {
-    coretypck!(env ; EnvLayer);
-
+fn env_get_binding_loc(env: SlHndl, sym_id: SlSym) -> Option<*mut *mut SlHead> {
     if mode_of_sym(sym_id) == SymbolMode::Keyword {
         return None;
     }
@@ -2476,8 +2468,7 @@ fn env_get_binding_loc(mut env: SlHndl, sym_id: SlSym) -> Option<*mut *mut SlHea
             break 'layer;
         }
 
-        let lytt = layer_ptr.as_mut().unwrap();
-        coretypck!(lytt ; EnvLayer);
+        coretypck!(layer_ptr.clone().unwrap() ; EnvLayer);
 
         'entry: for o in 0..ENV_MAX_PROBES {
             let slot_offset = (entry_offset + o) % ENV_LAYER_SLOTS;
@@ -2845,7 +2836,7 @@ pub fn bool_get(mut loc: SlHndl) -> bool {
     unsafe { ptr::read_unaligned(loc.get_raw() as *mut u8) & 0b00000100 != 0 }
 }
 
-
+// objects like this are immutable once created
 struct _TypeDesc {
     type_sort_and_sym: u32, // type symbol of the described type (first bit HIGH denotes manifest or LOW predicate)
     parent_type: u32,       // type symbol of parent
